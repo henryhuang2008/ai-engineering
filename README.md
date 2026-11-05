@@ -4,8 +4,6 @@ A 17-lesson, build-first course for experienced software engineers moving into A
 
 **Start here → [Lesson 1: What an AI Engineer Is in 2026](lessons/0001-ai-engineering-landscape-2026.html)**
 
-The lessons are self-contained HTML pages. Read them in a browser, or publish this repository with GitHub Pages (see [How to read the course](#how-to-read-the-course)).
-
 ---
 
 ## The 17 lessons
@@ -30,21 +28,9 @@ The lessons are self-contained HTML pages. Read them in a browser, or publish th
 | 16 | [Kubernetes GitOps: Jenkins Builds, Git Declares, Argo CD Reconciles](lessons/0016-kubernetes-gitops.html) | Jenkins owns CI; Git owns desired state; Argo CD is the only cluster writer. | ~55 min |
 | 17 | [Project: Supabase + RAG + AI Coding — A Grounded Filing Analyst](lessons/0017-project-supabase-rag-ai-coding.html) | Capstone: Supabase pgvector, hybrid retrieval, a grounded PydanticAI agent, a trust UI, and an honest scorecard. | ~60 min |
 
-About 12 hours of lessons and labs. Each lesson ends with a quiz and links to primary sources.
 
 ---
 
-## The two projects and the capstone
-
-The course builds toward portfolio work, not certificates:
-
-1. **Chat assistant** (lessons 2–5) — API call, tool loop, streaming React/Next.js UI, eval harness.
-2. **Docs RAG service** (lessons 6–8, plus the local variant in 14) — ingestion, chunking, embeddings, retrieval, grounded citations.
-3. **Capstone** (lesson 17) — the Supabase + RAG + AI-coding filing analyst, with its open verification gates left visible.
-
-The capstone is a working repository through Phase 7. It does not claim to be production-verified: source offsets, client-brief retrieval coverage, representative-question grounding, and the browser citation path are still open, and the pilot and deployment phases have not started.
-
----
 
 ## Labs and example repositories
 
@@ -68,22 +54,6 @@ Every Python example is a `uv` project; every frontend uses `pnpm`. Run commands
 
 ---
 
-## How to read the course
-
-### Locally
-
-Clone the repository and open `lessons/0001-ai-engineering-landscape-2026.html` in a browser. The pages share `assets/course.css` and `assets/quiz.js`; keep the folder structure intact.
-
-### On GitHub Pages
-
-1. Push the repository to GitHub.
-2. Open **Settings → Pages**.
-3. Under **Build and deployment**, choose **Deploy from a branch**, then `main` and `/ (root)`.
-4. Open `https://<your-username>.github.io/<repo-name>/`.
-
-GitHub renders this README as the site home page, and the relative lesson links above open the actual HTML lessons. On `github.com` itself, clicking an `.html` file shows its source rather than the rendered page, so use Pages (or a local clone) for reading.
-
----
 
 ## What you need
 
@@ -92,33 +62,3 @@ GitHub renders this README as the site home page, and the relative lesson links 
 - **DeepSeek API key** for the hosted-model lessons. Some lessons also use **Qwen/DashScope** embeddings.
 - **Ollama** for lesson 14; no API key is needed there.
 - **Docker** and a local Kubernetes cluster (`kind`) for lesson 16 if you run the rehearsal.
-
-The labs are live: they call real providers or a real local model. There is no fake-model mode. If a key is missing, the lab tells you; it does not silently substitute a stub.
-
----
-
-## Repository layout
-
-```text
-.
-├─ lessons/             17 HTML lessons, in numeric order
-├─ reference/           skill map, boundary map and glossary pages
-├─ assets/
-│  ├─ course.css        shared course stylesheet
-│  ├─ quiz.js           quiz renderer
-│  ├─ images/           diagrams used by the lessons
-│  └─ examples/         runnable labs and the capstone repository
-├─ check_links.py       verifies every local link and forward lesson link
-└─ check_uv.py          verifies every Python example is a uv project
-```
-
----
-
-## Repository checks
-
-```bash
-python check_links.py
-python check_uv.py
-```
-
-`check_links.py` verifies that every relative link resolves, that each lesson's **What's next** links to the next lesson, and that no page cites a lesson number that does not exist. `check_uv.py` verifies that every Python example carries a `pyproject.toml` and a sibling `uv.lock`.
