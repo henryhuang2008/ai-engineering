@@ -1,0 +1,1181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Example 0011 - LangGraph fan-out, fan-in, and a join that fires early</title>
+<link rel="stylesheet" href="../../course.css">
+</head>
+<body>
+<article class="page">
+
+<p class="meta">Example 0011 · Companion to <a href="../../../lessons/0011-langgraph-advanced.html">Lesson 11</a> · <a href="README.md">README</a></p>
+
+<h1>Three searches, three analyses, one join</h1>
+
+<p class="lede">A multi-source research agent: <strong>Google and Bing</strong> fan out from <code>START</code> by default, with an optional <strong>Reddit</strong> branch (<code>REDDIT_ENABLED=true</code>) that adds a structured-output selector and comment fetch. Analyses run in parallel and one synthesis writes the answer. The model is <strong>DeepSeek</strong>; sources come from recorded snapshots by default or <strong>BrightData</strong> with <code>--live</code>. <code>--critical</code> moves Google/Bing off the Reddit branch, and <code>--loose-join</code> shows why that edit needs an explicit list-edge join.</p>
+
+<h2>Key and run (uv)</h2>
+<pre>cd assets\examples\0011-langgraph-advanced
+Copy-Item .env.example .env      # first time only; fill DEEPSEEK_API_KEY (+ BRIGHTDATA_API_KEY for --live)
+uv sync
+
+# .env: REDDIT_ENABLED=false (default); set true for the Reddit branch
+uv run python agent.py                          # two sources (Reddit off)
+uv run python agent.py --live                   # BrightData (needs BRIGHTDATA_API_KEY)
+uv run python agent.py --critical               # move Google/Bing off the Reddit branch
+uv run python agent.py --critical --loose-join  # break the join on purpose
+uv run python agent.py --fail bing              # one source returns nothing
+uv run python agent.py --check                  # test the provider, no model calls
+uv run python agent.py --zones                  # list active BrightData zones
+uv run python agent.py --mermaid                # print the graph source</pre>
+<p><code>DEEPSEEK_API_KEY</code> can live in <code>.env</code> or the shell. A full run (Reddit on) makes five DeepSeek calls: one selector, three analyses, one synthesis. The default two-source run makes three. Set <code>REDDIT_ENABLED=true</code> in <code>.env</code> to add Reddit. <code>--live</code> needs <code>BRIGHTDATA_API_KEY</code> and a SERP zone; the default snapshot provider needs neither.</p>
+
+<h2>Both graph shapes</h2>
+<figure>
+  <img src="graph.png" alt="Reference LangGraph: three searches join at select_reddit_urls, fetch_reddit fans out to three analyses, then synthesize" width="640">
+  <figcaption>Full reference shape (Reddit on) — all three searches join before selection; all three analyses wait for the fetch.</figcaption>
+</figure>
+<figure>
+  <img src="graph-critical.png" alt="Critical-path LangGraph: search_bing and search_google go straight to their analyses while Reddit selects and fetches" width="560">
+  <figcaption>Critical-path shape (Reddit on) — Google and Bing analyses leave the Reddit branch. The join at <code>synthesize</code> must be a list edge.</figcaption>
+</figure>
+
+<h2>What the default run prints (two sources, live DeepSeek)</h2>
+<pre>question: Should a small support team build its agent on LangGraph or a plain tool loop?
+graph:    reference (fan-out, fan-in)
+source:   snapshot
+reddit:   off (REDDIT_ENABLED=false)
+
+[   0.0s] search_bing          5 results
+[   0.0s] search_google        5 results
+[   2.5s] analyze_bing         analyses += bing
+[   2.5s] analyze_google       analyses += google
+[   4.8s] synthesize           173 words
+
+sources: google=5 bing=5 reddit=0 | urls=0 | threads=0
+graph: bing, google | nodes=5 | 4.8s</pre>
+<p>Reddit is off by default: two searches, two analyses, one synthesis, five node executions.</p>
+
+<h2>With REDDIT_ENABLED=true (the full graph)</h2>
+<pre>question: Should a small support team build its agent on LangGraph or a plain tool loop?
+graph:    reference (fan-out, fan-in)
+source:   snapshot
+reddit:   on
+
+[   0.0s] search_bing          5 results
+[   0.0s] search_google        5 results
+[   0.0s] search_reddit        5 results
+[   1.6s] select_reddit_urls   3 urls
+[   1.6s] fetch_reddit         3 threads / 9 comments
+[   4.1s] analyze_bing         analyses += bing
+[   4.4s] analyze_google       analyses += google
+[   4.4s] analyze_reddit       analyses += reddit
+[   6.6s] synthesize           180 words
+
+sources: google=5 bing=5 reddit=5 | urls=3 | threads=3
+graph: bing, google, reddit | nodes=9 | 6.6s</pre>
+<p>The three searches complete together because they are one superstep; the three analyses do the same after the fetch. One synthesis, nine node executions.</p>
+
+<h2>The join bug, on purpose</h2>
+<p>With <code>REDDIT_ENABLED=true</code>, wire the final join with separate edges and the third branch arrives in a later superstep:</p>
+<pre>[   2.4s] analyze_bing         analyses += bing
+[   2.7s] analyze_google       analyses += google
+[   5.2s] synthesize           179 words     &lt;- fires with two analyses
+[   7.6s] analyze_reddit       analyses += reddit
+[   9.9s] synthesize           180 words     &lt;- fires again with all three
+...
+nodes=10 | 9.9s</pre>
+<p>With separate <code>add_edge</code> calls, <code>synthesize</code> fires when the reachable predecessors finish, then fires again when the Reddit branch arrives. The first answer is wasted and the run pays for an extra call. A list edge is the barrier:</p>
+<pre><code>graph.add_edge(
+    ["analyze_google", "analyze_bing", "analyze_reddit"], "synthesize"
+)</code></pre>
+
+<h2>One dead source</h2>
+<pre>[   0.0s] search_bing          0 results
+[   1.6s] analyze_bing         analyses += bing
+...
+**Missing/empty sources:** Bing returned no results.
+sources: google=5 bing=0 reddit=5 | urls=3 | threads=3 | nodes=9 | 6.3s</pre>
+<p>The source node returns an empty list, the analyzer writes a placeholder, and synthesis names the gap. Failure is normalized at the boundary instead of raising into the join.</p>
+
+<h2>README.md</h2>
+<pre># 0011 — LangGraph, advanced: fan-out, fan-in, and a join that fires early
+
+A multi-source research agent as a graph:
+
+```
+START -&gt; search_google ─┐
+      -&gt; search_bing   ─┼─&gt; select_reddit_urls -&gt; fetch_reddit -&gt; analyze_reddit ─┐
+      -&gt; search_reddit ─┘                                                         │
+                                                                                   ├─&gt; synthesize -&gt; END
+START -&gt; search_google -&gt; analyze_google ──────────────────────────────────────────┤
+      -&gt; search_bing   -&gt; analyze_bing   ──────────────────────────────────────────┘
+```
+
+By default **two searches** fan out (Google, Bing); setting `REDDIT_ENABLED=true` adds a third, Reddit branch — a structured-output selector, a comment fetch, and a third analysis. The analyses run in parallel and one synthesis writes the answer. The model is **DeepSeek** through `ChatDeepSeek`. The source layer reads recorded snapshots by default, or calls **BrightData** with `--live`.
+
+The default graph is the reference shape: all three searches join before selection, and all three analyses wait for the Reddit fetch. `--critical` moves Google and Bing analyses off the Reddit branch. `--loose-join` reproduces the bug that restructuring exposes: **separate edges from different supersteps are not a barrier**, so `synthesize` runs twice.
+
+## Run
+
+```powershell
+cd assets\examples\0011-langgraph-advanced
+Copy-Item .env.example .env      # first time only; fill DEEPSEEK_API_KEY (+ BRIGHTDATA_API_KEY for --live)
+uv sync
+
+uv run python agent.py                          # two sources (Reddit off by default)
+uv run python agent.py --provider snapshot      # local JSON, same as default
+uv run python agent.py --live                   # BrightData (needs key + zone)
+uv run python agent.py --critical               # with Reddit on: move Google/Bing earlier
+uv run python agent.py --critical --loose-join  # with Reddit on: break the join
+uv run python agent.py --fail bing              # one source returns nothing
+uv run python agent.py --check                  # test the provider, no model calls
+uv run python agent.py --zones                  # list active BrightData zones
+uv run python agent.py --mermaid                # print the graph source
+```
+
+`REDDIT_ENABLED=true` in `.env` (or the shell) turns on the Reddit branch. `DEEPSEEK_API_KEY` can live in `.env` or in the shell. A full run makes five live DeepSeek calls (selector, three analyses, synthesis); the default two-source run makes three (two analyses, synthesis).
+
+## What you should see
+
+Default, two sources (Reddit off), one real run:
+
+```
+question: Should a small support team build its agent on LangGraph or a plain tool loop?
+graph:    reference (fan-out, fan-in)
+source:   snapshot
+reddit:   off (REDDIT_ENABLED=false)
+
+[   0.0s] search_bing          5 results
+[   0.0s] search_google        5 results
+[   2.5s] analyze_bing         analyses += bing
+[   2.5s] analyze_google       analyses += google
+[   4.8s] synthesize           173 words
+
+sources: google=5 bing=5 reddit=0 | urls=0 | threads=0
+graph: bing, google | nodes=5 | 4.8s
+```
+
+With `REDDIT_ENABLED=true`, the Reddit selector and third branch join the graph:
+
+```
+question: Should a small support team build its agent on LangGraph or a plain tool loop?
+graph:    reference (fan-out, fan-in)
+source:   snapshot
+reddit:   on
+
+[   0.0s] search_bing          5 results
+[   0.0s] search_google        5 results
+[   0.0s] search_reddit        5 results
+[   1.6s] select_reddit_urls   3 urls
+[   1.6s] fetch_reddit         3 threads / 9 comments
+[   4.1s] analyze_bing         analyses += bing
+[   4.4s] analyze_google       analyses += google
+[   4.4s] analyze_reddit       analyses += reddit
+[   6.6s] synthesize           180 words
+
+answer: **Recommendation:** Start with a plain tool loop; migrate to LangGraph only
+when a concrete operational requirement forces it.
+
+sources: google=5 bing=5 reddit=5 | urls=3 | threads=3
+graph: bing, google, reddit | nodes=9 | 6.6s
+```
+
+The three searches complete together because they are one superstep. The three analyses also complete together, after the fetch. Nine node executions, one synthesis.
+
+## The join that fires early
+
+The rest of this section assumes `REDDIT_ENABLED=true` — without it there is no third branch to arrive late. `--critical` is the tempting edit: Google and Bing analyses do not need Reddit, so start them as soon as their searches finish. If you wire the analyses to `synthesize` with separate `add_edge` calls, the join is **not** a barrier when its predecessors live in different supersteps:
+
+```
+[   2.4s] analyze_bing         analyses += bing
+[   2.7s] analyze_google       analyses += google
+[   5.2s] synthesize           179 words     &lt;- fires with two analyses
+[   7.6s] analyze_reddit       analyses += reddit
+[   9.9s] synthesize           180 words     &lt;- fires again with all three
+...
+nodes=10 | 9.9s
+```
+
+The first answer was thrown away, and the run paid for an extra synthesis call. LangGraph triggered `synthesize` when the reachable predecessors finished, then triggered it again when Reddit arrived. The fix is an explicit list edge:
+
+```python
+graph.add_edge(
+    [&quot;analyze_google&quot;, &quot;analyze_bing&quot;, &quot;analyze_reddit&quot;], &quot;synthesize&quot;
+)
+```
+
+The same thing happens in a small graph with no model at all: a fast branch reaches the join, which runs, then the slow branch reaches it and it runs again. A list edge (or a dedicated join node with a counter) is what makes &quot;wait for all&quot; true.
+
+## Failure is a branch too
+
+`--fail bing` injects an empty result for one source (the trace uses `REDDIT_ENABLED=true`):
+
+```
+[   0.0s] search_bing          0 results
+[   1.6s] analyze_bing         analyses += bing
+...
+**Missing/empty sources:** Bing returned no results.
+sources: google=5 bing=0 reddit=5 | urls=3 | threads=3 | nodes=9 | 6.3s
+```
+
+The join still completes and the answer names the gap. The source node returns `[]`; the analyzer writes a placeholder instead of calling the model; synthesis sees the hole. A provider error that raised inside a node would fail the whole superstep, so the source layer normalizes failure at the boundary.
+
+## The critical path, measured
+
+With `REDDIT_ENABLED=true`, `--critical` looks faster — Google and Bing analyses finish at ~2.3s instead of ~3.5s. But the final synthesis still waits for the Reddit branch, which finished at ~4.7s:
+
+```
+[   1.4s] select_reddit_urls   3 urls
+[   2.1s] analyze_google       analyses += google
+[   2.3s] analyze_bing         analyses += bing
+[   2.3s] fetch_reddit         3 threads / 9 comments
+[   4.7s] analyze_reddit       analyses += reddit
+[   6.7s] synthesize           167 words
+```
+
+In our runs the reference shape took 5.9–6.6s and the critical-path shape 6.7s. Moving work earlier only helps when the branch you move is the long pole; here Reddit is. The structural fix is still right — Google and Bing genuinely do not depend on Reddit — but the stopwatch is the judge, not the arrow count. Timestamps are emitted when a superstep finishes, so a fast node that shares a superstep with a slow one appears late.
+
+## One provider interface, two implementations
+
+The graph never touches a search API. It calls four members of a provider object:
+
+```python
+class SourceProvider(Protocol):
+    name: str
+    def search(self, engine, question, limit=5) -&gt; list[dict]: ...
+    def reddit_search(self, question, limit=5) -&gt; list[dict]: ...
+    def reddit_threads(self, urls) -&gt; list[dict]: ...
+    def check(self) -&gt; None: ...
+```
+
+Two implementations ship in `sources.py`:
+
+| provider | where the data comes from | needs |
+|---|---|---|
+| `snapshot` (default) | `data/google.json`, `data/bing.json`, `data/reddit.json`, ranked by query overlap | nothing |
+| `brightdata` | SERP `/request` (zone, `brd_json=1`) + Reddit datasets (trigger → poll → download) | `BRIGHTDATA_API_KEY` and a SERP zone |
+
+Pick one, in this order of precedence:
+
+1. `--provider NAME` on the command line
+2. `--live` (shorthand for `--provider brightdata`)
+3. `SEARCH_PROVIDER` in `.env`
+4. default `snapshot`
+
+```powershell
+uv run python agent.py                      # local JSON
+uv run python agent.py --live               # BrightData
+uv run python agent.py --provider snapshot  # same as the default
+```
+
+Keys go in `.env` next to the script (copy `.env.example`):
+
+```
+DEEPSEEK_API_KEY=...
+BRIGHTDATA_API_KEY=...
+BRIGHTDATA_ZONE=ai_agent2
+```
+
+Live Reddit calls are asynchronous snapshots, so they are slower; any provider error inside a node becomes an empty source and synthesis names the gap. The Reddit dataset ids default to BrightData&#x27;s public ones; override them with `BRIGHTDATA_REDDIT_DATASET` and `BRIGHTDATA_COMMENTS_DATASET` if your account uses different datasets.
+
+### BrightData setup
+
+The lab does not ship a zone. `BRIGHTDATA_ZONE` must name a **SERP / Web Scraper API** zone in *your* BrightData account that can fetch a full Google/Bing URL with `brd_json=1`. The reference&#x27;s `ai_agent2` is somebody else&#x27;s zone; leaving it in `.env` produces:
+
+```
+HTTP 400: zone &quot;ai_agent2&quot; not found
+```
+
+1. Create (or pick) a SERP zone in the BrightData dashboard. `uv run python agent.py --zones` lists your active zones; if it prints `no active zones`, none exists yet.
+2. Put its name in `.env`: `BRIGHTDATA_ZONE=your_zone_name`.
+3. Reddit uses the datasets API, only when `REDDIT_ENABLED=true`. The public dataset ids in `.env.example` work if your account has access; otherwise set `BRIGHTDATA_REDDIT_DATASET` / `BRIGHTDATA_COMMENTS_DATASET`, or stay on `snapshot`.
+4. Verify without spending model calls:
+
+```powershell
+uv run python agent.py --check
+```
+
+Expected: `check: ok`, result counts for Google and Bing, then either `reddit disabled (REDDIT_ENABLED=false)` or `reddit trigger accepted (snapshot ...); polling skipped` when `REDDIT_ENABLED=true`. Any `400` now prints the API&#x27;s own message.
+
+### Adding another provider (e.g. Oxylabs)
+
+No third adapter is implemented yet — the interface is the extension point. A provider is a small class in `sources.py`:
+
+1. Implement the four members. `search` and `reddit_search` return `{title, url, snippet}`; `reddit_threads` returns `{title, url, comments}` and must drop URLs it does not recognize; `check` raises a clear error when a key or config is missing; `name` is what users pass to `--provider`.
+2. Register it once:
+
+```python
+from oxylabs_provider import OxylabsProvider
+
+PROVIDERS[&quot;oxylabs&quot;] = OxylabsProvider
+```
+
+3. Run it:
+
+```powershell
+uv run python agent.py --provider oxylabs
+```
+
+The graph, prompts and state do not change. This is the whole seam — BrightData, Oxylabs, SerpAPI, Tavily or your own index are interchangeable behind it.
+
+## Files
+
+| file | role |
+|---|---|
+| `agent.py` | state, nodes, both graph shapes, trace runner, CLI |
+| `sources.py` | the provider seam; snapshot default, BrightData dispatch |
+| `brightdata.py` | live SERP + Reddit datasets: trigger, poll, download |
+| `settings.py` | loads `.env` once before anything reads `os.environ` |
+| `.env.example` | copy to `.env`; keys and provider settings |
+| `prompts.py` | one analyzer prompt, one selector, one synthesis |
+| `common.py` | one `ChatDeepSeek` builder and the missing-key message |
+| `data/google.json` | recorded Google results |
+| `data/bing.json` | recorded Bing results |
+| `data/reddit.json` | recorded Reddit threads and comments |
+| `graph.png` | rendered reference graph |
+| `graph-critical.png` | rendered critical-path graph |
+| `pyproject.toml` | uv project: `langgraph`, `langchain`, `langchain-deepseek`, `python-dotenv`, `requests` |
+
+## If it fails
+
+- **`DEEPSEEK_API_KEY is not set`** — copy `.env.example` to `.env` and fill it, or set the shell variable. The script prints the exact lines and exits 1.
+- **`BRIGHTDATA_API_KEY is not set, and this run asked for --live`** — add it to `.env`, or run without `--live` to use the recorded snapshots.
+- **BrightData `401` / `403`** — the key is wrong.
+- **`HTTP 400: zone &quot;…&quot; not found`** — `BRIGHTDATA_ZONE` is not a SERP zone in your account. Run `uv run python agent.py --zones`; `no active zones` means you must create one. `ai_agent2` belongs to the reference author.
+- **`HTTP 400` on `/datasets/v3/trigger`** — the Reddit dataset is not available on your account, or the trigger was rejected; the response body is printed. Set `BRIGHTDATA_REDDIT_DATASET` / `BRIGHTDATA_COMMENTS_DATASET` to datasets you have, or use `snapshot`.
+- **BrightData snapshot timeout** — Reddit datasets are asynchronous; raise `BRIGHTDATA_POLL_SECONDS` in `.env` and retry.
+- **Anything BrightData** — run `uv run python agent.py --check` first: it tests the key, zone and dataset trigger without any DeepSeek calls.
+- **`.env` seems ignored** — run from this folder (`load_dotenv()` looks here), and remember shell variables win over `.env`.
+- **`InvalidUpdateError: At key &#x27;analyses&#x27;: Can receive only one value per step`** — you removed `Annotated[dict, merge_analyses]`. Three parallel analyzers write the same key; without a reducer LangGraph refuses the concurrent update.
+- **`synthesize` ran twice** — you used separate edges for a join whose predecessors start in different supersteps. Use the list edge.
+- **A wrong or invented Reddit URL** — the selector can only return URLs from the supplied list; `select_reddit_urls` filters against `reddit_results` before fetching.
+- **A source is empty** — expected under `--fail` or a provider failure; synthesis names it. Do not &quot;fix&quot; it by hiding the gap.
+</pre>
+
+<h2>agent.py</h2>
+<pre>&quot;&quot;&quot;A multi-source research agent as a LangGraph fan-out / fan-in.
+
+    START -&gt; search_google ─┐
+          -&gt; search_bing   ─┼─&gt; select_reddit_urls -&gt; fetch_reddit -&gt; analyze_reddit ─┐
+          -&gt; search_reddit ─┘                                                          │
+                                                                                       ├─&gt; synthesize -&gt; END
+    START -&gt; search_google -&gt; analyze_google ─────────────────────────────────────────┤
+          -&gt; search_bing   -&gt; analyze_bing   ─────────────────────────────────────────┘
+
+The default graph is the reference shape: three searches join, Reddit URLs are
+selected and fetched, then three analyses run in parallel and join for
+synthesis. `--critical` moves Google and Bing analyses off the Reddit branch;
+`--loose-join` shows why that restructuring needs an explicit list-edge join.
+
+Sources come from recorded snapshots by default. `--live` swaps in BrightData,
+reading `BRIGHTDATA_API_KEY` from the environment or `.env`. `--provider NAME`
+selects any provider registered in `sources.PROVIDERS`.
+
+Reddit is off by default. Set `REDDIT_ENABLED=true` in `.env` (or the shell) to
+add the Reddit branch: selector -&gt; comment fetch -&gt; analysis.
+
+Run from this folder:
+
+    uv sync
+    uv run python agent.py
+    REDDIT_ENABLED=true uv run python agent.py     # bash
+    $env:REDDIT_ENABLED = &quot;true&quot;; uv run python agent.py   # PowerShell
+    uv run python agent.py --live
+    uv run python agent.py --provider snapshot
+    uv run python agent.py --critical
+    uv run python agent.py --critical --loose-join
+    uv run python agent.py &quot;your question&quot;
+    uv run python agent.py --fail bing
+    uv run python agent.py --check
+    uv run python agent.py --zones
+    uv run python agent.py --mermaid
+&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+import time
+from typing import Annotated, TypedDict
+
+from langchain_core.messages import HumanMessage
+from langgraph.graph import END, START, StateGraph
+from pydantic import BaseModel, Field
+
+import prompts
+import sources
+from common import build_model
+
+SAMPLE_QUESTION = (
+    &quot;Should a small support team build its agent on LangGraph or a plain tool loop?&quot;
+)
+TRUE_VALUES = {&quot;1&quot;, &quot;true&quot;, &quot;yes&quot;, &quot;on&quot;}
+
+
+def reddit_enabled() -&gt; bool:
+    &quot;&quot;&quot;Reddit is opt-in: set REDDIT_ENABLED=true in .env or the shell.&quot;&quot;&quot;
+    return os.getenv(&quot;REDDIT_ENABLED&quot;, &quot;false&quot;).strip().lower() in TRUE_VALUES
+
+
+class RedditURLs(BaseModel):
+    &quot;&quot;&quot;The selector&#x27;s output: only threads worth reading in full.&quot;&quot;&quot;
+
+    selected_urls: list[str] = Field(
+        description=&quot;At most three Reddit URLs copied from the supplied list&quot;
+    )
+
+
+def merge_analyses(left: dict[str, str], right: dict[str, str]) -&gt; dict[str, str]:
+    &quot;&quot;&quot;Reducer: three parallel analyzers each write one key of the same dict.&quot;&quot;&quot;
+    return {**left, **right}
+
+
+class State(TypedDict):
+    question: str
+    google_results: list[dict]
+    bing_results: list[dict]
+    reddit_results: list[dict]
+    selected_urls: list[str]
+    reddit_posts: list[dict]
+    analyses: Annotated[dict[str, str], merge_analyses]
+    answer: str
+
+
+def initial_state(question: str) -&gt; dict:
+    return {
+        &quot;question&quot;: question,
+        &quot;google_results&quot;: [],
+        &quot;bing_results&quot;: [],
+        &quot;reddit_results&quot;: [],
+        &quot;selected_urls&quot;: [],
+        &quot;reddit_posts&quot;: [],
+        &quot;analyses&quot;: {},
+        &quot;answer&quot;: &quot;&quot;,
+    }
+
+
+def build_graph(
+    model,
+    *,
+    provider: sources.SourceProvider,
+    reddit: bool,
+    critical: bool = False,
+    loose_join: bool = False,
+    failures: frozenset[str] = frozenset(),
+):
+    def search_node(source: str):
+        def node(state: State) -&gt; dict:
+            if source in failures:
+                return {f&quot;{source}_results&quot;: []}
+            try:
+                if source == &quot;reddit&quot;:
+                    results = provider.reddit_search(state[&quot;question&quot;])
+                    return {&quot;reddit_results&quot;: results}
+                results = provider.search(source, state[&quot;question&quot;])
+                return {f&quot;{source}_results&quot;: results}
+            except Exception as error:  # noqa: BLE001 - a dead source must not kill the join
+                print(f&quot;warning: {source} source failed: {error}&quot;, file=sys.stderr)
+                return {f&quot;{source}_results&quot;: []}
+
+        return node
+
+    def select_reddit_urls(state: State) -&gt; dict:
+        posts = state[&quot;reddit_results&quot;]
+        if not posts or model is None:
+            return {&quot;selected_urls&quot;: []}
+
+        picker = model.with_structured_output(RedditURLs, method=&quot;function_calling&quot;)
+        try:
+            picked = picker.invoke(prompts.selector_messages(state[&quot;question&quot;], posts))
+        except Exception as error:  # noqa: BLE001 - a dead selector must not kill the join
+            print(f&quot;warning: URL selection failed: {error}&quot;, file=sys.stderr)
+            return {&quot;selected_urls&quot;: []}
+
+        allowed = {post[&quot;url&quot;] for post in posts}
+        urls: list[str] = []
+        for url in picked.selected_urls:
+            if url in allowed and url not in urls:
+                urls.append(url)
+        return {&quot;selected_urls&quot;: urls[:3]}
+
+    def fetch_reddit(state: State) -&gt; dict:
+        try:
+            return {&quot;reddit_posts&quot;: provider.reddit_threads(state[&quot;selected_urls&quot;])}
+        except Exception as error:  # noqa: BLE001 - keep the join alive
+            print(f&quot;warning: Reddit fetch failed: {error}&quot;, file=sys.stderr)
+            return {&quot;reddit_posts&quot;: []}
+
+    def analyzer(source: str):
+        def node(state: State) -&gt; dict:
+            if source == &quot;reddit&quot;:
+                payload = {
+                    &quot;search_results&quot;: state[&quot;reddit_results&quot;],
+                    &quot;threads&quot;: state[&quot;reddit_posts&quot;],
+                }
+            else:
+                payload = state[f&quot;{source}_results&quot;]
+
+            if not payload or (isinstance(payload, dict) and not any(payload.values())):
+                return {&quot;analyses&quot;: {source: &quot;(no results returned)&quot;}}
+
+            reply = model.invoke(
+                prompts.analysis_messages(source, state[&quot;question&quot;], payload)
+            )
+            return {&quot;analyses&quot;: {source: reply.content}}
+
+        return node
+
+    def synthesize(state: State) -&gt; dict:
+        reply = model.invoke(
+            prompts.synthesis_messages(state[&quot;question&quot;], state[&quot;analyses&quot;])
+        )
+        return {&quot;answer&quot;: reply.content}
+
+    active = (&quot;google&quot;, &quot;bing&quot;) + ((&quot;reddit&quot;,) if reddit else ())
+    graph = StateGraph(State)
+    for source in active:
+        graph.add_node(f&quot;search_{source}&quot;, search_node(source))
+        graph.add_node(f&quot;analyze_{source}&quot;, analyzer(source))
+    if reddit:
+        graph.add_node(&quot;select_reddit_urls&quot;, select_reddit_urls)
+        graph.add_node(&quot;fetch_reddit&quot;, fetch_reddit)
+    graph.add_node(&quot;synthesize&quot;, synthesize)
+
+    for source in active:
+        graph.add_edge(START, f&quot;search_{source}&quot;)
+
+    if not reddit:
+        # Two independent sources, one analysis each.
+        for source in active:
+            graph.add_edge(f&quot;search_{source}&quot;, f&quot;analyze_{source}&quot;)
+    elif critical:
+        # Critical-path attempt: only Reddit waits for Reddit. Google and Bing
+        # analyses run while the Reddit branch is still selecting and fetching.
+        graph.add_edge(&quot;search_reddit&quot;, &quot;select_reddit_urls&quot;)
+        graph.add_edge(&quot;select_reddit_urls&quot;, &quot;fetch_reddit&quot;)
+        graph.add_edge(&quot;fetch_reddit&quot;, &quot;analyze_reddit&quot;)
+        graph.add_edge(&quot;search_google&quot;, &quot;analyze_google&quot;)
+        graph.add_edge(&quot;search_bing&quot;, &quot;analyze_bing&quot;)
+    else:
+        # Reference shape: all three searches join before Reddit selection,
+        # and every analysis waits for the Reddit fetch.
+        graph.add_edge(
+            [&quot;search_google&quot;, &quot;search_bing&quot;, &quot;search_reddit&quot;], &quot;select_reddit_urls&quot;
+        )
+        graph.add_edge(&quot;select_reddit_urls&quot;, &quot;fetch_reddit&quot;)
+        for source in (&quot;google&quot;, &quot;bing&quot;, &quot;reddit&quot;):
+            graph.add_edge(&quot;fetch_reddit&quot;, f&quot;analyze_{source}&quot;)
+
+    analyzers = [f&quot;analyze_{source}&quot; for source in active]
+    if loose_join:
+        # The bug: separate edges from different supersteps are not a barrier.
+        # synthesize can fire with only some of the analyses.
+        for name in analyzers:
+            graph.add_edge(name, &quot;synthesize&quot;)
+    else:
+        graph.add_edge(analyzers, &quot;synthesize&quot;)
+    graph.add_edge(&quot;synthesize&quot;, END)
+    return graph.compile()
+
+
+def describe(delta: dict) -&gt; str:
+    for key, value in delta.items():
+        if key == &quot;analyses&quot;:
+            return f&quot;analyses += {&#x27;, &#x27;.join(value)}&quot;
+        if key.endswith(&quot;_results&quot;):
+            return f&quot;{len(value)} results&quot;
+        if key == &quot;selected_urls&quot;:
+            return f&quot;{len(value)} urls&quot;
+        if key == &quot;reddit_posts&quot;:
+            comments = sum(len(thread[&quot;comments&quot;]) for thread in value)
+            return f&quot;{len(value)} threads / {comments} comments&quot;
+        if key == &quot;answer&quot;:
+            return f&quot;{len(value.split())} words&quot;
+    return &quot;&quot;
+
+
+def run(
+    question: str,
+    model,
+    *,
+    provider: sources.SourceProvider,
+    reddit: bool,
+    critical: bool,
+    loose_join: bool,
+    failures: frozenset[str],
+) -&gt; int:
+    app = build_graph(
+        model,
+        provider=provider,
+        reddit=reddit,
+        critical=critical,
+        loose_join=loose_join,
+        failures=failures,
+    )
+    inputs = initial_state(question)
+    final = inputs
+    nodes = 0
+    started = time.perf_counter()
+
+    print(f&quot;question: {question}&quot;)
+    shape = &quot;critical-path&quot; if critical else &quot;reference&quot;
+    print(f&quot;graph:    {shape} (fan-out, fan-in)&quot;)
+    print(f&quot;source:   {provider.name}&quot;)
+    print(f&quot;reddit:   {&#x27;on&#x27; if reddit else &#x27;off (REDDIT_ENABLED=false)&#x27;}&quot;)
+    if critical and not reddit:
+        print(&quot;note:     --critical has no effect while Reddit is disabled&quot;)
+    if loose_join:
+        print(&quot;join:     loose (separate edges, no barrier)&quot;)
+    if failures:
+        print(f&quot;failed:   {&#x27;, &#x27;.join(sorted(failures))} (injected)&quot;)
+    print()
+
+    for mode, chunk in app.stream(inputs, stream_mode=[&quot;updates&quot;, &quot;values&quot;]):
+        if mode == &quot;values&quot;:
+            final = chunk
+            continue
+        for node, delta in chunk.items():
+            nodes += 1
+            elapsed = time.perf_counter() - started
+            print(f&quot;[{elapsed:6.1f}s] {node:&lt;20} {describe(delta)}&quot;)
+
+    elapsed = time.perf_counter() - started
+    print()
+    print(f&quot;answer: {final[&#x27;answer&#x27;]}&quot;)
+    print()
+    print(
+        &quot;sources: &quot;
+        f&quot;google={len(final[&#x27;google_results&#x27;])} &quot;
+        f&quot;bing={len(final[&#x27;bing_results&#x27;])} &quot;
+        f&quot;reddit={len(final[&#x27;reddit_results&#x27;])} | &quot;
+        f&quot;urls={len(final[&#x27;selected_urls&#x27;])} | &quot;
+        f&quot;threads={len(final[&#x27;reddit_posts&#x27;])}&quot;
+    )
+    print(
+        f&quot;graph: {&#x27;, &#x27;.join(final[&#x27;analyses&#x27;]) or &#x27;none&#x27;} | &quot;
+        f&quot;nodes={nodes} | {elapsed:.1f}s&quot;
+    )
+    return 0
+
+
+def check_provider(provider: sources.SourceProvider, reddit: bool) -&gt; int:
+    &quot;&quot;&quot;Test the provider without running the graph (no DeepSeek calls).&quot;&quot;&quot;
+    print(f&quot;provider: {provider.name}&quot;)
+
+    try:
+        provider.check()
+    except sources.SourceError as error:
+        print(f&quot;check:    {error}&quot;, file=sys.stderr)
+        return 1
+    print(&quot;check:    ok&quot;)
+
+    failures = 0
+    for label in (&quot;google&quot;, &quot;bing&quot;):
+        try:
+            results = provider.search(label, &quot;test query&quot;, limit=2)
+            print(f&quot;{label:9} {len(results)} results&quot;)
+            if results:
+                print(f&quot;          first: {results[0].get(&#x27;title&#x27;, &#x27;&#x27;)[:70]}&quot;)
+        except Exception as error:  # noqa: BLE001 - report and keep checking
+            failures += 1
+            print(f&quot;{label:9} failed: {error}&quot;, file=sys.stderr)
+
+    if not reddit:
+        print(&quot;reddit    disabled (REDDIT_ENABLED=false)&quot;)
+    elif provider.name == &quot;brightdata&quot;:
+        import brightdata
+
+        try:
+            snapshot_id = brightdata.trigger_reddit(&quot;test query&quot;)
+            print(
+                f&quot;reddit    trigger accepted (snapshot {snapshot_id}); &quot;
+                &quot;polling skipped&quot;
+            )
+        except Exception as error:  # noqa: BLE001 - report the API body
+            failures += 1
+            print(f&quot;reddit    failed: {error}&quot;, file=sys.stderr)
+    else:
+        try:
+            results = provider.reddit_search(&quot;test query&quot;, limit=2)
+            print(f&quot;reddit    {len(results)} results&quot;)
+            if results:
+                print(f&quot;          first: {results[0].get(&#x27;title&#x27;, &#x27;&#x27;)[:70]}&quot;)
+        except Exception as error:  # noqa: BLE001
+            failures += 1
+            print(f&quot;reddit    failed: {error}&quot;, file=sys.stderr)
+
+    return 1 if failures else 0
+
+
+def main() -&gt; int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(&quot;question&quot;, nargs=&quot;*&quot;, help=&quot;defaults to the sample question&quot;)
+    parser.add_argument(
+        &quot;--critical&quot;, action=&quot;store_true&quot;, help=&quot;move Google/Bing analyses off the Reddit branch&quot;
+    )
+    parser.add_argument(
+        &quot;--loose-join&quot;,
+        action=&quot;store_true&quot;,
+        help=&quot;join the analyses with separate edges (reproduces the early-fire bug)&quot;,
+    )
+    parser.add_argument(
+        &quot;--fail&quot;,
+        action=&quot;append&quot;,
+        choices=[&quot;google&quot;, &quot;bing&quot;, &quot;reddit&quot;],
+        default=[],
+        metavar=&quot;SOURCE&quot;,
+        help=&quot;inject an empty result for a source (repeatable)&quot;,
+    )
+    parser.add_argument(
+        &quot;--live&quot;,
+        action=&quot;store_true&quot;,
+        help=&quot;shorthand for --provider brightdata&quot;,
+    )
+    parser.add_argument(
+        &quot;--provider&quot;,
+        metavar=&quot;NAME&quot;,
+        help=&quot;provider registered in sources.PROVIDERS (default: snapshot)&quot;,
+    )
+    parser.add_argument(
+        &quot;--check&quot;,
+        action=&quot;store_true&quot;,
+        help=&quot;test the selected provider and exit (no DeepSeek calls)&quot;,
+    )
+    parser.add_argument(
+        &quot;--zones&quot;,
+        action=&quot;store_true&quot;,
+        help=&quot;list active BrightData zones and exit&quot;,
+    )
+    parser.add_argument(&quot;--mermaid&quot;, action=&quot;store_true&quot;, help=&quot;print the graph source&quot;)
+    args = parser.parse_args()
+
+    if args.zones:
+        import brightdata
+
+        try:
+            zones = brightdata.list_zones()
+        except Exception as error:  # noqa: BLE001 - the API body is the message
+            print(f&quot;error: {error}&quot;, file=sys.stderr)
+            return 1
+        if not zones:
+            print(&quot;no active zones.&quot;)
+            print(&quot;Create a SERP / Web Scraper API zone in BrightData, then set&quot;)
+            print(&quot;BRIGHTDATA_ZONE to its name in .env.&quot;)
+            return 1
+        for zone in zones:
+            name = zone.get(&quot;name&quot;) or zone.get(&quot;zone&quot;) or &quot;?&quot;
+            kind = zone.get(&quot;type&quot;) or zone.get(&quot;zone_type&quot;) or &quot;&quot;
+            print(f&quot;{name}  {kind}&quot;.rstrip())
+        print(&quot;\nSet BRIGHTDATA_ZONE to one of these names in .env.&quot;)
+        return 0
+
+    try:
+        explicit = args.provider or (&quot;brightdata&quot; if args.live else None)
+        provider = sources.get_provider(explicit)
+    except ValueError as error:
+        print(f&quot;error: {error}&quot;, file=sys.stderr)
+        return 1
+
+    reddit = reddit_enabled()
+
+    if args.check:
+        return check_provider(provider, reddit)
+
+    if args.mermaid:
+        app = build_graph(
+            None,
+            provider=provider,
+            reddit=reddit,
+            critical=args.critical,
+            loose_join=args.loose_join,
+        )
+        print(app.get_graph().draw_mermaid())
+        return 0
+
+    try:
+        provider.check()
+    except sources.SourceError as error:
+        print(f&quot;error: {error}&quot;, file=sys.stderr)
+        return 1
+
+    question = &quot; &quot;.join(args.question) or SAMPLE_QUESTION
+    try:
+        model = build_model()
+    except RuntimeError as error:
+        print(f&quot;error: {error}&quot;, file=sys.stderr)
+        return 1
+
+    failures = frozenset(args.fail) - (frozenset() if reddit else {&quot;reddit&quot;})
+    try:
+        return run(
+            question,
+            model,
+            provider=provider,
+            reddit=reddit,
+            critical=args.critical,
+            loose_join=args.loose_join,
+            failures=failures,
+        )
+    except Exception as error:  # noqa: BLE001 - show the provider error, keep exit 1
+        print(f&quot;error: {type(error).__name__}: {error}&quot;, file=sys.stderr)
+        print(&quot;check DEEPSEEK_API_KEY, account balance, and network access.&quot;, file=sys.stderr)
+        return 1
+
+
+if __name__ == &quot;__main__&quot;:
+    raise SystemExit(main())
+</pre>
+
+<h2>sources.py</h2>
+<pre>&quot;&quot;&quot;The source layer and its provider interface.
+
+The graph talks to a provider object, never to a search API directly. A provider
+implements four members:
+
+    name                                      # what the trace prints
+    search(engine, question, limit)           -&gt; [{title, url, snippet}, ...]
+    reddit_search(question, limit)            -&gt; [{title, url, snippet}, ...]
+    reddit_threads(urls)                      -&gt; [{title, url, comments}, ...]
+    check()                                   # raise if it is not ready to run
+
+Two providers ship with the lab:
+
+    snapshot    reads data/*.json, ranked by query overlap. No key, no network.
+    brightdata  live SERP + Reddit datasets (see brightdata.py).
+
+Pick one with `--live` (brightdata), `SEARCH_PROVIDER` in `.env`, or the default
+`snapshot`. To add another provider (Oxylabs, SerpAPI, Tavily, your own index),
+implement the four members in a class and add one line to PROVIDERS:
+
+    class OxylabsProvider:
+        name = &quot;oxylabs&quot;
+        def check(self) -&gt; None: ...
+        def search(...): ...
+        def reddit_search(...): ...
+        def reddit_threads(...): ...
+
+    PROVIDERS[&quot;oxylabs&quot;] = OxylabsProvider
+
+Then set SEARCH_PROVIDER=oxylabs. The graph, prompts and state do not change.
+&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import json
+import os
+import re
+from pathlib import Path
+from typing import Protocol
+
+import brightdata
+import settings  # noqa: F401  (loads .env before os.environ is read)
+
+DATA = Path(__file__).resolve().parent / &quot;data&quot;
+SourceError = brightdata.BrightDataError
+STOPWORDS = {
+    &quot;a&quot;, &quot;an&quot;, &quot;and&quot;, &quot;are&quot;, &quot;as&quot;, &quot;at&quot;, &quot;be&quot;, &quot;build&quot;, &quot;by&quot;, &quot;for&quot;, &quot;from&quot;,
+    &quot;how&quot;, &quot;in&quot;, &quot;is&quot;, &quot;it&quot;, &quot;its&quot;, &quot;of&quot;, &quot;on&quot;, &quot;or&quot;, &quot;should&quot;, &quot;small&quot;,
+    &quot;that&quot;, &quot;the&quot;, &quot;their&quot;, &quot;this&quot;, &quot;to&quot;, &quot;use&quot;, &quot;what&quot;, &quot;when&quot;, &quot;with&quot;,
+}
+
+
+class SourceProvider(Protocol):
+    &quot;&quot;&quot;The only contract the graph depends on.&quot;&quot;&quot;
+
+    name: str
+
+    def search(
+        self, engine: str, question: str, limit: int = 5
+    ) -&gt; list[dict]: ...
+
+    def reddit_search(self, question: str, limit: int = 5) -&gt; list[dict]: ...
+
+    def reddit_threads(self, urls: list[str]) -&gt; list[dict]: ...
+
+    def check(self) -&gt; None: ...
+
+
+def _load(name: str) -&gt; list[dict]:
+    return json.loads((DATA / name).read_text(encoding=&quot;utf-8&quot;))
+
+
+def _tokens(text: str) -&gt; list[str]:
+    return [word for word in re.findall(r&quot;[a-z0-9]+&quot;, text.lower()) if word not in STOPWORDS]
+
+
+def _score(question: str, document: dict) -&gt; int:
+    query = set(_tokens(question))
+    title = _tokens(document.get(&quot;title&quot;, &quot;&quot;))
+    snippet = _tokens(document.get(&quot;snippet&quot;, &quot;&quot;))
+    return 3 * sum(1 for word in title if word in query) + sum(
+        1 for word in snippet if word in query
+    )
+
+
+class SnapshotProvider:
+    &quot;&quot;&quot;Recorded results from data/*.json. Deterministic and offline.&quot;&quot;&quot;
+
+    name = &quot;snapshot&quot;
+
+    def check(self) -&gt; None:
+        return None
+
+    def search(self, engine: str, question: str, limit: int = 5) -&gt; list[dict]:
+        if engine not in {&quot;google&quot;, &quot;bing&quot;}:
+            raise ValueError(f&quot;unknown engine: {engine}&quot;)
+        documents = _load(f&quot;{engine}.json&quot;)
+        # sorted() is stable, so equal scores keep the recorded order.
+        ranked = sorted(
+            documents, key=lambda document: _score(question, document), reverse=True
+        )
+        return [
+            {
+                &quot;title&quot;: document[&quot;title&quot;],
+                &quot;url&quot;: document[&quot;url&quot;],
+                &quot;snippet&quot;: document[&quot;snippet&quot;],
+            }
+            for document in ranked[:limit]
+        ]
+
+    def reddit_search(self, question: str, limit: int = 5) -&gt; list[dict]:
+        posts = _load(&quot;reddit.json&quot;)
+        ranked = sorted(posts, key=lambda post: _score(question, post), reverse=True)
+        return [
+            {
+                &quot;title&quot;: post[&quot;title&quot;],
+                &quot;url&quot;: post[&quot;url&quot;],
+                &quot;snippet&quot;: post[&quot;snippet&quot;],
+            }
+            for post in ranked[:limit]
+        ]
+
+    def reddit_threads(self, urls: list[str]) -&gt; list[dict]:
+        if not urls:
+            return []
+
+        by_url = {post[&quot;url&quot;]: post for post in _load(&quot;reddit.json&quot;)}
+        threads = []
+        for url in urls:
+            post = by_url.get(url)
+            if post is None:
+                # The model may invent a URL; never fetch or trust it.
+                continue
+            threads.append(
+                {
+                    &quot;url&quot;: url,
+                    &quot;title&quot;: post[&quot;title&quot;],
+                    &quot;comments&quot;: post[&quot;comments&quot;],
+                }
+            )
+        return threads
+
+
+class BrightDataProvider:
+    &quot;&quot;&quot;Live provider: BrightData SERP + Reddit datasets.&quot;&quot;&quot;
+
+    name = &quot;brightdata&quot;
+
+    def check(self) -&gt; None:
+        if not os.getenv(&quot;BRIGHTDATA_API_KEY&quot;):
+            raise SourceError(brightdata.missing_key_message())
+
+        zone = os.getenv(&quot;BRIGHTDATA_ZONE&quot;, &quot;&quot;).strip()
+        if not zone:
+            raise SourceError(
+                &quot;BRIGHTDATA_ZONE is not set. Run `uv run python agent.py --zones`; &quot;
+                &quot;if the list is empty, create a SERP / Web Scraper API zone in &quot;
+                &quot;BrightData, then put its name in .env.&quot;
+            )
+
+        try:
+            zones = brightdata.list_zones()
+        except Exception as error:  # noqa: BLE001 - turn the API error into one line
+            raise SourceError(f&quot;could not list BrightData zones: {error}&quot;) from error
+
+        names = {
+            zone_info.get(&quot;name&quot;) or zone_info.get(&quot;zone&quot;)
+            for zone_info in zones
+            if isinstance(zone_info, dict)
+        }
+        if zone not in names:
+            active = &quot;, &quot;.join(sorted(name for name in names if name)) or &quot;none&quot;
+            raise SourceError(
+                f&quot;BRIGHTDATA_ZONE={zone!r} is not an active zone (active: {active}). &quot;
+                &quot;Run `uv run python agent.py --zones`, create a SERP zone if the &quot;
+                &quot;list is empty, then set BRIGHTDATA_ZONE in .env.&quot;
+            )
+
+    def search(self, engine: str, question: str, limit: int = 5) -&gt; list[dict]:
+        return brightdata.search(engine, question, limit=limit)
+
+    def reddit_search(self, question: str, limit: int = 5) -&gt; list[dict]:
+        return brightdata.reddit_search(question, limit=limit)
+
+    def reddit_threads(self, urls: list[str]) -&gt; list[dict]:
+        return brightdata.reddit_threads(urls)
+
+
+PROVIDERS: dict[str, type[SourceProvider]] = {
+    &quot;snapshot&quot;: SnapshotProvider,
+    &quot;brightdata&quot;: BrightDataProvider,
+}
+
+
+def get_provider(explicit: str | None = None) -&gt; SourceProvider:
+    &quot;&quot;&quot;CLI wins, then SEARCH_PROVIDER, then the recorded snapshot.&quot;&quot;&quot;
+    name = (explicit or os.getenv(&quot;SEARCH_PROVIDER&quot;, &quot;snapshot&quot;)).strip().lower()
+    try:
+        factory = PROVIDERS[name]
+    except KeyError as error:
+        choices = &quot;, &quot;.join(sorted(PROVIDERS))
+        raise ValueError(f&quot;unknown provider {name!r}; use one of {choices}&quot;) from error
+    return factory()
+</pre>
+
+<h2>prompts.py</h2>
+<pre>&quot;&quot;&quot;Prompt builders: one analyzer for every source, one selector, one synthesis.&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import json
+
+from langchain_core.messages import HumanMessage, SystemMessage
+
+ANALYST = &quot;&quot;&quot;You are a skeptical engineering analyst reading {source} results.
+Report what the results actually claim, where they are specific, and what they
+leave out. Do not add facts that are not in the results.&quot;&quot;&quot;
+
+SELECTOR = &quot;&quot;&quot;You choose which Reddit threads are worth reading in full.
+Return at most three URLs, and only URLs that appear in the supplied list.&quot;&quot;&quot;
+
+SYNTHESIS = &quot;&quot;&quot;You are the final writer for a multi-source research run.
+Write a direct recommendation, two or three reasons, and one caveat.
+Name any source that was missing or empty. Keep it under 180 words.&quot;&quot;&quot;
+
+
+def analysis_messages(source: str, question: str, payload: object) -&gt; list:
+    return [
+        SystemMessage(content=ANALYST.format(source=source)),
+        HumanMessage(
+            content=(
+                f&quot;Question: {question}\n\n&quot;
+                f&quot;Results:\n{json.dumps(payload, indent=2, ensure_ascii=False)}\n\n&quot;
+                &quot;Write 4-6 sentences. No headings, no preamble.&quot;
+            )
+        ),
+    ]
+
+
+def selector_messages(question: str, posts: list[dict]) -&gt; list:
+    listed = [
+        {&quot;title&quot;: post[&quot;title&quot;], &quot;url&quot;: post[&quot;url&quot;], &quot;snippet&quot;: post[&quot;snippet&quot;]}
+        for post in posts
+    ]
+    return [
+        SystemMessage(content=SELECTOR),
+        HumanMessage(
+            content=(
+                f&quot;Question: {question}\n\n&quot;
+                f&quot;Threads:\n{json.dumps(listed, indent=2, ensure_ascii=False)}&quot;
+            )
+        ),
+    ]
+
+
+def synthesis_messages(question: str, analyses: dict[str, str]) -&gt; list:
+    blocks = &quot;\n\n&quot;.join(
+        f&quot;### {source}\n{text}&quot; for source, text in analyses.items()
+    )
+    return [
+        SystemMessage(content=SYNTHESIS),
+        HumanMessage(content=f&quot;Question: {question}\n\n{blocks}&quot;),
+    ]
+</pre>
+
+<h2>common.py</h2>
+<pre>&quot;&quot;&quot;Shared model wiring for the research agent.
+
+The model calls are live DeepSeek. Put the key in the environment or in `.env`
+next to this script (copy `.env.example` first):
+
+  PowerShell (this session):  $env:DEEPSEEK_API_KEY = &quot;sk-...&quot;
+  PowerShell (persist):       setx DEEPSEEK_API_KEY &quot;sk-...&quot;   # reopen the terminal
+  .env:                       DEEPSEEK_API_KEY=sk-...
+
+Get a key at https://platform.deepseek.com/api_keys. No key -&gt; the script prints
+these instructions and exits 1, never a guess.
+&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import os
+
+import settings  # noqa: F401  (loads .env before anything reads os.environ)
+from langchain_deepseek import ChatDeepSeek
+
+MODEL = os.getenv(&quot;DEEPSEEK_MODEL&quot;, &quot;deepseek-flash&quot;)
+BASE_URL = os.getenv(&quot;DEEPSEEK_BASE_URL&quot;, &quot;https://api.deepseek.com&quot;)
+
+
+def missing_key_message() -&gt; str:
+    return (
+        &quot;DEEPSEEK_API_KEY is not set.\n&quot;
+        &#x27;  PowerShell (this session):  $env:DEEPSEEK_API_KEY = &quot;sk-...&quot;\n&#x27;
+        &#x27;  PowerShell (persist):       setx DEEPSEEK_API_KEY &quot;sk-...&quot;   # reopen terminal\n&#x27;
+        &quot;  .env (this folder):         DEEPSEEK_API_KEY=sk-...\n&quot;
+        &quot;  Get a key:                  https://platform.deepseek.com/api_keys&quot;
+    )
+
+
+def build_model() -&gt; ChatDeepSeek:
+    &quot;&quot;&quot;Return a live ChatDeepSeek handle, or explain exactly what is missing.&quot;&quot;&quot;
+    key = os.getenv(&quot;DEEPSEEK_API_KEY&quot;)
+    if not key:
+        raise RuntimeError(missing_key_message())
+
+    return ChatDeepSeek(
+        model=MODEL,
+        api_key=key,
+        api_base=BASE_URL,
+        temperature=0,
+        max_retries=2,
+        timeout=90,
+        # Graph wiring, not reasoning traces: keep the six calls short and cheap.
+        extra_body={&quot;thinking&quot;: {&quot;type&quot;: &quot;disabled&quot;}},
+    )
+</pre>
+
+
+<h2>Files</h2>
+<table>
+  <thead><tr><th>file</th><th>role</th></tr></thead>
+  <tbody>
+    <tr><td><code>agent.py</code></td><td>state, nodes, both graph shapes, trace runner, CLI</td></tr>
+    <tr><td><code>sources.py</code></td><td>provider seam; snapshot default, BrightData dispatch</td></tr>
+    <tr><td><code>brightdata.py</code></td><td>live SERP + Reddit datasets: trigger, poll, download</td></tr>
+    <tr><td><code>settings.py</code></td><td>loads .env once before anything reads os.environ</td></tr>
+    <tr><td><code>.env.example</code></td><td>copy to .env; keys and provider settings</td></tr>
+    <tr><td><code>prompts.py</code></td><td>one analyzer prompt, one selector, one synthesis</td></tr>
+    <tr><td><code>common.py</code></td><td>one ChatDeepSeek builder and the missing-key message</td></tr>
+    <tr><td><code>data/*.json</code></td><td>recorded Google, Bing and Reddit payloads</td></tr>
+    <tr><td><code>graph.png</code></td><td>rendered reference graph</td></tr>
+    <tr><td><code>graph-critical.png</code></td><td>rendered critical-path graph</td></tr>
+    <tr><td><code>pyproject.toml</code></td><td>uv project: langgraph, langchain, langchain-deepseek, python-dotenv, requests</td></tr>
+  </tbody>
+</table>
+
+<div class="footer-nav">
+  <div class="ask"><strong>Synthesis missing a source?</strong> Check the <code>analyses</code> dict in the trace: a missing key means that analyzer never ran or its node was skipped. A key present with a placeholder means the source returned empty.</div>
+  <div class="links">
+    <a href="../../../lessons/0011-langgraph-advanced.html">← Lesson 11</a>
+    <a href="README.md">README</a>
+    <a href="../../../lessons/0010-langgraph.html">Lesson 10</a>
+  </div>
+</div>
+
+</article>
+</body>
+</html>

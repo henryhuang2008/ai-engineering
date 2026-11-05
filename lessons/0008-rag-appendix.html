@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 8 — RAG Appendix: Chunking Tools and Vector Stores</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<article class="page">
+
+<p class="meta">Lesson 8 of the AI Engineering course · ~30 min · Prereq: <a href="0007-rag-service.html">Lesson 7</a> · <a href="../reference/skill-map.html">Skill Map →</a></p>
+
+<h1>RAG Appendix: Chunking Tools and Vector Stores</h1>
+
+<p class="lede">Two decisions outlive the tutorial you copied them from: how the corpus is cut into chunks, and where those chunks are stored. This appendix is the reference for both — the chunking framework, the four tools that do the cutting, and the six stores you are actually choosing between.</p>
+
+<div class="callout win">
+  <span class="label">Your win this lesson</span>
+  You'll be able to defend a chunk unit and a store from the document type and the ops model, instead of inheriting defaults — and name the tool that parses a PDF properly before anything is embedded.
+</div>
+
+<h2>Part 1 — How to chunk content</h2>
+
+<p><strong>Structure first; fixed windows are the fallback.</strong> Your documents already know where the seams are — headings, clauses, Q&amp;A pairs, function boundaries, table rows. A chunker that ignores that structure is guessing at boundaries the document already published.</p>
+
+<table>
+  <thead><tr><th>Document type</th><th>Chunk unit</th><th>Size guide</th></tr></thead>
+  <tbody>
+    <tr><td>Docs / KB articles</td><td>heading section</td><td>100–400 tokens</td></tr>
+    <tr><td>FAQs</td><td>one Q + A pair, never split</td><td>small, atomic</td></tr>
+    <tr><td>Policies, legal</td><td>clause / bullet group</td><td>paragraph level</td></tr>
+    <tr><td>Code</td><td>function or class</td><td>never mid-function</td></tr>
+    <tr><td>Tables</td><td>whole table + header row</td><td>never split a table</td></tr>
+    <tr><td>Long narrative</td><td>paragraph + sliding window</td><td>the fallback</td></tr>
+  </tbody>
+</table>
+
+<p>The course default is a <strong>400–600 token budget</strong>, because that holds one idea plus the context needed to interpret it. Short atomic units — an FAQ pair, a single clause — legitimately land smaller. The rule is <em>one idea per chunk</em>, not one size for the corpus.</p>
+
+<p>Four rules transfer to every tool:</p>
+<ul>
+<li><strong>Context promotion.</strong> The title and heading path travel <em>inside</em> every chunk, so a paragraph about refunds still knows it sits under <em>Billing → Refunds</em> when retrieved alone.</li>
+<li><strong>Overlap only where windows slide.</strong> Fixed windows get 10–15% overlap as boundary insurance; structure-aware chunks do not need it, because they are not sliding. Dedupe overlap downstream if you keep it.</li>
+<li><strong>Metadata at write time.</strong> Source, page, section, date and tenant are cheap to store now and impossible to reconstruct later. They are what filters run on.</li>
+<li><strong>Tune on your own questions.</strong> Chunk size is an empirical choice: the same document set can prefer different boundaries for different queries.</li>
+</ul>
+
+<p>Three names worth knowing for interviews and design reviews: <strong>semantic chunking</strong> (split where consecutive embeddings shift), <strong>small-to-big</strong> (retrieve the small chunk, return its parent section), and <strong>late chunking</strong> (embed the whole document first, pool into chunks afterwards). None of them replaces structure — they are refinements on top of it.</p>
+
+<h2>Part 2 — Tools that chunk</h2>
+
+<p>There are two jobs here, and tools differ in which one they do: <strong>parsing</strong> (bytes → structured text) and <strong>splitting</strong> (structured text → chunks). Confusing the two is why "PDF chunking" goes badly — a splitter cannot recover a table that the parser already flattened.</p>
+
+<table>
+  <thead><tr><th>Tool</th><th>Input</th><th>What it gives you</th><th>Reach for it when</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Docling</strong></td><td>PDF, DOCX, PPTX, XLSX, HTML, Markdown</td><td>reading order, headings, tables, page anchors, then <code>HybridChunker</code></td><td>the source is a PDF or Office file, or tables matter</td></tr>
+    <tr><td><strong>LangChain splitters</strong></td><td>plain text, Markdown, HTML, code</td><td>recursive, header-aware, token-aware splitting</td><td>the text is already clean and you want no extra dependencies</td></tr>
+    <tr><td><strong>LlamaIndex node parsers</strong></td><td>documents / nodes</td><td>sentence, semantic and hierarchical parsing with rich metadata</td><td>you want small-to-big retrieval or semantic boundaries</td></tr>
+    <tr><td><strong>html-to-markdown</strong></td><td>raw HTML</td><td>clean Markdown, GFM tables kept as tables</td><td>the corpus is a website, help centre or CMS export</td></tr>
+  </tbody>
+</table>
+
+<h3>Docling: parse and chunk in one pass</h3>
+
+<p>Docling is the only tool in this list that does both jobs on a PDF. It walks the document hierarchy, keeps tables intact and reports page anchors, then <code>HybridChunker</code> merges small neighbours up to the token budget and starts a new chunk at a heading:</p>
+
+<pre><code>from docling.chunking import HybridChunker
+from docling.document_converter import DocumentConverter
+
+doc = DocumentConverter().convert("handbook.pdf").document
+chunker = HybridChunker(max_tokens=512, merge_peers=True)
+chunks = list(chunker.chunk(dl_doc=doc))
+text = chunker.contextualize(chunks[0])   # heading path + chunk text</code></pre>
+
+<p>Cost: it is the heaviest dependency in this appendix — PyTorch plus layout models, and a first run measured in tens of seconds. That is the price of reading a two-column PDF correctly.</p>
+
+<h3>LangChain splitters: cheap, format-blind, already installed</h3>
+
+<p>LangChain splits text you have already extracted. It does not parse a PDF. Its character-based default is the trap: <code>chunk_size=1200</code> means 1200 <em>characters</em>, not tokens.</p>
+
+<pre><code>from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+splitter = RecursiveCharacterTextSplitter(
+    chunk_size=1200,          # characters, not tokens
+    chunk_overlap=180,        # ~15%
+    separators=["\n## ", "\n\n", "\n", " "],
+)
+chunks = splitter.split_text(markdown)</code></pre>
+
+<p>If the text is Markdown with real headings, <code>MarkdownHeaderTextSplitter</code> splits on the heading hierarchy and keeps the headers as metadata — the cheapest way to get context promotion without a parser. <code>TokenTextSplitter</code> exists when you want the budget counted in tokens instead of characters.</p>
+
+<h3>LlamaIndex node parsers: metadata and small-to-big</h3>
+
+<p>LlamaIndex wraps splitting into <em>nodes</em> that carry relationships to their neighbours and parent. That is what makes small-to-big retrieval a configuration rather than a project:</p>
+
+<pre><code>from llama_index.core.node_parser import (
+    SentenceSplitter, HierarchicalNodeParser,
+)
+
+nodes = SentenceSplitter(chunk_size=512, chunk_overlap=50).get_nodes_from_documents(docs)
+parents = HierarchicalNodeParser.from_defaults(
+    chunk_sizes=[2048, 512, 128]
+).get_nodes_from_documents(docs)</code></pre>
+
+<p><code>SemanticSplitterNodeParser</code> is also here, and it is the honest way to try semantic chunking: it embeds adjacent sentences and cuts where similarity drops. Expensive, corpus-specific, and worth measuring before adopting.</p>
+
+<h3>html-to-markdown: fix the HTML before you split it</h3>
+
+<p>Help centres, docs sites and CMS exports are HTML. Feeding raw tags to a splitter produces chunks full of navigation and attributes. Convert first, then split the Markdown with any of the tools above:</p>
+
+<pre><code>from html_to_markdown import convert
+
+result = convert(raw_html)      # .content is Markdown, .metadata is page metadata
+markdown = result.content       # tables come out as GFM tables</code></pre>
+
+<p>It repairs real-world markup — unclosed tags, nested tables, broken entities — which is most of what a scraper actually captures. The output is Markdown, so <code>MarkdownHeaderTextSplitter</code> or Docling's Markdown path can take it from there.</p>
+
+<h3>Which one</h3>
+
+<ol>
+<li><strong>PDF, DOCX, PPTX, or tables that matter</strong> → Docling. Parse and chunk together; do not hand its output to a blind splitter.</li>
+<li><strong>Already-clean Markdown or plain text</strong> → LangChain splitters. Keep the heading splitter, not the character one, when headers exist.</li>
+<li><strong>You need parent/child retrieval</strong> → LlamaIndex node parsers. The hierarchy is built in.</li>
+<li><strong>The source is a web page</strong> → html-to-markdown first, then whichever splitter matches the result.</li>
+</ol>
+
+<h2>Part 3 — Selecting a vector database</h2>
+
+<p>The first distinction is not a benchmark: <strong>who runs it</strong>. Four families cover almost every real decision, and the family decides your ops life before features enter the conversation.</p>
+
+<table>
+  <thead><tr><th>Family</th><th>What it is</th><th>Wins when</th><th>Watch out for</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Chroma</strong></td><td>embedded; a folder on disk</td><td>dev, prototypes, notebooks — zero ops, one line to start</td><td>vector-only (no BM25 ranking); one writer; not multi-pod</td></tr>
+    <tr><td><strong>Qdrant</strong></td><td>self-hosted server</td><td>production with rich filtering and hybrid (dense + sparse) in one query</td><td>a service to deploy, secure, back up and keep alive</td></tr>
+    <tr><td><strong>pgvector</strong></td><td>Postgres extension</td><td>you already run Postgres: a vector column beside your rows, one system to operate</td><td>you now tune Postgres for vectors too; hybrid needs <code>tsvector</code> + fusion in SQL</td></tr>
+    <tr><td><strong>Pinecone / managed</strong></td><td>SaaS</td><td>the team has no infra appetite and will pay per usage</td><td>cost at scale, vendor lock-in, data leaves your network</td></tr>
+  </tbody>
+</table>
+
+<p>Two more are worth naming because they keep coming up:</p>
+
+<table>
+  <thead><tr><th>Option</th><th>What it really is</th><th>Pick it when</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Supabase</strong></td><td>managed Postgres + pgvector, with auth, storage and a dashboard on top</td><td>you want a backend as a service and vectors in the same database as your app rows</td></tr>
+    <tr><td><strong>LanceDB</strong></td><td>embedded columnar store with BM25 and vectors in one table</td><td>local-first or edge, and you want hybrid search without running two systems — it is what lesson 7 uses</td></tr>
+  </tbody>
+</table>
+
+<p><strong>Rule of thumb:</strong> Chroma while learning → Qdrant or pgvector in production → managed when you refuse to own the ops. Supabase is the pgvector branch with a dashboard attached; LanceDB is the embedded branch that also gives you BM25.</p>
+
+<h3>Pick by constraint, not by feature matrix</h3>
+
+<table>
+  <thead><tr><th>Your situation</th><th>Start with</th><th>Why</th></tr></thead>
+  <tbody>
+    <tr><td>Following this course, one machine</td><td>LanceDB</td><td>one table, vectors + BM25, no service to run</td></tr>
+    <tr><td>Prototype that must ship this week</td><td>Chroma</td><td>folder on disk, no ops, easy to delete</td></tr>
+    <tr><td>The company already runs Postgres</td><td>pgvector</td><td>one less system, transactions and backups already exist</td></tr>
+    <tr><td>Hybrid retrieval and heavy filters at scale</td><td>Qdrant</td><td>dense + sparse in one query, filtering designed in</td></tr>
+    <tr><td>No infrastructure team at all</td><td>Pinecone or Supabase</td><td>someone else runs it; you pay for that</td></tr>
+    <tr><td>Existing Supabase project</td><td>Supabase vectors</td><td>pgvector without a second vendor</td></tr>
+  </tbody>
+</table>
+
+<p>Three questions settle most arguments. <strong>Is the store rebuildable from documents?</strong> If yes, it is an index and can be simple; if it is the system of record, durability and backups decide. <strong>Does retrieval need exact terms?</strong> Then the store must rank text (BM25), not merely filter it — Chroma cannot, LanceDB and Qdrant can, pgvector can with <code>tsvector</code>. <strong>How many writers?</strong> Embedded stores have one; that limit, not vector count, is what forces the move to a server.</p>
+
+<h2>Check yourself</h2>
+
+<div class="quiz">
+<script type="application/json">
+{
+  "questions": [
+    {
+      "q": "What decides the chunk unit before size enters the conversation?",
+      "options": [
+        "The document's structure — headings, clauses, Q&A pairs, tables",
+        "The embedding model's dimension",
+        "The vector database's default",
+        "The model's context window"
+      ],
+      "correct": 0,
+      "explain": "Structure publishes the seams. Size is a budget applied inside those seams, not a substitute for finding them."
+    },
+    {
+      "q": "Which chunker needs overlap, and which does not?",
+      "options": [
+        "Structure-aware needs it; fixed windows do not",
+        "Fixed windows need it; structure-aware chunks do not slide",
+        "Both need exactly 50%",
+        "Neither benefits from overlap"
+      ],
+      "correct": 1,
+      "explain": "Overlap is insurance against a boundary cutting an answer in half. A chunker that follows headings does not move the boundary arbitrarily."
+    },
+    {
+      "q": "What can Docling do that a LangChain text splitter cannot?",
+      "options": [
+        "Embed the chunks",
+        "Store vectors",
+        "Parse a PDF's reading order and tables before splitting",
+        "Call the language model"
+      ],
+      "correct": 2,
+      "explain": "Splitters split text you already have. Docling recovers the structure from PDF/Office bytes, which is the part that decides whether the table survives."
+    },
+    {
+      "q": "Why convert HTML to Markdown before chunking?",
+      "options": [
+        "Markdown embeds more accurately than HTML",
+        "Markdown cuts the token count in half",
+        "It removes navigation and attributes, and keeps tables as tables",
+        "It makes the page render faster"
+      ],
+      "correct": 2,
+      "explain": "Raw HTML chunks are full of markup and chrome. Conversion gives clean text with headings and GFM tables that a splitter can follow."
+    },
+    {
+      "q": "The main advantage of pgvector is:",
+      "options": [
+        "Vectors live in the Postgres you already run and back up",
+        "It has the fastest ANN index",
+        "It needs no schema",
+        "It replaces the need for embeddings"
+      ],
+      "correct": 0,
+      "explain": "The win is operational: one system, existing transactions, backups and access control. Hybrid search is possible but you write the tsvector + fusion part."
+    },
+    {
+      "q": "When is a managed store like Pinecone the right choice?",
+      "options": [
+        "When you want to tune HNSW by hand",
+        "When the team refuses to own the ops and will pay per usage",
+        "When the corpus is under 100 chunks",
+        "When you need BM25 and nothing else"
+      ],
+      "correct": 1,
+      "explain": "Managed trades money for the absence of a service to run. That is a legitimate constraint, not a failure — but it is a different constraint from latency or features."
+    },
+    {
+      "q": "What makes LanceDB the fit for lesson 7's build?",
+      "options": [
+        "It is the only store with metadata filters",
+        "It is a managed service",
+        "It replaces the embedding model",
+        "It is embedded and ranks text with BM25 on the same table as the vectors"
+      ],
+      "correct": 3,
+      "explain": "One embedded table gives both representations, so hybrid retrieval does not need a second system or a hand-joined lexical index."
+    }
+  ]
+}
+</script>
+</div>
+
+<h2>Primary sources for this lesson</h2>
+<p><a href="https://docling-project.github.io/docling/concepts/chunking">Docling — chunking</a> for HybridChunker and table handling; <a href="https://python.langchain.com/docs/how_to/recursive_text_splitter/">LangChain text splitters</a> for the character-versus-token distinction; <a href="https://docs.llamaindex.ai/en/stable/module_guides/loading/node_parsers/">LlamaIndex node parsers</a> for sentence, semantic and hierarchical parsing.</p>
+<p><a href="https://github.com/xberg-io/html-to-markdown">html-to-markdown</a> for the <code>convert()</code> API and GFM tables; <a href="https://qdrant.tech/documentation/">Qdrant</a>, <a href="https://github.com/pgvector/pgvector">pgvector</a>, <a href="https://supabase.com/docs/guides/ai/vector-columns">Supabase vectors</a>, <a href="https://docs.pinecone.io/">Pinecone</a> and <a href="https://lancedb.com/">LanceDB</a> for the store each section describes.</p>
+
+<h2>What's next</h2>
+<p><a href="0009-mcp.html">Lesson 9</a> changes layer: <strong>MCP</strong> — one protocol for exposing tools, resources and prompts, so any client can call what you build. <a href="0010-langgraph.html">Lesson 10</a> changes layer again: <strong>LangGraph</strong> makes the decision explicit — a classifier routes each message to a specialist, and the trace shows which path ran. The appendix is here for when a choice stops being obvious, not for reading once.</p>
+
+<div class="footer-nav">
+  <div class="ask"><strong>Chunks look wrong?</strong> Send the document type, the chunker, and one bad chunk with its heading path. The fix is usually at the parse boundary, not in the prompt.</div>
+  <div class="links">
+    <a href="0007-rag-service.html">← Lesson 7</a>
+    <a href="../reference/skill-map.html">Skill Map &amp; Glossary</a>
+    <a href="0006-rag-foundation.html">Lesson 6</a>
+  </div>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</article>
+</body>
+</html>

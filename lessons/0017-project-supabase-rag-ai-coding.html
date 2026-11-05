@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 17 — Project: Supabase + RAG + AI Coding — A Grounded Filing Analyst</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<article class="page">
+
+<p class="meta">Lesson 17 of 17 · ~60 min · Prereq: <a href="0015-ai-coding.html">Lesson 15</a> + <a href="0007-rag-service.html">Lesson 7</a> · <a href="../assets/examples/0017-ai-coding-rag-supabase/index.html">Example repo →</a> · <a href="../reference/skill-map.html">Skill Map →</a></p>
+
+<h1>Project: Supabase + RAG + AI Coding — A Grounded Filing Analyst</h1>
+
+<p class="lede">This is the capstone, and it is deliberately not a tour of a new framework. It is one product built the way the course says to build: a client brief with a trust contract, a schema that enforces it, retrieval you can inspect, an agent whose claims are validated before a single token reaches the user, and a phased checklist with a gate on every phase. The example repository is a working implementation through Phase 7. The more important property is that it knows when to refuse.</p>
+
+<div class="callout win">
+  <span class="label">Your win this lesson</span>
+  You'll be able to turn a prose brief into a phase plan, design a Supabase schema for citations and row-level security, run a cost-capped ingestion job, explain hybrid retrieval with Reciprocal Rank Fusion, enforce a fail-closed grounding contract around a PydanticAI agent, and separate "implemented" from "verified" without hand-waving.
+</div>
+
+<h2>Part 1 — Write <code>todo.md</code> before the code</h2>
+
+<p>The capstone repository already contains the artifact that Lesson 15's stage 3 asks you to produce: a <code>docs/todo.md</code> that turns a brief and an architecture into an ordered build. That is not a detail. The checklist is what keeps a long build from collapsing into a pile of plausible-looking files.</p>
+
+<p>If you are starting from the brief instead of the finished example, the setup is the same as <a href="0015-ai-coding.html#part-5">Lesson 15's Part 5</a>: read the repo before you prompt. In <a href="../assets/examples/0017-ai-coding-rag-supabase/index.html">the example</a> that means <code>AGENTS.md</code>, <code>README.md</code>, <code>docs/client-brief.md</code>, <code>docs/architecture.md</code>, <code>backend/AGENTS.md</code>, <code>frontend/AGENTS.md</code> and <code>data/README.md</code>. You are looking for the stack that is locked, the commands that must work, the trust contract, and the parts that are deliberately empty.</p>
+
+<h3>The prompt</h3>
+
+<p>Ask for a plan, not code. This prompt goes through every document and forces the answer into three streams — backend, frontend and data — with a start order and a gate per item:</p>
+
+<pre><code>Go through every document in this repository: AGENTS.md, README.md,
+docs/client-brief.md, docs/architecture.md, docs/guides/*, data/README.md,
+backend/AGENTS.md and frontend/AGENTS.md. Then write docs/todo.md.
+
+Give me an ordered checklist to implement the architecture and satisfy the
+client brief. Split the work into backend, frontend and data, and tell me
+which stream starts first and why. For every item:
+- name the files or modules it touches
+- give a concrete acceptance check (a command, a response, or a test)
+- say what it blocks
+- label it implementation, verification, or deployment
+
+Do not write application code yet. Do not mark an item complete until its
+acceptance check has actually run.</code></pre>
+
+<p>That is the Lesson 15 prompt extended for a multi-service repo. The extra constraints matter: "backend, frontend and data" prevents a plan that forgets the corpus; "what it blocks" exposes the real critical path; "verification" keeps a finished feature separate from a proven one.</p>
+
+<h3>What a usable checklist looks like</h3>
+
+<p>The answer should not be a feature list. It should be a sequence of vertical slices with gates. A useful item names the change and the evidence:</p>
+
+<table>
+  <thead><tr><th>weak item</th><th>usable item</th></tr></thead>
+  <tbody>
+    <tr><td>Build the RAG pipeline.</td><td>Add pgvector semantic search with ticker, fiscal-year and form filters. Touches <code>retrieval/queries.py</code>, <code>retrieval/retriever.py</code> and <code>tests/retrieval/</code>. Acceptance: a seeded query returns 10 ranked chunks, and the filter test rejects a mismatched ticker. Blocks the agent tools.</td></tr>
+    <tr><td>Add citations.</td><td>Validate claim citations against the passages registered in the current run. Touches <code>grounding/validator.py</code>, <code>assistant/outputs.py</code> and <code>tests/grounding/</code>. Acceptance: an unknown chunk ID raises <code>GroundingError</code>, and no answer is persisted or streamed. Blocks the trust UI.</td></tr>
+    <tr><td>Deploy it.</td><td>Run the audited GOOGL ingestion against the target database and verify 53 chunks. Acceptance: the row count matches and a spot-check citation resolves. Blocks the pilot smoke test.</td></tr>
+  </tbody>
+</table>
+
+<p>The example's <a href="../assets/examples/0017-ai-coding-rag-supabase/docs/todo.md"><code>docs/todo.md</code></a> is the result: phase 0 through phase 9, checkboxes, explicit open gates, and a quick-reference table. Notice what it does not do — it does not pretend the corpus is complete, and it does not confuse a checked box with a verified one.</p>
+
+<h3>Keep the plan in the repo</h3>
+
+<p>Put the answer in <code>docs/todo.md</code>, not in the chat. The agent reads it at the start of every session; you edit it when reality changes; the diff is the project's memory. A plan that lives only in a conversation gets re-derived — and quietly changed — at the next prompt.</p>
+
+<h2>Part 2 — Two paths, one source of truth</h2>
+
+<figure>
+  <img src="../assets/images/supabase-rag-architecture.svg" alt="Top lane: SEC filings through Docling, chunking, Qwen embeddings and into Supabase. Bottom lane: React SPA, FastAPI auth, hybrid retrieval, PydanticAI DeepSeek agent, grounding validator, atomic persistence, validated SSE stream" width="900">
+  <figcaption>Ingestion prepares evidence once. Chat retrieves, generates, validates, persists, and only then streams.</figcaption>
+</figure>
+
+<p>There are two paths, and they have different failure budgets:</p>
+
+<ul>
+  <li><strong>Ingestion</strong> is offline, repeatable and cost-capped. A bad run can be re-run; it must never silently overwrite cited evidence.</li>
+  <li><strong>Chat</strong> is online, authenticated and fail-closed. A bad answer cannot be un-said, so validation happens before the first successful stream event.</li>
+</ul>
+
+<table>
+  <thead><tr><th>layer</th><th>choice in this project</th></tr></thead>
+  <tbody>
+    <tr><td>backend</td><td>Python 3.12, FastAPI, Pydantic v2, SQLAlchemy, Alembic</td></tr>
+    <tr><td>frontend</td><td>Vite + React + TypeScript, Tailwind, shadcn/ui, Vercel AI SDK <code>useChat</code></td></tr>
+    <tr><td>database</td><td>Supabase Postgres with <code>pgvector</code> and generated <code>tsvector</code></td></tr>
+    <tr><td>auth</td><td>Supabase Auth (email), bearer token verified by FastAPI</td></tr>
+    <tr><td>LLM</td><td>DeepSeek <code>deepseek-chat</code>, orchestrated by PydanticAI</td></tr>
+    <tr><td>embeddings</td><td>Qwen <code>text-embedding-v4</code>, 1,536 dimensions, via DashScope</td></tr>
+    <tr><td>deployment target</td><td>Deploy two services to cloud; hosted Supabase for state</td></tr>
+  </tbody>
+</table>
+
+<p><strong>Read the dependency list carefully.</strong> The backend depends on the <code>openai</code> package, but the models are DeepSeek and Qwen. That SDK is being used as an OpenAI-compatible wire client: PydanticAI's <code>OpenAIChatModel</code> is pointed at <code>https://api.deepseek.com/v1</code>, and the Qwen embedder uses <code>AsyncOpenAI</code> with the DashScope base URL. The provider is not OpenAI. The package name is a transport detail; <code>config.py</code> and <code>pyproject.toml</code> are the source of truth for what actually runs.</p>
+
+<h2>Part 3 — Supabase and Alembic: schema as reviewed code</h2>
+
+<p>The build order in the project's <code>docs/todo.md</code> is intentional: <strong>foundation → backend vertical slices → frontend in parallel, never far ahead of working APIs</strong>. Foundation means two things here: a Supabase project that owns identity and state, and an Alembic history that owns the schema.</p>
+
+<h3>Supabase: identity plus durable state</h3>
+
+<p>Supabase is doing two jobs: it is the identity provider and it is the product database. That combination is why the project stays small — no separate auth service, no managed vector database, no cache to reconcile. It is also why key handling matters. The browser gets the anon key and a user session. FastAPI may hold the service-role key for privileged work that cannot run under the user's identity, but the chat path here deliberately uses the user's bearer token instead. The service-role key bypasses row-level security, so it never belongs in the frontend or in a convenience path.</p>
+
+<p>Six tables carry the product:</p>
+
+<table>
+  <thead><tr><th>table</th><th>role</th></tr></thead>
+  <tbody>
+    <tr><td><code>users</code></td><td>profile row keyed to the Supabase authenticated user</td></tr>
+    <tr><td><code>source_documents</code></td><td>filing identity, source URL, normalized Markdown, filing metadata</td></tr>
+    <tr><td><code>document_chunks</code></td><td>retrieval text, <code>vector(1536)</code> embedding, generated <code>tsvector</code>, chunk metadata</td></tr>
+    <tr><td><code>chat_threads</code></td><td>conversation metadata and owner</td></tr>
+    <tr><td><code>chat_messages</code></td><td>ordered user and assistant turns</td></tr>
+    <tr><td><code>message_citations</code></td><td>assistant message → chunk, stable citation index, optional exact quote</td></tr>
+  </tbody>
+</table>
+
+<p>RLS is enabled on all six. Ownership is expressed in the schema and enforced by Postgres: a user can read their own profile, threads, messages and citations, while the filing corpus is shared reference data guarded by read policies. FastAPI verifies the Supabase bearer token and then operates with the user's identity. The atomic <code>save_chat_turn</code> RPC runs as <code>SECURITY INVOKER</code> under that same authenticated session, so writing a turn cannot step outside the caller's RLS context.</p>
+
+<h3>Alembic: the schema's source of truth</h3>
+
+<p>The Supabase dashboard is not the source of truth. SQLAlchemy models describe the ordinary tables; Alembic migrations are the reviewed, ordered record of every change. Autogenerate produces a candidate, not a decision. The parts that make this schema work are written explicitly:</p>
+
+<ul>
+  <li><code>create extension if not exists vector</code>;</li>
+  <li><code>vector(1536)</code> embedding columns;</li>
+  <li>a generated <code>tsvector</code> column, so full-text search cannot drift from content;</li>
+  <li>HNSW for cosine vector search and GIN for full-text search;</li>
+  <li>RLS enablement, policies, and the <code>save_chat_turn</code> function.</li>
+</ul>
+
+<p>The shape that matters in the initial migration:</p>
+
+<pre><code>create extension if not exists vector;
+
+create table document_chunks (
+  id uuid primary key,
+  document_id uuid not null references source_documents(id),
+  chunk_index integer not null,
+  content text not null,
+  embedding vector(1536) not null,
+  search_vector tsvector generated always as
+    (to_tsvector('english', content)) stored,
+  token_count integer,
+  metadata jsonb not null default '{}'::jsonb
+);
+
+create index document_chunks_embedding_idx
+  on document_chunks using hnsw (embedding vector_cosine_ops);
+create index document_chunks_search_idx
+  on document_chunks using gin (search_vector);</code></pre>
+
+<p>Two details are easy to miss. First, <code>search_vector</code> is <strong>generated by the database</strong>, so full-text search cannot drift from the chunk text after an update. Second, the HNSW and GIN indexes are written explicitly rather than left to autogenerate — the same rule the backend's agent notes state.</p>
+
+<p>Run migrations against a direct/session connection, not the transaction pooler. Extension creation, generated columns and index builds need session-level behavior, and a pooler can hide the transaction boundaries those operations rely on. The local workflow is:</p>
+
+<pre><code>cd backend
+uv sync
+uv run alembic revision --autogenerate -m "describe the change"
+# read backend/alembic/versions/&lt;revision&gt;.py before applying it
+uv run alembic upgrade head
+uv run uvicorn app.main:app --reload</code></pre>
+
+<p><strong>Migration discipline:</strong> one logical change per revision; review the generated SQL rather than trusting it; test on a disposable database before the target; the model change and its migration are committed together. Destructive operations — dropping a column, narrowing a type, adding <code>NOT NULL</code> without a backfill — need a backup or an explicit two-step migration. A downgrade that loses data is not a rollback plan.</p>
+
+<p><strong>Gate:</strong> <code>GET /health</code> returns 200, and a protected route returns 401 before any retrieval or model work begins. The schema must be applied before the stub stream can persist a turn, and authentication must be real before the stub stream means anything.</p>
+
+<h2>Part 4 — Phase 3: the thin vertical slice</h2>
+
+<p>Before RAG exists, the product already streams a <em>stub</em> answer through the real route. That phase is not throwaway work. It isolates the three things most likely to be broken later:</p>
+
+<ol>
+  <li>a real Supabase session reaches FastAPI with a valid bearer token;</li>
+  <li>the AI SDK message format survives the round trip;</li>
+  <li>a completed turn is persisted, reloaded and restored in history.</li>
+</ol>
+
+<p>The endpoints arrive first: create a thread, list threads, load history, then <code>POST /chat/stream</code>. The route uses the AI SDK UI message SSE protocol, persists the user and assistant messages after a successful stream, and rejects access to another user's thread. Only then does the real retriever replace the stub.</p>
+
+<p><strong>Why this order wins:</strong> if you wire the LLM first, a broken stream can be an auth bug, a protocol bug, a persistence bug or a model bug. The stub removes three of those variables. This is the AI-coding lesson's "smallest vertical slice that runs" applied to a full product.</p>
+
+<h2>Part 5 — Phase 4: make the corpus citable</h2>
+
+<p>Ingestion is a pipeline with a budget: download 25 filings, convert HTML to Markdown with Docling, chunk within the embedding model's context limit, embed with Qwen, and upsert into Supabase.</p>
+
+<pre><code># from the repository root, using the backend's uv environment
+uv run data/download.py
+uv run --project backend python data/convert_to_markdown.py
+uv run --project backend python data/ingest_source_documents.py
+uv run --project backend python data/ingest_chunks.py
+uv run --project backend python data/ingest_chunks.py \
+  --fiscal-year 2025 --pilot --ticker GOOGL --max-cost-cny 0.01
+uv run --project backend python data/ingest_chunks.py \
+  --fiscal-year 2025 --all --ticker GOOGL --max-cost-cny 0.20</code></pre>
+
+<p>The safeguards are the lesson. The chunk job is a <strong>dry run by default</strong>. A real embedding run requires an explicit <code>--all</code> or <code>--pilot</code> plus a required cost cap checked before any API request. The one-chunk pilot is a gate, not a formality: it proves the embedding dimensions, the generated full-text vector and the database write before you spend on the corpus. Batches are capped at 10; chunks are capped at 7,000 tokens, below the model's 8,192-token per-input limit; embeddings are 1,536 dimensions, matching the column.</p>
+
+<p>The recorded GOOGL fiscal-2025 dry run is concrete: <strong>53 chunks, 309,229 estimated input tokens, CNY 0.1589</strong>. That is the kind of number a build should produce before it produces an answer.</p>
+
+<p>Idempotency has a trust dimension. Re-running the job skips matching chunks, re-embeds changed uncited chunks at the same index, protects cited rows from overwrite, and removes stale uncited chunks only after a successful full run. Cited evidence is not silently replaced by a later ingestion.</p>
+
+<p><strong>The open gate:</strong> the latest GOOGL dry run could not map <em>any</em> of its 53 chunks back to source offsets, after both exact and normalized matching. Those offsets remain null. The product therefore cites section and page references when they exist, and never invents a page number when they do not. The citation contract is honest about a real limitation instead of hiding it behind a confident UI.</p>
+
+<p><strong>Coverage honesty:</strong> only the GOOGL fiscal-2025 filing is ingested. The other four companies are explicitly outside current retrieval scope. Most of the client brief's ten questions are multi-company or multi-year, so they cannot pass an evidence test yet. This is a corpus-coverage gap, not an agent-quality verdict, and the two must be reported separately.</p>
+
+<h2>Part 6 — Phase 5: hybrid retrieval, bounded and fused</h2>
+
+<p>A single embedding search is good at paraphrase and bad at exact terms: ticker symbols, "Item 7", "10-K", a specific year. A single keyword search is the reverse. The retriever runs both and fuses the rankings:</p>
+
+<ol>
+  <li>Embed the query with Qwen <code>text-embedding-v4</code> (1,536 dimensions) and validate the response shape and finite values.</li>
+  <li>Run a bounded <code>pgvector</code> cosine search over <code>document_chunks.embedding</code>, with shared ticker, fiscal-year and form filters.</li>
+  <li>Run Postgres full-text search over the generated <code>search_vector</code> with the same filters.</li>
+  <li>Fuse the two ranked lists deterministically with Reciprocal Rank Fusion.</li>
+  <li>Hydrate the selected chunks and fetch at most one neighboring chunk on each side, in the same filing.</li>
+</ol>
+
+<p>The RRF score for a chunk is a sum over the lists that returned it:</p>
+
+<pre><code>score = Σ 1 / (k + rank)        k = 60</code></pre>
+
+<p>RRF uses only ranks, not raw scores, so a cosine distance and a <code>ts_rank</code> value never have to be normalized against each other. The implementation takes 50 candidates per branch, keeps 10 final results, and allows a neighbor window of 1. Those constants are not decoration: they bound latency, bound how much text can enter the prompt, and bound what an injected document can attempt to influence.</p>
+
+<p><strong>The agent never writes SQL.</strong> It gets typed search tools with bounded filters, not a database connection. Retrieval stays a deterministic service that can be tested without an LLM. The open gate is the client-brief retrieval check: because only GOOGL 2025 is present, questions requiring other companies or years are blocked on corpus coverage, not on ranking.</p>
+
+<h2>Part 7 — Phase 6: the grounded agent</h2>
+
+<p>PydanticAI owns the model boundary. The agent is configured with DeepSeek through an OpenAI-compatible provider, receives typed dependencies, and is allowed exactly three tools:</p>
+
+<table>
+  <thead><tr><th>tool</th><th>what it may do</th></tr></thead>
+  <tbody>
+    <tr><td><code>search_filings</code></td><td>search with optional ticker, fiscal-year and filing-type filters</td></tr>
+    <tr><td><code>read_chunk</code></td><td>read one retrieved chunk by ID</td></tr>
+    <tr><td><code>read_surrounding_chunks</code></td><td>read a bounded same-filing neighbor window (maximum 1)</td></tr>
+  </tbody>
+</table>
+
+<p>No general SQL, no web search, no arbitrary URL fetch, no code execution. Each call is bounded: 8 agent requests, 12 tool calls, 4,000 output tokens. The tools register every passage they return in a per-run registry, because grounding validation needs to know what the model was actually allowed to see.</p>
+
+<p>Generation returns claims, not a paragraph. The output contract is the trust contract:</p>
+
+<pre><code>class GroundedClaim(BaseModel):
+    text: str
+    citation_ids: list[UUID] = Field(min_length=1, max_length=5)
+
+class GroundedAnswer(BaseModel):
+    claims: list[GroundedClaim] = Field(max_length=20)
+    insufficient_evidence: bool = False</code></pre>
+
+<p>The user-facing answer is rendered from validated claims and their citation markers. There is no separate free-form paragraph that could smuggle in an uncited assertion. The validator then enforces, deterministically:</p>
+
+<ul>
+  <li>every factual claim has at least one citation;</li>
+  <li>every chunk ID exists in the current run's passage registry;</li>
+  <li>any supplied quote is an exact substring of its cited passage;</li>
+  <li>citation metadata comes from the hydrated database row, not from the model;</li>
+  <li>the answer stays within the claim, citation and length bounds;</li>
+  <li>invalid output fails closed — nothing is persisted or streamed.</li>
+</ul>
+
+<p>When evidence is insufficient, the system returns a fixed response: <em>"The available filing evidence is not sufficient to answer this question reliably."</em> It does not soften that into a guess, and it does not attach citations to a refusal.</p>
+
+<p><strong>Trust-first streaming:</strong> the full answer is generated, validated and persisted atomically through <code>save_chat_turn</code> before the first text delta is sent. That deliberately moves time-to-first-token later. The alternative — stream tokens as the model produces them, then discover the citations are invalid — exposes claims that cannot be retracted. Once the answer is durable, the serializer emits start, text-start, 64-character deltas, structured citation parts, text-end, finish and <code>[DONE]</code>.</p>
+
+<p><strong>What this does not prove:</strong> referential validation confirms that every cited ID maps to a retrieved passage. It does not mathematically prove that the passage semantically entails the claim. That is why the project treats client-brief evaluation and human review as a separate gate, and why "the validator passed" is not the same sentence as "the answer is correct."</p>
+
+<p>The fast backend suite currently reports <strong>79 passing tests</strong> with no network and no database. It covers the tool allowlist, no-evidence refusal, citation membership, the history trust boundary, the RPC payload and stream ordering. Integration tests are marked separately because they need live Supabase, Qwen or DeepSeek access.</p>
+
+<h2>Part 8 — Phase 7: the trust UI</h2>
+
+<p>The UI's job is to make verification cheaper than doubt. Citation chips show company, filing, date and the known page or section. Selecting one opens a source panel with the exact cited excerpt and a link to the filing. Empty, loading, streaming, authentication, retrieval, grounding, provider and network states are distinct, because "something went wrong" is not an error message an analyst can act on.</p>
+
+<p>Two rules keep the UI honest. First, page numbers are rendered only when the chunk metadata has a page reference — unavailable stays unavailable. Second, persisted citation metadata is reloaded with history, so a citation is still verifiable after a refresh, not only in the live stream.</p>
+
+<p>The frontend stays a Vite SPA. The AI SDK is used for its React chat primitives and streaming client behavior; the transport points at FastAPI, not at a Next.js route handler. The browser never holds the service-role key and never calls DeepSeek or Qwen directly.</p>
+
+<p><strong>Open gate:</strong> an authenticated browser smoke test still has to confirm that every citation opens the corresponding passage and filing source. The components exist; the end-to-end click path has not been recorded as verified.</p>
+
+<h2>Part 9 — AI coding: phases are prompts with gates</h2>
+
+<p>The repository does not treat "build the app" as one prompt. It carries two instruction layers and a phase checklist:</p>
+
+<ul>
+  <li><strong><code>AGENTS.md</code></strong> — the stack, dependency policy, configuration rules and code style. The agent reads it before touching code.</li>
+  <li><strong><code>docs/todo.md</code></strong> — the ordered phases, each with acceptance checks and blockers.</li>
+  <li><strong>One execution plan per phase</strong> — files, interfaces, tests, acceptance checks, explicit non-goals.</li>
+</ul>
+
+<p>The prompt that produces a usable phase is specific about evidence:</p>
+
+<pre><code>Work only on Phase 5 (retrieval). Before writing code, restate the files and
+interfaces you will touch, the acceptance checks, and what this phase must not
+include. Implement the smallest slice, then run the fast tests. Do not mark the
+phase complete until you can show the command output that passes each check.</code></pre>
+
+<p>Three habits keep the build honest:</p>
+
+<ol>
+  <li><strong>One vertical slice at a time.</strong> Foundation, then auth, then a stub stream, then retrieval, then the agent, then the citation UI. The frontend does not race ahead of a working API.</li>
+  <li><strong>Tests at the boundary, not mocks everywhere.</strong> The retriever is tested with fake embedding and database boundaries; the grounding contract is tested without invoking an LLM. The LLM is not replaced by a fake model in the running app.</li>
+  <li><strong>A checked box means verified.</strong> If a command was not run or a provider was not available, the item stays open and the reason is written down. The project's own checklist does this: several items are implemented but still carry an open verification gate.</li>
+</ol>
+
+<p>This is the lesson 15 workflow applied at product scale. The difference between a capstone and a tutorial is not the number of files; it is that the capstone keeps a truthful scorecard.</p>
+
+<h2>Part 10 — The honest scorecard</h2>
+
+<table>
+  <thead><tr><th>phase</th><th>state</th><th>what remains</th></tr></thead>
+  <tbody>
+    <tr><td>0 · prerequisites and corpus</td><td><strong>done</strong></td><td>25 filings downloaded and manifested</td></tr>
+    <tr><td>1 · backend + schema</td><td><strong>done</strong></td><td>tables, pgvector, FTS, HNSW/GIN, RLS, Alembic</td></tr>
+    <tr><td>2 · authentication</td><td><strong>done</strong></td><td>token verification, 401 boundary, protected routes</td></tr>
+    <tr><td>3 · stubbed chat slice</td><td><strong>done</strong></td><td>threads, history, SSE stub, persistence, ownership</td></tr>
+    <tr><td>4 · ingestion</td><td><strong>done, one gate open</strong></td><td>GOOGL 2025 ingested; source offsets still null (53/53)</td></tr>
+    <tr><td>5 · hybrid retrieval</td><td><strong>done, one gate open</strong></td><td>client-brief retrieval check blocked by corpus coverage</td></tr>
+    <tr><td>6 · agent + grounding</td><td><strong>done, one gate open</strong></td><td>representative client-brief questions not yet verified live</td></tr>
+    <tr><td>7 · trust UI</td><td><strong>done, one gate open</strong></td><td>authenticated browser citation smoke test</td></tr>
+    <tr><td>8 · pilot readiness</td><td><strong>not started</strong></td><td>setup docs, 10-question smoke test, latency, five-analyst pilot</td></tr>
+    <tr><td>9 · deployment</td><td><strong>not started</strong></td><td>services, production auth, migration, audited ingestion, rollback</td></tr>
+  </tbody>
+</table>
+
+<p>Four verification gates remain between "implemented" and "proven": source offsets, client-brief retrieval coverage, representative-question grounding, and the browser citation path. Phases 8 and 9 — the pilot and the deployment — have not started. The definition of done was never "the tests pass"; it was five senior analysts reporting at least three hours saved each. That has not happened, so the project does not claim it.</p>
+
+<p>What the repository <em>does</em> demonstrate is the shape of a trustworthy build: a corpus with a budget, retrieval with bounds, an agent with a small tool surface, a validator that fails closed, a stream that cannot outrun validation, and a checklist that distinguishes verified from merely written. That is the transferable part. The next product will have a different brief and different models; the trust architecture should survive the swap.</p>
+
+<h2>Part 11 — The capstone checklist</h2>
+
+<ol>
+  <li>Turn the brief into an ordered phase list; each phase names its acceptance check and its blocker.</li>
+  <li>Model the evidence: documents, chunks, embeddings, citations, owners. Put RLS on every product table.</li>
+  <li>Prove auth, streaming and persistence with a stub before adding a model.</li>
+  <li>Make ingestion repeatable: dry run by default, explicit spend, a one-item pilot, idempotent upserts, cited rows protected.</li>
+  <li>Run vector and keyword retrieval separately, fuse with RRF, and bound candidates, results and neighbors.</li>
+  <li>Give the agent only typed tools; never give it SQL or unrestricted network access.</li>
+  <li>Make claims carry citations, and make the validator fail closed on unknown IDs or inexact quotes.</li>
+  <li>Validate and persist before streaming. Accept the latency cost; do not expose claims you cannot retract.</li>
+  <li>Show the passage in one click, and never invent a page reference the metadata does not contain.</li>
+  <li>Keep a scorecard. Leave a box unchecked when the verification did not run, and say why.</li>
+</ol>
+
+<h2>Check yourself</h2>
+
+<div class="quiz">
+<script type="application/json">
+{
+  "questions": [
+    {
+      "q": "Why is validation placed before the first streamed text delta?",
+      "options": [
+        "It makes the model generate faster",
+        "A streamed unsupported claim cannot be retracted, so the answer is made durable and valid first",
+        "SSE cannot carry citations after the first token",
+        "The validator needs the model to stop running"
+      ],
+      "correct": 1,
+      "explain": "The full answer is generated, validated and persisted before text is sent. This moves time-to-first-token later on purpose, so an invalid citation never reaches the user."
+    },
+    {
+      "q": "What does Reciprocal Rank Fusion use to combine the two result lists?",
+      "options": [
+        "Raw cosine distance and ts_rank after min-max normalization",
+        "The model's confidence score",
+        "Ranks only, summed as 1/(k + rank)",
+        "The number of citations in each chunk"
+      ],
+      "correct": 2,
+      "explain": "RRF uses ranks, so incomparable score scales never need normalizing. The project uses k=60, 50 candidates per branch and 10 final results."
+    },
+    {
+      "q": "Why run both pgvector search and Postgres full-text search?",
+      "options": [
+        "Because pgvector cannot filter by ticker",
+        "Full-text search is cheaper and always better",
+        "Embeddings handle paraphrase; keyword search handles exact terms, tickers and section labels",
+        "To make the database do the LLM's work"
+      ],
+      "correct": 2,
+      "explain": "Semantic search is strong on meaning and weak on exact strings; lexical search is the reverse. Hybrid retrieval covers both and fuses the rankings."
+    },
+    {
+      "q": "What does it mean that the grounding validator fails closed?",
+      "options": [
+        "It retries the model until citations appear",
+        "It substitutes a similar passage when an ID is unknown",
+        "Invalid citations stop persistence and streaming instead of producing a polished answer",
+        "It disables the chat route permanently"
+      ],
+      "correct": 2,
+      "explain": "Unknown chunk IDs, missing citations, malformed output or inexact quotes raise a grounding error. Nothing is persisted or streamed, and the client receives a controlled failure."
+    },
+    {
+      "q": "Why are the GOOGL source offsets still a gap?",
+      "options": [
+        "The chunks were never embedded",
+        "Supabase does not support offsets",
+        "The frontend has not requested them",
+        "The dry run could not map any of the 53 chunks by exact or normalized text matching, so offsets stay null"
+      ],
+      "correct": 3,
+      "explain": "All 53 GOOGL chunks remain unmapped. The product cites section and page references when available and never infers a page number from a null offset."
+    },
+    {
+      "q": "Why does the agent get only three retrieval tools instead of SQL access?",
+      "options": [
+        "Bounded typed tools keep retrieval testable and prevent the model from querying or writing outside the corpus",
+        "PydanticAI cannot call SQL",
+        "SQL is slower than tool calls",
+        "The database has no read replica"
+      ],
+      "correct": 0,
+      "explain": "The model may search, read a chunk and read a bounded neighbor window. It cannot issue arbitrary SQL, fetch URLs or write data, which bounds both capability and blast radius."
+    },
+    {
+      "q": "What do the 79 passing fast tests prove?",
+      "options": [
+        "The product is ready for the five-analyst pilot",
+        "The deterministic contracts hold without live providers, not that live answer quality is verified",
+        "DeepSeek and Qwen return correct answers",
+        "All ten client-brief questions pass"
+      ],
+      "correct": 1,
+      "explain": "The fast suite is credential-free and covers tool allowlists, citation membership, refusal, persistence payloads and stream order. Live provider behavior, retrieval coverage and the browser smoke test remain separate gates."
+    }
+  ]
+}
+</script>
+</div>
+
+<h2>Primary sources for this lesson</h2>
+<p><a href="https://ai.pydantic.dev/">PydanticAI</a> for typed agents, dependencies, tools and structured outputs; <a href="https://github.com/pgvector/pgvector">pgvector</a> for vector columns, cosine distance and HNSW indexes. <a href="https://supabase.com/docs/guides/auth">Supabase Auth</a> and <a href="https://supabase.com/docs/guides/database/postgres/row-level-security">row-level security</a> for the identity and ownership model.</p>
+<p><a href="https://ai-sdk.dev/docs/ai-sdk-ui/chatbot">Vercel AI SDK UI</a> for the chat transport and streaming protocol; <a href="https://www.postgresql.org/docs/current/textsearch-controls.html">PostgreSQL full-text search</a> for generated <code>tsvector</code> columns and ranking. The fusion method is Cormack, Clarke and Büttcher, <a href="https://dl.acm.org/doi/10.1145/1571941.1572114">Reciprocal Rank Fusion outperforms Condorcet and individual rank learning methods</a> (SIGIR 2009).</p>
+<p>In the example repository, read <a href="../assets/examples/0017-ai-coding-rag-supabase/docs/client-brief.md">the client brief</a>, <a href="../assets/examples/0017-ai-coding-rag-supabase/docs/architecture.md">the architecture</a>, <a href="../assets/examples/0017-ai-coding-rag-supabase/docs/todo.md">the phase checklist</a> and <a href="../assets/examples/0017-ai-coding-rag-supabase/data/README.md">the ingestion notes</a>. The checklist is as much the lesson as the code.</p>
+
+<h2>What's next</h2>
+<p>This is the last lesson. The course arc is complete: primitives, streaming, evals, RAG, MCP, graph agents, typed contracts, a local model, the AI-coding workflow, delivery, and now the capstone. What comes next is yours: take the scorecard habit into your own build, and keep the four open gates visible until they are actually closed. The <a href="../reference/skill-map.html">skill map</a> compresses the whole course into one page, the <a href="../assets/examples/0017-ai-coding-rag-supabase/index.html">example page</a> is the repository's entry point, and <a href="0001-ai-engineering-landscape-2026.html">lesson 1</a> is the way back to the start.</p>
+
+<div class="footer-nav">
+  <div class="ask"><strong>Answer looks confident but unsupported?</strong> Check the citation IDs first, then the passage registry for the run. If the ID is missing, the validator should have refused; if the passage exists but does not entail the claim, that is an evaluation failure, not a citation failure.</div>
+  <div class="links">
+    <a href="0016-kubernetes-gitops.html">← Lesson 16</a>
+    <a href="../reference/skill-map.html">Skill Map &amp; Glossary</a>
+    <a href="../assets/examples/0017-ai-coding-rag-supabase/index.html">Example repo</a>
+  </div>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</article>
+</body>
+</html>

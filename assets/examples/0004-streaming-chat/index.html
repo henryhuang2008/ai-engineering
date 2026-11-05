@@ -1,0 +1,1327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Example 0004 - Streaming chat: FastAPI + Next.js</title>
+<link rel="stylesheet" href="../../course.css">
+</head>
+<body>
+<article class="page">
+
+<p class="meta">Example 0004 &middot; Companion to <a href="../../../lessons/0004-streaming-chat.html">Lesson 4</a> &middot; <a href="README.md">README</a></p>
+
+<h1>Streaming chat: FastAPI + LangChain, Next.js prompt input</h1>
+
+<p class="lede">Two folders, one job each: <code>backend/</code> is FastAPI + LangChain + pydantic and owns the model, the key and the SSE endpoint; <code>frontend/</code> is Next.js + the shadcn prompt input and owns only the screen. pydantic rejects a bad conversation before the provider is called; <code>ChatDeepSeek.astream()</code> yields deltas; each delta is a JSON SSE frame so a newline can&rsquo;t split a token; the route buffers on blank lines and re-emits <code>text-delta</code> chunks; the page streams with <code>useChat</code> and a Stop button that aborts the Python call. Self-tests: <strong>69 checks</strong> offline, plus a live stream when <code>DEEPSEEK_API_KEY</code> is set.</p>
+
+<h2>Key and run (uv + npm)</h2>
+<pre>cd assets\examples\0004-streaming-chat\backend
+uv sync                               # .venv from pyproject.toml + uv.lock
+$env:DEEPSEEK_API_KEY = "sk-..."      # PowerShell, this terminal
+uv run python evals.py                # 69 checks (+3 live with a key)
+uv run uvicorn main:app --reload      # http://127.0.0.1:8000 -> test-client.html
+
+# terminal 2
+cd ..\frontend
+npm install                           # first run only
+npm run dev                           # http://localhost:3000</pre>
+<p>Key page: <a href="https://platform.deepseek.com/api_keys">platform.deepseek.com/api_keys</a>. No key &rarr; the server refuses to start and prints those commands; there is no canned fallback. The two folders are not symmetric on purpose: <code>backend/</code> can be deployed alone and tested with <code>test-client.html</code>; <code>frontend/</code> cannot answer without it. Optional overrides: <code>DEEPSEEK_MODEL</code> (default <code>deepseek-flash</code>), <code>DEEPSEEK_BASE_URL</code>, and <code>PY_BACKEND</code> in <code>frontend/.env.local</code>.</p>
+
+<h2>README.md</h2>
+<pre># 0004 — Streaming chat: FastAPI + LangChain, Next.js prompt input
+
+A two-service chat product: **Python owns every AI decision**, Next.js owns the shell.
+One DeepSeek model handle, one SSE endpoint, one thin translator, one shadcn prompt input.
+
+Two folders, one job each:
+
+```
+0004-streaming-chat\
+  backend\      Python + FastAPI + LangChain  -&gt; the model, the key, the SSE endpoint
+  frontend\     Next.js + shadcn prompt input -&gt; the screen; no key, no model call
+```
+
+| layer | role | file |
+|---|---|---|
+| FastAPI | validates the conversation, calls `ChatDeepSeek.astream()`, frames each delta as `data: {&quot;delta&quot;: &quot;...&quot;}` | `backend/main.py` |
+| bare client | proves the Python side streams before Next.js exists; prints TTFT | `backend/test-client.html` |
+| Next.js route | protocol translator only — no key, no model call | `frontend/app/api/chat/route.ts` |
+| Next.js page | `useChat` + shadcn `InputGroup` prompt field | `frontend/app/page.tsx` |
+
+## Run
+
+### 1. backend — Python service
+
+```powershell
+cd assets\examples\0004-streaming-chat\backend
+uv sync                                   # .venv from pyproject.toml + uv.lock
+$env:DEEPSEEK_API_KEY = &quot;sk-...&quot;          # this terminal only
+uv run python evals.py                    # 69 offline checks; +3 live with a key
+uv run uvicorn main:app --reload          # http://127.0.0.1:8000
+```
+
+Open &lt;http://127.0.0.1:8000/&gt; for the bare test client. With no key the server
+refuses to start and prints the two key commands — no silent fallback.
+
+### 2. frontend — Next.js shell
+
+```powershell
+cd assets\examples\0004-streaming-chat\frontend
+npm install                               # first run, or after deleting node_modules
+npm run dev                               # http://localhost:3000
+```
+
+`frontend\.env.local` already points at the backend:
+
+```
+PY_BACKEND=http://127.0.0.1:8000
+```
+
+No copying, no scaffolding: the app is committed as source. The tree that matters:
+
+```
+frontend\
+  app\
+    api\
+      chat\
+        route.ts        &lt;- POST /api/chat  (the BFF)
+    page.tsx            &lt;- the chat UI
+    globals.css         &lt;- theme + the font line
+    layout.tsx          &lt;- html shell, metadata title
+  components\ui\input-group.tsx
+  lib\utils.ts
+  .env.local            &lt;- PY_BACKEND=http://127.0.0.1:8000
+  package.json
+```
+
+The page posts to `/api/chat`, the route translates to `{role, content}` and calls
+FastAPI, and the answer streams back token by token.
+
+&lt;details&gt;
+&lt;summary&gt;How this frontend was scaffolded (only if you rebuild it yourself)&lt;/summary&gt;
+
+```powershell
+npx --yes create-next-app@latest frontend --ts --tailwind --eslint --app --no-src-dir --import-alias &quot;@/*&quot; --turbopack --use-npm
+cd frontend
+npx --yes shadcn@latest init -d
+npx --yes shadcn@latest add input-group -y
+npm install ai @ai-sdk/react lucide-react
+```
+
+One line in the generated `app\globals.css` must be fixed or the whole page renders in
+Times New Roman: the template says `--font-sans: var(--font-sans);` (it references
+itself, so the value is empty). Change it to:
+
+```css
+--font-sans: var(--font-geist-sans);
+```
+
+The committed app already has that line, plus `app\page.tsx` and
+`app\api\chat\route.ts` written by hand.
+&lt;/details&gt;
+
+Verified end to end with Next.js 16.4, `ai` 7 and `@ai-sdk/react` 4: a production
+`next build` type-checks clean, `POST /api/chat` relays `text-start` → `text-delta`… →
+`text-end`, and against a live `ChatDeepSeek` backend the page streams real
+`deepseek-flash` tokens. Newer/older majors may rename props; the seam stays the same.
+
+The prompt field is the shadcn [Input Group](https://ui.shadcn.com/docs/components/input-group)
+composition from the [Prompt Input](https://ui.shadcn.com/docs/ai-elements/base/prompt-input)
+docs: textarea, Enter to send, Shift+Enter for a newline, and a button that turns into
+Stop while streaming. Attachments and the model selector are extra `shadcn add` steps,
+not required here.
+
+## 404, 405, 502 — which layer broke
+
+The page prints whatever came back. Three different failures, three different fixes:
+
+| what you see | what it means | fix |
+|---|---|---|
+| a Next.js **404** HTML page (&quot;This page could not be found&quot;) | no route handler at `/api/chat` — the file is in the wrong folder or misnamed | put it at `frontend\app\api\chat\route.ts` (or `src\app\api\chat\route.ts` if your app uses `src\`), then restart `npm run dev` |
+| **502** with a plain-text body naming `PY_BACKEND` | the route is fine, Python isn&#x27;t listening | start `uv run uvicorn main:app --reload` in `backend\` |
+| a sentence from DeepSeek (e.g. `401 … invalid api key`) | both services are up; the model call failed | read the uvicorn terminal, fix `DEEPSEEK_API_KEY` |
+
+Check the route without opening the browser:
+
+```powershell
+curl.exe -i http://localhost:3000/api/chat
+# 405 Method Not Allowed -&gt; the route exists (it only exports POST)   ✅
+# 404 Not Found          -&gt; the file is not at app\api\chat\route.ts  ❌
+```
+
+That asymmetry is your fastest diagnostic: Next.js answers `405` for a known route with
+an unsupported method, and `404` when the segment doesn&#x27;t exist at all. Creating
+`app\api\chat\` while `npm run dev` is running usually works, but if the 404 persists,
+restart the dev server — the route tree is read at boot in some versions.
+
+## Wire format
+
+Every delta is its own SSE event with a JSON body:
+
+```
+data: {&quot;delta&quot;: &quot;Stream&quot;}
+
+data: {&quot;delta&quot;: &quot;ing works&quot;}
+
+data: {&quot;done&quot;: true}
+```
+
+JSON on purpose: a delta can contain a newline or a quote, and a raw `data: &lt;text&gt;`
+frame would split one token into two events. Errors travel the same way
+(`{&quot;error&quot;: &quot;...&quot;}`) so the UI can show what broke instead of hanging.
+
+## What the self-tests cover
+
+Offline (69 checks): the pydantic request contract (roles restricted to
+`system|user|assistant`, empty content and empty history rejected), the
+message adapter to LangChain objects, SSE framing (blank-line termination, newline
+and unicode safety, JSON round trip, done/error frames), the chunk-to-text reader
+(string and block content), the model wiring (`ChatDeepSeek`, `deepseek-flash`,
+`api.deepseek.com`, thinking disabled), environment overrides, the missing-key
+message (startup refusal + CLI exit 1), the stack guard (no OpenAI SDK, no
+`gpt-4o`, LangChain + pydantic + FastAPI present, page uses `InputGroupTextarea` and
+turns a 404 HTML body into a hint, route parses SSE, forwards the abort signal, answers
+failures as plain text, and the README documents the 405 check), and the uv project.
+
+With a key, three more checks run: a live `astream()` must yield at least one
+delta, the deltas must join into text, and the stream must actually be chunked.
+
+## DeepSeek notes
+
+- `deepseek-flash` streams tool calls, structured output, and plain text; the same
+  loop works on other LangChain providers.
+- The lab disables thinking (`extra_body={&quot;thinking&quot;: {&quot;type&quot;: &quot;disabled&quot;}}`).
+  With thinking on, DeepSeek streams `reasoning_content` before the answer — fine
+  for a reasoning UI, but it muddies &quot;time to first *answer* token&quot;.
+- `X-Accel-Buffering: no` is set on the response; nginx and friends buffer SSE by
+  default, which turns a stream into one big blob at the end.
+
+## Files
+
+| file | role |
+|---|---|
+| `backend/main.py` | FastAPI app: pydantic contract, `ChatDeepSeek` wiring, `astream()` → SSE |
+| `backend/test-client.html` | bare-browser test client served at `/` — first-token timing, no build step |
+| `backend/evals.py` | 69 offline checks + a conditional live stream |
+| `backend/pyproject.toml` | dependencies and Python floor — the single source of truth |
+| `backend/uv.lock` | the pinned dependency graph `uv sync` installs |
+| `frontend/app/api/chat/route.ts` | BFF translator: AI SDK UI stream ⇄ raw SSE |
+| `frontend/app/page.tsx` | the whole UI: `useChat` + shadcn prompt input |
+| `frontend/.env.local` | `PY_BACKEND=http://127.0.0.1:8000` |
+| `index.html` | this page, generated for the course — not needed to run the lab |
+
+Generated, safe to delete and recreate:
+
+- `backend\.venv\` — `uv sync` (or any `uv run`) rebuilds it.
+- `frontend\node_modules\` — `npm install`.
+- `frontend\.next\` — `npm run dev` / `npm run build`.
+
+The bare client is `backend/test-client.html`, not `chat.html`: the name says what the
+file is (a test client, not the product), and FastAPI serves it at the root, so the
+URL students open is still just `http://127.0.0.1:8000/`.
+
+The UI shows three different states while it works, so a slow first token never
+looks like a frozen page: a **spinner in the header pill** for the whole request,
+**three bouncing dots** in the assistant bubble before the first delta arrives,
+and a **blinking caret** after the first delta until `text-end`.
+
+Versions pinned by `uv.lock`: `langchain 1.4.8`, `langchain-core 1.7.4`,
+`langchain-deepseek 1.1.1`, `fastapi 0.162.0`, `uvicorn 0.54.0`, `pydantic 2.14.2`
+(Python 3.12).
+
+Lesson: [lessons/0004-streaming-chat.html](../../../lessons/0004-streaming-chat.html)</pre>
+
+<h2>backend/pyproject.toml</h2>
+<pre>[project]
+name = &quot;0004-streaming-chat&quot;
+version = &quot;0.1.0&quot;
+description = &quot;Lesson 4 lab: FastAPI + LangChain + DeepSeek streaming chat, Next.js prompt input&quot;
+requires-python = &quot;&gt;=3.11&quot;
+dependencies = [
+    &quot;fastapi&gt;=0.115&quot;,
+    &quot;uvicorn&gt;=0.30&quot;,
+    &quot;langchain&gt;=1.4,&lt;2&quot;,
+    &quot;langchain-deepseek&gt;=1.1,&lt;2&quot;,
+    &quot;pydantic&gt;=2.9,&lt;3&quot;,
+]</pre>
+
+<h2>backend/main.py</h2>
+<pre>&quot;&quot;&quot;0004-streaming-chat - FastAPI + LangChain + DeepSeek, streamed to the browser.
+
+One endpoint, three jobs:
+
+  1. validate the conversation          pydantic models, roles as a Literal
+  2. stream the model&#x27;s reply           ChatDeepSeek.astream() -&gt; AIMessageChunk
+  3. frame each delta as SSE            `data: {&quot;delta&quot;: &quot;...&quot;}` + a final done
+
+The framing is JSON on purpose: a delta often contains a newline, and a raw
+`data: &lt;text&gt;` frame would split one token into two events.
+
+This lab talks to the live DeepSeek API. Set DEEPSEEK_API_KEY first:
+
+  PowerShell (this session):  $env:DEEPSEEK_API_KEY = &quot;sk-...&quot;
+  PowerShell (persist):       setx DEEPSEEK_API_KEY &quot;sk-...&quot;   # reopen the terminal
+
+Get a key at https://platform.deepseek.com/api_keys. No key -&gt; startup fails with
+these instructions, never a guess.
+&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any, AsyncIterator, Literal
+
+from fastapi import FastAPI
+from fastapi.responses import HTMLResponse, StreamingResponse
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from pydantic import BaseModel, Field
+
+MODEL = os.getenv(&quot;DEEPSEEK_MODEL&quot;, &quot;deepseek-flash&quot;)
+BASE_URL = os.getenv(&quot;DEEPSEEK_BASE_URL&quot;, &quot;https://api.deepseek.com&quot;)
+HERE = Path(__file__).resolve().parent
+
+SYSTEM = &quot;You are a concise support assistant. Answer in two or three sentences.&quot;
+
+
+# --- request contract -------------------------------------------------------
+
+
+class Message(BaseModel):
+    role: Literal[&quot;system&quot;, &quot;user&quot;, &quot;assistant&quot;]
+    content: str = Field(min_length=1)
+
+
+class ChatIn(BaseModel):
+    messages: list[Message] = Field(min_length=1)
+
+
+LC_MESSAGES = {&quot;system&quot;: SystemMessage, &quot;user&quot;: HumanMessage, &quot;assistant&quot;: AIMessage}
+
+
+def to_lc(message: Message) -&gt; BaseMessage:
+    &quot;&quot;&quot;Pydantic message -&gt; LangChain message. That is the whole adapter.&quot;&quot;&quot;
+    return LC_MESSAGES[message.role](content=message.content)
+
+
+# --- model wiring -----------------------------------------------------------
+
+
+def missing_key_message() -&gt; str:
+    return (
+        &quot;DEEPSEEK_API_KEY is not set.\n&quot;
+        &#x27;  PowerShell (this session):  $env:DEEPSEEK_API_KEY = &quot;sk-...&quot;\n&#x27;
+        &#x27;  PowerShell (persist):       setx DEEPSEEK_API_KEY &quot;sk-...&quot;   # reopen terminal\n&#x27;
+        &quot;  Get a key:                  https://platform.deepseek.com/api_keys&quot;
+    )
+
+
+def build_model() -&gt; Any:
+    &quot;&quot;&quot;Return a live ChatDeepSeek handle, or explain exactly what is missing.&quot;&quot;&quot;
+    if not os.getenv(&quot;DEEPSEEK_API_KEY&quot;):
+        raise RuntimeError(missing_key_message())
+
+    from langchain_deepseek import ChatDeepSeek
+
+    return ChatDeepSeek(
+        model=os.getenv(&quot;DEEPSEEK_MODEL&quot;, MODEL),
+        api_key=os.getenv(&quot;DEEPSEEK_API_KEY&quot;),
+        api_base=os.getenv(&quot;DEEPSEEK_BASE_URL&quot;, BASE_URL),
+        temperature=0.3,
+        max_retries=2,
+        timeout=60,
+        # Thinking mode would stream reasoning_content first; this lab is about
+        # the SSE seam, so keep the wire simple and the first token honest.
+        extra_body={&quot;thinking&quot;: {&quot;type&quot;: &quot;disabled&quot;}},
+    )
+
+
+# --- SSE framing ------------------------------------------------------------
+
+
+def sse(payload: dict[str, Any]) -&gt; str:
+    &quot;&quot;&quot;One SSE event. JSON, so newlines and quotes inside a delta stay intact.&quot;&quot;&quot;
+    return f&quot;data: {json.dumps(payload, ensure_ascii=False)}\n\n&quot;
+
+
+def text_of(chunk: Any) -&gt; str:
+    &quot;&quot;&quot;AIMessageChunk.content is a str, or a list of content blocks.&quot;&quot;&quot;
+    content = getattr(chunk, &quot;content&quot;, &quot;&quot;)
+    if isinstance(content, str):
+        return content
+    parts: list[str] = []
+    for block in content or []:
+        if isinstance(block, str):
+            parts.append(block)
+        elif isinstance(block, dict) and block.get(&quot;type&quot;) == &quot;text&quot;:
+            parts.append(str(block.get(&quot;text&quot;, &quot;&quot;)))
+    return &quot;&quot;.join(parts)
+
+
+async def stream_reply(payload: ChatIn) -&gt; AsyncIterator[str]:
+    &quot;&quot;&quot;Call the model once, yield one SSE event per delta, then close the stream.&quot;&quot;&quot;
+    model = build_model()
+    messages = [SystemMessage(content=SYSTEM), *(to_lc(message) for message in payload.messages)]
+
+    try:
+        async for chunk in model.astream(messages):
+            delta = text_of(chunk)
+            if delta:
+                yield sse({&quot;delta&quot;: delta})
+    except Exception as error:  # noqa: BLE001 - the client must see why the stream died
+        yield sse({&quot;error&quot;: f&quot;{type(error).__name__}: {error}&quot;})
+    finally:
+        yield sse({&quot;done&quot;: True})
+
+
+# --- app --------------------------------------------------------------------
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    &quot;&quot;&quot;Fail at startup, not on the first message, when the key is missing.&quot;&quot;&quot;
+    if not os.getenv(&quot;DEEPSEEK_API_KEY&quot;):
+        raise RuntimeError(missing_key_message())
+    yield
+
+
+app = FastAPI(title=&quot;0004 streaming chat&quot;, lifespan=lifespan)
+
+
+@app.get(&quot;/&quot;, response_class=HTMLResponse)
+async def index() -&gt; str:
+    &quot;&quot;&quot;The bare test client: proves the Python side streams before Next.js exists.&quot;&quot;&quot;
+    return (HERE / &quot;test-client.html&quot;).read_text(encoding=&quot;utf-8&quot;)
+
+
+@app.get(&quot;/health&quot;)
+async def health() -&gt; dict[str, Any]:
+    return {&quot;ok&quot;: True, &quot;model&quot;: MODEL, &quot;key&quot;: bool(os.getenv(&quot;DEEPSEEK_API_KEY&quot;))}
+
+
+@app.post(&quot;/chat-stream&quot;)
+async def chat_stream(payload: ChatIn) -&gt; StreamingResponse:
+    return StreamingResponse(
+        stream_reply(payload),
+        media_type=&quot;text/event-stream&quot;,
+        headers={
+            &quot;Cache-Control&quot;: &quot;no-cache&quot;,
+            &quot;Connection&quot;: &quot;keep-alive&quot;,
+            # Proxies love to buffer SSE; this header turns that off for most.
+            &quot;X-Accel-Buffering&quot;: &quot;no&quot;,
+        },
+    )
+
+
+def main() -&gt; int:
+    try:
+        build_model()
+    except RuntimeError as error:
+        print(f&quot;error: {error}&quot;, file=sys.stderr)
+        return 1
+    print(f&quot;ok: {MODEL} reachable config; start the server with:&quot;)
+    print(&quot;  uv run uvicorn main:app --reload&quot;)
+    return 0
+
+
+if __name__ == &quot;__main__&quot;:
+    raise SystemExit(main())</pre>
+
+<h2>backend/evals.py</h2>
+<pre>&quot;&quot;&quot;Self-tests for 0004-streaming-chat.
+
+No fake model: the lab talks to live DeepSeek. Everything here runs offline -
+the pydantic request contract, the message adapter, SSE framing (including the
+newline case that breaks naive `data: &lt;text&gt;` streams), the chunk-to-text
+reader, model wiring, the missing-key instructions, the uv project - plus one
+live stream when a key is set.
+&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import re
+import subprocess
+import sys
+import tomllib
+from pathlib import Path
+
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage
+from pydantic import ValidationError
+
+import main as lab
+
+HERE = Path(__file__).resolve().parent
+PY = sys.executable
+CHECKS: list[str] = []
+
+
+def check(name: str, condition: bool, detail: str = &quot;&quot;) -&gt; None:
+    if not condition:
+        raise AssertionError(f&quot;{name}: {detail}&quot; if detail else name)
+    CHECKS.append(name)
+
+
+def clean_env() -&gt; dict[str, str]:
+    env = {k: v for k, v in os.environ.items() if not k.startswith(&quot;DEEPSEEK_&quot;)}
+    env.pop(&quot;OPENAI_API_KEY&quot;, None)
+    env.pop(&quot;PY_BACKEND&quot;, None)
+    return env
+
+
+def with_env(values: dict[str, str]):
+    &quot;&quot;&quot;Temporarily set env vars, then restore exactly.&quot;&quot;&quot;
+
+    class _Ctx:
+        def __enter__(self):
+            self.old = os.environ.copy()
+            os.environ.update(values)
+
+        def __exit__(self, *args):
+            os.environ.clear()
+            os.environ.update(self.old)
+
+    return _Ctx()
+
+
+# --- request contract -------------------------------------------------------
+
+
+def test_message_contract() -&gt; None:
+    good = lab.Message(role=&quot;user&quot;, content=&quot;hello&quot;)
+    check(&quot;valid message accepted&quot;, good.role == &quot;user&quot; and good.content == &quot;hello&quot;)
+
+    for role in (&quot;system&quot;, &quot;user&quot;, &quot;assistant&quot;):
+        check(f&quot;role {role} allowed&quot;, lab.Message(role=role, content=&quot;x&quot;).role == role)
+
+    try:
+        lab.Message(role=&quot;tool&quot;, content=&quot;x&quot;)
+    except ValidationError:
+        CHECKS.append(&quot;role tool rejected&quot;)
+    else:
+        raise AssertionError(&quot;role tool should be rejected&quot;)
+
+    try:
+        lab.Message(role=&quot;user&quot;, content=&quot;&quot;)
+    except ValidationError:
+        CHECKS.append(&quot;empty content rejected&quot;)
+    else:
+        raise AssertionError(&quot;empty content should be rejected&quot;)
+
+    lab.ChatIn(messages=[good])
+    CHECKS.append(&quot;chat with one message accepted&quot;)
+
+    try:
+        lab.ChatIn(messages=[])
+    except ValidationError:
+        CHECKS.append(&quot;empty history rejected&quot;)
+    else:
+        raise AssertionError(&quot;empty history should be rejected&quot;)
+
+
+def test_adapter() -&gt; None:
+    pairs = [
+        (&quot;system&quot;, SystemMessage),
+        (&quot;user&quot;, HumanMessage),
+        (&quot;assistant&quot;, AIMessage),
+    ]
+    for role, expected in pairs:
+        built = lab.to_lc(lab.Message(role=role, content=&quot;hello there&quot;))
+        check(f&quot;{role} maps to {expected.__name__}&quot;, isinstance(built, expected), type(built).__name__)
+        check(f&quot;{role} keeps the text&quot;, built.content == &quot;hello there&quot;, str(built.content))
+    check(
+        &quot;adapter covers every allowed role&quot;,
+        set(lab.LC_MESSAGES) == {&quot;system&quot;, &quot;user&quot;, &quot;assistant&quot;},
+        str(sorted(lab.LC_MESSAGES)),
+    )
+
+
+# --- wire format ------------------------------------------------------------
+
+
+def test_sse_framing() -&gt; None:
+    frame = lab.sse({&quot;delta&quot;: &quot;hi&quot;})
+    check(&quot;frame starts with data: &quot;, frame.startswith(&quot;data: &quot;), repr(frame))
+    check(&quot;frame ends with a blank line&quot;, frame.endswith(&quot;\n\n&quot;), repr(frame))
+    body = frame[len(&quot;data: &quot;) : -2]
+    check(&quot;body is JSON&quot;, json.loads(body) == {&quot;delta&quot;: &quot;hi&quot;}, body)
+
+    tricky = lab.sse({&quot;delta&quot;: &quot;line one\nline two&quot;})
+    check(&quot;one event per delta, even with a newline&quot;, tricky.count(&quot;data: &quot;) == 1, repr(tricky))
+    check(&quot;newline survives the round trip&quot;, json.loads(tricky[6:-2])[&quot;delta&quot;] == &quot;line one\nline two&quot;)
+
+    unicode_frame = lab.sse({&quot;delta&quot;: &quot;café → naïve&quot;})
+    check(&quot;unicode is not escaped&quot;, &quot;café → naïve&quot; in unicode_frame, unicode_frame)
+    check(&quot;unicode parses back&quot;, json.loads(unicode_frame[6:-2])[&quot;delta&quot;] == &quot;café → naïve&quot;)
+
+    done = lab.sse({&quot;done&quot;: True})
+    check(&quot;done frame is JSON&quot;, json.loads(done[6:-2]) == {&quot;done&quot;: True}, done)
+
+    error = lab.sse({&quot;error&quot;: &quot;boom&quot;})
+    check(&quot;error frame is JSON&quot;, json.loads(error[6:-2]) == {&quot;error&quot;: &quot;boom&quot;}, error)
+
+
+def test_chunk_text() -&gt; None:
+    check(&quot;string content passes through&quot;, lab.text_of(AIMessageChunk(content=&quot;abc&quot;)) == &quot;abc&quot;)
+
+    blocks = AIMessageChunk(
+        content=[
+            {&quot;type&quot;: &quot;text&quot;, &quot;text&quot;: &quot;ab&quot;},
+            {&quot;type&quot;: &quot;reasoning&quot;, &quot;text&quot;: &quot;thinking&quot;},
+            {&quot;type&quot;: &quot;text&quot;, &quot;text&quot;: &quot;cd&quot;},
+        ]
+    )
+    check(&quot;text blocks are joined&quot;, lab.text_of(blocks) == &quot;abcd&quot;, lab.text_of(blocks))
+    check(&quot;non-text blocks are dropped&quot;, &quot;thinking&quot; not in lab.text_of(blocks))
+
+    empty = AIMessageChunk(content=[])
+    check(&quot;empty content is empty text&quot;, lab.text_of(empty) == &quot;&quot;, repr(lab.text_of(empty)))
+    check(&quot;missing content is tolerated&quot;, lab.text_of(object()) == &quot;&quot;)
+
+
+def test_stream_contract() -&gt; None:
+    &quot;&quot;&quot;stream_reply is an async generator that closes with a done frame.&quot;&quot;&quot;
+    source = (HERE / &quot;main.py&quot;).read_text(encoding=&quot;utf-8&quot;)
+    check(&quot;stream_reply is async&quot;, &quot;async def stream_reply&quot; in source)
+    check(&quot;uses astream&quot;, &quot;.astream(&quot; in source)
+    check(&quot;yields a done frame&quot;, &#x27;sse({&quot;done&quot;: True})&#x27; in source)
+    check(
+        &quot;returns an event-stream response&quot;,
+        &#x27;media_type=&quot;text/event-stream&quot;&#x27; in source,
+        &quot;media type missing&quot;,
+    )
+    check(&quot;disables proxy buffering&quot;, &quot;X-Accel-Buffering&quot; in source)
+    check(&quot;serves the bare test client&quot;, &quot;test-client.html&quot; in source)
+    check(&quot;fails at startup without a key&quot;, &quot;async def lifespan&quot; in source)
+
+
+# --- model wiring -----------------------------------------------------------
+
+
+def test_model_config() -&gt; None:
+    with with_env({&quot;DEEPSEEK_API_KEY&quot;: &quot;test-key&quot;}):
+        model = lab.build_model()
+    check(&quot;live model class&quot;, type(model).__name__ == &quot;ChatDeepSeek&quot;, type(model).__name__)
+    check(&quot;default model name&quot;, model.model_name == &quot;deepseek-flash&quot;, model.model_name)
+    check(
+        &quot;default base url&quot;,
+        str(model.root_client.base_url).rstrip(&quot;/&quot;) == &quot;https://api.deepseek.com&quot;,
+        str(model.root_client.base_url),
+    )
+    check(&quot;temperature is product-tuned, not zero&quot;, model.temperature == 0.3, str(model.temperature))
+    check(
+        &quot;thinking disabled for the stream&quot;,
+        model.extra_body == {&quot;thinking&quot;: {&quot;type&quot;: &quot;disabled&quot;}},
+        str(model.extra_body),
+    )
+
+
+def test_model_overrides() -&gt; None:
+    with with_env(
+        {
+            &quot;DEEPSEEK_API_KEY&quot;: &quot;test-key&quot;,
+            &quot;DEEPSEEK_MODEL&quot;: &quot;deepseek-v4-pro&quot;,
+            &quot;DEEPSEEK_BASE_URL&quot;: &quot;https://example.test&quot;,
+        }
+    ):
+        model = lab.build_model()
+    check(&quot;model override&quot;, model.model_name == &quot;deepseek-v4-pro&quot;, model.model_name)
+    check(
+        &quot;base url override&quot;,
+        str(model.root_client.base_url).rstrip(&quot;/&quot;) == &quot;https://example.test&quot;,
+        str(model.root_client.base_url),
+    )
+
+
+def test_missing_key() -&gt; None:
+    message = lab.missing_key_message()
+    check(&quot;message names the session command&quot;, &#x27;$env:DEEPSEEK_API_KEY = &quot;sk-...&quot;&#x27; in message)
+    check(&quot;message names setx&quot;, &quot;setx DEEPSEEK_API_KEY&quot; in message)
+    check(&quot;message links the key page&quot;, &quot;platform.deepseek.com/api_keys&quot; in message)
+
+    with with_env({}):
+        os.environ.pop(&quot;DEEPSEEK_API_KEY&quot;, None)
+
+        try:
+            lab.build_model()
+        except RuntimeError as error:
+            check(&quot;build_model refuses without a key&quot;, &quot;DEEPSEEK_API_KEY&quot; in str(error), str(error))
+        else:
+            raise AssertionError(&quot;build_model should refuse without a key&quot;)
+
+        try:
+            asyncio.run(_open_lifespan())
+        except RuntimeError as error:
+            check(&quot;startup refuses without a key&quot;, &quot;DEEPSEEK_API_KEY&quot; in str(error), str(error))
+        else:
+            raise AssertionError(&quot;lifespan should refuse without a key&quot;)
+
+    result = subprocess.run(
+        [PY, &quot;main.py&quot;],
+        cwd=HERE,
+        env=clean_env(),
+        capture_output=True,
+        text=True,
+        encoding=&quot;utf-8&quot;,
+        errors=&quot;replace&quot;,
+        timeout=60,
+    )
+    check(&quot;cli exits 1 without a key&quot;, result.returncode == 1, str(result.returncode))
+    check(&quot;cli prints the instructions&quot;, &quot;DEEPSEEK_API_KEY&quot; in result.stderr, result.stderr)
+
+
+async def _open_lifespan() -&gt; None:
+    async with lab.lifespan(lab.app):
+        pass
+
+
+# --- repo hygiene -----------------------------------------------------------
+
+
+def test_stack() -&gt; None:
+    root = HERE.parent
+    source = (HERE / &quot;main.py&quot;).read_text(encoding=&quot;utf-8&quot;)
+    check(&quot;no OpenAI SDK in the backend&quot;, &quot;from openai&quot; not in source)
+    check(&quot;no gpt-4o model name&quot;, &quot;gpt-4o&quot; not in source)
+    check(&quot;langchain-deepseek is the provider&quot;, &quot;langchain_deepseek&quot; in source)
+    check(&quot;pydantic validates requests&quot;, &quot;BaseModel&quot; in source)
+    check(&quot;FastAPI serves it&quot;, &quot;FastAPI(&quot; in source)
+
+    page = (root / &quot;frontend&quot; / &quot;app&quot; / &quot;page.tsx&quot;).read_text(encoding=&quot;utf-8&quot;)
+    check(&quot;frontend uses useChat&quot;, &quot;useChat&quot; in page)
+    check(&quot;frontend uses the shadcn prompt input&quot;, &quot;InputGroupTextarea&quot; in page)
+    check(&quot;frontend sends text only&quot;, &#x27;sendMessage({ text: value })&#x27; in page)
+    check(&quot;page translates a 404 HTML body into a hint&quot;, &quot;&lt;!DOCTYPE html&quot; in page, &quot;no 404 hint&quot;)
+
+    route = (
+        root / &quot;frontend&quot; / &quot;app&quot; / &quot;api&quot; / &quot;chat&quot; / &quot;route.ts&quot;
+    ).read_text(encoding=&quot;utf-8&quot;)
+    check(&quot;route parses SSE events&quot;, &#x27;indexOf(&quot;\\n\\n&quot;)&#x27; in route)
+    check(&quot;route writes text deltas&quot;, &#x27;&quot;text-delta&quot;&#x27; in route)
+    check(&quot;route propagates aborts upstream&quot;, &quot;signal: req.signal&quot; in route)
+    check(&quot;route answers failures as plain text&quot;, &quot;text/plain; charset=utf-8&quot; in route)
+    check(&quot;route names the unreachable backend&quot;, &quot;python backend unreachable&quot; in route)
+    check(&quot;route ignores the abort as an error&quot;, &quot;req.signal.aborted&quot; in route)
+
+    readme = (root / &quot;README.md&quot;).read_text(encoding=&quot;utf-8&quot;)
+    check(&quot;readme documents the 405-vs-404 check&quot;, &quot;405 Method Not Allowed&quot; in readme)
+    check(&quot;readme names the exact route folder&quot;, r&quot;app\api\chat\route.ts&quot; in readme)
+
+
+def test_uv_project() -&gt; None:
+    pyproject = HERE / &quot;pyproject.toml&quot;
+    check(&quot;pyproject.toml exists&quot;, pyproject.exists())
+    data = tomllib.loads(pyproject.read_text(encoding=&quot;utf-8&quot;))
+    declared = {
+        re.split(r&quot;[&lt;&gt;=!~ ]&quot;, dep, maxsplit=1)[0] for dep in data[&quot;project&quot;][&quot;dependencies&quot;]
+    }
+    check(
+        &quot;declares fastapi, uvicorn, langchain, langchain-deepseek, pydantic&quot;,
+        {&quot;fastapi&quot;, &quot;uvicorn&quot;, &quot;langchain&quot;, &quot;langchain-deepseek&quot;, &quot;pydantic&quot;} &lt;= declared,
+        str(sorted(declared)),
+    )
+
+
+# --- live ---------------------------------------------------------------
+
+
+async def _live_stream() -&gt; list[str]:
+    model = lab.build_model()
+    deltas: list[str] = []
+    async for chunk in model.astream(
+        [SystemMessage(content=lab.SYSTEM), HumanMessage(content=&quot;Say hello in one short sentence.&quot;)]
+    ):
+        text = lab.text_of(chunk)
+        if text:
+            deltas.append(text)
+    return deltas
+
+
+def test_live_smoke() -&gt; tuple[bool, str]:
+    if not os.getenv(&quot;DEEPSEEK_API_KEY&quot;):
+        return False, &quot;skipped (no DEEPSEEK_API_KEY)&quot;
+    deltas = asyncio.run(_live_stream())
+    check(&quot;live stream yield at least one delta&quot;, len(deltas) &gt;= 1, str(len(deltas)))
+    check(&quot;live deltas concatenate to text&quot;, bool(&quot;&quot;.join(deltas).strip()), &quot;&quot;.join(deltas)[:80])
+    check(&quot;live stream is chunked&quot;, len(deltas) &gt;= 2, str(len(deltas)))
+    return True, f&quot;streamed {len(deltas)} deltas&quot;
+
+
+TESTS = [
+    (&quot;message contract&quot;, test_message_contract),
+    (&quot;message adapter&quot;, test_adapter),
+    (&quot;sse framing&quot;, test_sse_framing),
+    (&quot;chunk text&quot;, test_chunk_text),
+    (&quot;stream contract&quot;, test_stream_contract),
+    (&quot;model config&quot;, test_model_config),
+    (&quot;model overrides&quot;, test_model_overrides),
+    (&quot;missing key&quot;, test_missing_key),
+    (&quot;stack&quot;, test_stack),
+    (&quot;uv project&quot;, test_uv_project),
+]
+
+
+def main() -&gt; int:
+    failures = 0
+    for index, (name, test) in enumerate(TESTS, start=1):
+        try:
+            test()
+            print(f&quot;ok {index:02d} {name}&quot;)
+        except Exception as error:  # noqa: BLE001 - a test runner reports everything
+            failures += 1
+            print(f&quot;FAIL {index:02d} {name}: {error}&quot;)
+
+    try:
+        ran, note = test_live_smoke()
+    except Exception as error:  # noqa: BLE001
+        failures += 1
+        print(f&quot;FAIL 11 live smoke: {error}&quot;)
+    else:
+        print(f&quot;ok 11 live smoke: {note}&quot;)
+        if not ran:
+            print(&quot;     set DEEPSEEK_API_KEY to include the live stream&quot;)
+
+    total = len(CHECKS)
+    print(f&quot;\n{total} checks passed, {failures} failed&quot;)
+    return 0 if failures == 0 else 1
+
+
+if __name__ == &quot;__main__&quot;:
+    raise SystemExit(main())</pre>
+
+<h2>frontend/app/api/chat/route.ts</h2>
+<pre>import { createUIMessageStream, createUIMessageStreamResponse } from &quot;ai&quot;;
+import type { UIMessage } from &quot;ai&quot;;
+
+export const maxDuration = 60;
+
+const PY_BACKEND = process.env.PY_BACKEND ?? &quot;http://127.0.0.1:8000&quot;;
+
+type Frame = { delta?: string; error?: string; done?: boolean };
+
+/** Keep only the text parts; the UI message carries tool/attachment parts too. */
+function textOf(message: UIMessage): string {
+  return message.parts.map((part) =&gt; (part.type === &quot;text&quot; ? part.text : &quot;&quot;)).join(&quot;&quot;);
+}
+
+/**
+ * Plain text, never an HTML page: useChat shows `error.message` verbatim, and a
+ * 500 from this file would hand the user a wall of markup instead of a sentence.
+ */
+function plain(body: string, status: number): Response {
+  return new Response(body, {
+    status,
+    headers: { &quot;Content-Type&quot;: &quot;text/plain; charset=utf-8&quot; },
+  });
+}
+
+export async function POST(req: Request) {
+  let messages: UIMessage[];
+  try {
+    ({ messages } = (await req.json()) as { messages: UIMessage[] });
+  } catch {
+    return plain(&quot;request body is not JSON with a messages array&quot;, 400);
+  }
+
+  const history = messages
+    .map((message) =&gt; ({ role: message.role, content: textOf(message) }))
+    .filter((message) =&gt; message.content.length &gt; 0);
+
+  let upstream: Response;
+  try {
+    upstream = await fetch(`${PY_BACKEND}/chat-stream`, {
+      method: &quot;POST&quot;,
+      headers: { &quot;Content-Type&quot;: &quot;application/json&quot; },
+      body: JSON.stringify({ messages: history }),
+      // Client hits Stop -&gt; the browser aborts this request -&gt; Python stops too.
+      signal: req.signal,
+    });
+  } catch (error) {
+    if (req.signal.aborted) throw error; // the user pressed Stop, not a failure
+    const detail = error instanceof Error ? error.message : String(error);
+    return plain(
+      `python backend unreachable at ${PY_BACKEND}\n` +
+        `  start it:  uv run uvicorn main:app --reload\n` +
+        `  detail:    ${detail}`,
+      502,
+    );
+  }
+
+  if (!upstream.ok || !upstream.body) {
+    const detail = await upstream.text().catch(() =&gt; &quot;&quot;);
+    return plain(
+      `python backend answered ${upstream.status} at ${PY_BACKEND}\n` +
+        `  check the uvicorn terminal for the traceback\n` +
+        `  detail: ${detail.slice(0, 600)}`,
+      502,
+    );
+  }
+
+  const textId = crypto.randomUUID();
+
+  const stream = createUIMessageStream({
+    execute: async ({ writer }) =&gt; {
+      const reader = upstream.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = &quot;&quot;;
+      let failure: unknown = null;
+
+      writer.write({ type: &quot;text-start&quot;, id: textId });
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          // SSE events end with a blank line; a chunk boundary can split one.
+          let split: number;
+          while ((split = buffer.indexOf(&quot;\n\n&quot;)) !== -1) {
+            const raw = buffer.slice(0, split);
+            buffer = buffer.slice(split + 2);
+            if (!raw.startsWith(&quot;data: &quot;)) continue;
+
+            const frame = JSON.parse(raw.slice(6)) as Frame;
+            if (frame.error) throw new Error(frame.error);
+            if (frame.delta) {
+              writer.write({ type: &quot;text-delta&quot;, id: textId, delta: frame.delta });
+            }
+          }
+        }
+      } catch (error) {
+        failure = error;
+      } finally {
+        writer.write({ type: &quot;text-end&quot;, id: textId });
+      }
+
+      if (failure) throw failure;
+    },
+    onError: (error) =&gt; (error instanceof Error ? error.message : String(error)),
+  });
+
+  return createUIMessageStreamResponse({ stream });
+}</pre>
+
+<h2>frontend/app/page.tsx</h2>
+<pre>&quot;use client&quot;;
+
+import { useEffect, useRef, useState, type FormEvent } from &quot;react&quot;;
+import { useChat } from &quot;@ai-sdk/react&quot;;
+import {
+  ArrowUpIcon,
+  Loader2Icon,
+  MessageSquareIcon,
+  SquareIcon,
+} from &quot;lucide-react&quot;;
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupTextarea,
+} from &quot;@/components/ui/input-group&quot;;
+
+const SUGGESTIONS = [
+  &quot;Why was my ticket T-1001 charged twice?&quot;,
+  &quot;Summarize my last ticket in one line.&quot;,
+  &quot;What can you help me with?&quot;,
+];
+
+/**
+ * useChat hands back whatever the failing request returned. When the route file
+ * lives in the wrong folder that &quot;body&quot; is Next.js&#x27;s 404 HTML page, so translate
+ * the two mistakes people actually make into a sentence instead of dumping markup.
+ */
+function errorText(error: Error): string {
+  const raw = error.message ?? &quot;&quot;;
+  if (raw.includes(&quot;&lt;!DOCTYPE html&quot;) || raw.includes(&quot;__next&quot;)) {
+    return (
+      &quot;The browser got a Next.js page instead of your route handler — &quot; +
+      &quot;route.ts is not at app/api/chat/route.ts (or src/app/api/chat/route.ts). &quot; +
+      &quot;Move it there and let the dev server reload.&quot;
+    );
+  }
+  return raw.length &gt; 400 ? `${raw.slice(0, 400)}…` : raw;
+}
+
+/** Three bouncing dots: the gap between &quot;sent&quot; and &quot;first token&quot;. */
+function TypingDots() {
+  return (
+    &lt;span className=&quot;flex items-center gap-1 py-1&quot; aria-label=&quot;Assistant is typing&quot;&gt;
+      {[0, 150, 300].map((delay) =&gt; (
+        &lt;span
+          key={delay}
+          className=&quot;size-1.5 animate-bounce rounded-full bg-muted-foreground/70&quot;
+          style={{ animationDelay: `${delay}ms` }}
+        /&gt;
+      ))}
+    &lt;/span&gt;
+  );
+}
+
+function Caret() {
+  return (
+    &lt;span className=&quot;ml-0.5 inline-block h-4 w-0.5 animate-pulse rounded-full bg-foreground align-text-bottom&quot; /&gt;
+  );
+}
+
+export default function Page() {
+  const { messages, sendMessage, status, stop, error } = useChat();
+  const [text, setText] = useState(&quot;&quot;);
+  const formRef = useRef&lt;HTMLFormElement&gt;(null);
+  const bottomRef = useRef&lt;HTMLDivElement&gt;(null);
+
+  const busy = status === &quot;submitted&quot; || status === &quot;streaming&quot;;
+  const empty = messages.length === 0 &amp;&amp; !busy;
+
+  // Follow the answer as it streams in.
+  useEffect(() =&gt; {
+    bottomRef.current?.scrollIntoView({ block: &quot;end&quot; });
+  }, [messages, status]);
+
+  function submit(event: FormEvent&lt;HTMLFormElement&gt;) {
+    event.preventDefault();
+    const value = text.trim();
+    if (!value || busy) return;
+    sendMessage({ text: value });
+    setText(&quot;&quot;);
+  }
+
+  function pickSuggestion(value: string) {
+    setText(value);
+    formRef.current?.querySelector(&quot;textarea&quot;)?.focus();
+  }
+
+  return (
+    &lt;main className=&quot;flex min-h-svh flex-col bg-background&quot;&gt;
+      &lt;header className=&quot;sticky top-0 z-10 border-b bg-background/80 backdrop-blur&quot;&gt;
+        &lt;div className=&quot;mx-auto flex w-full max-w-2xl items-center gap-3 px-4 py-3&quot;&gt;
+          &lt;div className=&quot;flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground&quot;&gt;
+            &lt;MessageSquareIcon className=&quot;size-4&quot; /&gt;
+          &lt;/div&gt;
+          &lt;div className=&quot;min-w-0&quot;&gt;
+            &lt;h1 className=&quot;truncate text-sm font-medium leading-none&quot;&gt;Support chat&lt;/h1&gt;
+            &lt;p className=&quot;mt-1 truncate text-xs text-muted-foreground&quot;&gt;
+              FastAPI + LangChain + DeepSeek
+            &lt;/p&gt;
+          &lt;/div&gt;
+          &lt;span
+            data-status={status}
+            className=&quot;ml-auto flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] text-muted-foreground&quot;
+          &gt;
+            {busy ? (
+              &lt;Loader2Icon
+                aria-label=&quot;Loading&quot;
+                className=&quot;size-3 animate-spin text-emerald-500&quot;
+              /&gt;
+            ) : (
+              &lt;span
+                className={
+                  status === &quot;error&quot;
+                    ? &quot;size-1.5 rounded-full bg-destructive&quot;
+                    : &quot;size-1.5 rounded-full bg-muted-foreground/40&quot;
+                }
+              /&gt;
+            )}
+            {status === &quot;submitted&quot;
+              ? &quot;connecting&quot;
+              : status === &quot;streaming&quot;
+                ? &quot;streaming&quot;
+                : status === &quot;error&quot;
+                  ? &quot;error&quot;
+                  : &quot;ready&quot;}
+          &lt;/span&gt;
+        &lt;/div&gt;
+      &lt;/header&gt;
+
+      &lt;div className=&quot;mx-auto flex w-full max-w-2xl flex-1 flex-col px-4&quot;&gt;
+        &lt;div
+          role=&quot;log&quot;
+          aria-live=&quot;polite&quot;
+          className={
+            empty
+              ? &quot;flex flex-1 flex-col justify-center py-6&quot;
+              : &quot;flex-1 space-y-5 py-6&quot;
+          }
+        &gt;
+          {messages.length === 0 &amp;&amp; status !== &quot;submitted&quot; &amp;&amp; (
+            &lt;div className=&quot;flex flex-col items-center justify-center py-10 text-center&quot;&gt;
+              &lt;div className=&quot;flex size-11 items-center justify-center rounded-full bg-muted&quot;&gt;
+                &lt;MessageSquareIcon className=&quot;size-5 text-muted-foreground&quot; /&gt;
+              &lt;/div&gt;
+              &lt;h2 className=&quot;mt-4 text-base font-medium&quot;&gt;How can I help?&lt;/h2&gt;
+              &lt;p className=&quot;mt-1.5 max-w-sm text-sm text-muted-foreground&quot;&gt;
+                Ask about a ticket, a charge, or your account. The answer streams in as
+                DeepSeek writes it.
+              &lt;/p&gt;
+              &lt;div className=&quot;mt-6 flex flex-wrap justify-center gap-2&quot;&gt;
+                {SUGGESTIONS.map((suggestion) =&gt; (
+                  &lt;button
+                    key={suggestion}
+                    type=&quot;button&quot;
+                    onClick={() =&gt; pickSuggestion(suggestion)}
+                    className=&quot;rounded-full border bg-background px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground&quot;
+                  &gt;
+                    {suggestion}
+                  &lt;/button&gt;
+                ))}
+              &lt;/div&gt;
+            &lt;/div&gt;
+          )}
+
+          {messages.map((message, index) =&gt; {
+            const isUser = message.role === &quot;user&quot;;
+            const streamingThis =
+              status === &quot;streaming&quot; &amp;&amp;
+              index === messages.length - 1 &amp;&amp;
+              message.role === &quot;assistant&quot;;
+            const hasText = message.parts.some(
+              (part) =&gt; part.type === &quot;text&quot; &amp;&amp; part.text.length &gt; 0,
+            );
+
+            return (
+              &lt;div
+                key={message.id}
+                className={isUser ? &quot;flex justify-end&quot; : &quot;flex justify-start&quot;}
+              &gt;
+                &lt;div
+                  className={
+                    isUser
+                      ? &quot;max-w-[85%] rounded-2xl bg-primary px-4 py-2.5 text-sm leading-relaxed text-primary-foreground whitespace-pre-wrap&quot;
+                      : &quot;max-w-[85%] rounded-2xl bg-muted px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap&quot;
+                  }
+                &gt;
+                  {!isUser &amp;&amp; !hasText &amp;&amp; streamingThis ? (
+                    &lt;TypingDots /&gt;
+                  ) : (
+                    message.parts.map((part, partIndex) =&gt;
+                      part.type === &quot;text&quot; ? (
+                        &lt;span key={partIndex}&gt;{part.text}&lt;/span&gt;
+                      ) : null,
+                    )
+                  )}
+                  {streamingThis &amp;&amp; hasText &amp;&amp; &lt;Caret /&gt;}
+                &lt;/div&gt;
+              &lt;/div&gt;
+            );
+          })}
+
+          {status === &quot;submitted&quot; &amp;&amp; (
+            &lt;div className=&quot;flex justify-start&quot;&gt;
+              &lt;div className=&quot;rounded-2xl bg-muted px-4 py-2.5&quot;&gt;
+                &lt;TypingDots /&gt;
+              &lt;/div&gt;
+            &lt;/div&gt;
+          )}
+
+          {error &amp;&amp; (
+            &lt;div className=&quot;rounded-xl border border-destructive/40 bg-destructive/5 p-3 text-sm&quot;&gt;
+              &lt;p className=&quot;font-medium text-destructive&quot;&gt;The stream failed&lt;/p&gt;
+              &lt;p className=&quot;mt-1 whitespace-pre-wrap text-muted-foreground&quot;&gt;
+                {errorText(error)}
+              &lt;/p&gt;
+            &lt;/div&gt;
+          )}
+
+          &lt;div ref={bottomRef} /&gt;
+        &lt;/div&gt;
+
+        &lt;div className=&quot;sticky bottom-0 -mx-4 bg-gradient-to-t from-background via-background to-transparent px-4 pb-5 pt-8&quot;&gt;
+          &lt;form ref={formRef} onSubmit={submit}&gt;
+            &lt;InputGroup className=&quot;rounded-2xl border-transparent bg-input/50 shadow-none dark:bg-input/40&quot;&gt;
+              &lt;InputGroupTextarea
+                value={text}
+                onChange={(event) =&gt; setText(event.target.value)}
+                onKeyDown={(event) =&gt; {
+                  if (event.key === &quot;Enter&quot; &amp;&amp; !event.shiftKey) {
+                    event.preventDefault();
+                    formRef.current?.requestSubmit();
+                  }
+                }}
+                placeholder=&quot;Ask about your ticket…&quot;
+                className=&quot;min-h-16 p-3 text-base md:text-sm&quot;
+              /&gt;
+              &lt;InputGroupAddon align=&quot;block-end&quot; className=&quot;gap-2 px-2.5 pb-2.5&quot;&gt;
+                &lt;span className=&quot;hidden text-[11px] text-muted-foreground sm:inline&quot;&gt;
+                  Enter to send · Shift+Enter for a new line
+                &lt;/span&gt;
+                &lt;div className=&quot;ml-auto flex items-center gap-2&quot;&gt;
+                  {busy ? (
+                    &lt;InputGroupButton
+                      type=&quot;button&quot;
+                      size=&quot;icon-sm&quot;
+                      variant=&quot;default&quot;
+                      className=&quot;rounded-full&quot;
+                      onClick={() =&gt; stop()}
+                      aria-label=&quot;Stop&quot;
+                    &gt;
+                      {status === &quot;submitted&quot; ? (
+                        &lt;Loader2Icon className=&quot;animate-spin&quot; /&gt;
+                      ) : (
+                        &lt;SquareIcon /&gt;
+                      )}
+                    &lt;/InputGroupButton&gt;
+                  ) : (
+                    &lt;InputGroupButton
+                      type=&quot;submit&quot;
+                      size=&quot;icon-sm&quot;
+                      variant=&quot;default&quot;
+                      className=&quot;rounded-full&quot;
+                      disabled={!text.trim()}
+                      aria-label=&quot;Send&quot;
+                    &gt;
+                      &lt;ArrowUpIcon /&gt;
+                    &lt;/InputGroupButton&gt;
+                  )}
+                &lt;/div&gt;
+              &lt;/InputGroupAddon&gt;
+            &lt;/InputGroup&gt;
+          &lt;/form&gt;
+          &lt;p className=&quot;pt-2 text-center text-[11px] text-muted-foreground&quot;&gt;
+            {status === &quot;streaming&quot;
+              ? &quot;streaming — press stop to cancel the Python request&quot;
+              : &quot;Python owns the model call and the key; this page owns nothing but pixels.&quot;}
+          &lt;/p&gt;
+        &lt;/div&gt;
+      &lt;/div&gt;
+    &lt;/main&gt;
+  );
+}</pre>
+
+<h2>backend/test-client.html (bare test client)</h2>
+<pre>&lt;!DOCTYPE html&gt;
+&lt;html lang=&quot;en&quot;&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;UTF-8&quot;&gt;
+&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1.0&quot;&gt;
+&lt;title&gt;Streaming chat — lesson 4 test client&lt;/title&gt;
+&lt;style&gt;
+  :root { color-scheme: light dark; --rule: #d8d5cd; --muted: #6b6b6b; }
+  body { font: 15px/1.55 system-ui, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 18px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  p.hint { color: var(--muted); margin: 0 0 18px; font-size: 13px; }
+  #log { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+  .turn { max-width: 88%; padding: 8px 12px; border-radius: 10px; white-space: pre-wrap; }
+  .turn.user { align-self: flex-end; background: #eef2ff; }
+  .turn.bot { align-self: flex-start; border: 1px solid var(--rule); }
+  .turn.error { border-color: #d9534f; color: #a33; }
+  form { display: flex; gap: 8px; }
+  textarea { flex: 1; resize: vertical; min-height: 46px; padding: 9px 10px; font: inherit; border: 1px solid var(--rule); border-radius: 8px; }
+  button { padding: 0 18px; border: 0; border-radius: 8px; background: #111; color: #fff; font: inherit; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  #stats { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; margin-top: 8px; min-height: 1.4em; }
+&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;h1&gt;Streaming chat — test the Python service alone&lt;/h1&gt;
+&lt;p class=&quot;hint&quot;&gt;Same endpoint Next.js calls. Watch the first token land: that gap is TTFT.&lt;/p&gt;
+
+&lt;div id=&quot;log&quot;&gt;&lt;/div&gt;
+
+&lt;form id=&quot;form&quot;&gt;
+  &lt;textarea id=&quot;text&quot; rows=&quot;2&quot; placeholder=&quot;Ask something…&quot;&gt;Explain in three sentences why streaming feels faster than waiting.&lt;/textarea&gt;
+  &lt;button id=&quot;send&quot; type=&quot;submit&quot;&gt;Send&lt;/button&gt;
+&lt;/form&gt;
+&lt;div id=&quot;stats&quot;&gt;&lt;/div&gt;
+
+&lt;script&gt;
+const log = document.getElementById(&quot;log&quot;);
+const form = document.getElementById(&quot;form&quot;);
+const text = document.getElementById(&quot;text&quot;);
+const send = document.getElementById(&quot;send&quot;);
+const stats = document.getElementById(&quot;stats&quot;);
+
+let history = [];
+
+function addTurn(kind, body = &quot;&quot;) {
+  const el = document.createElement(&quot;div&quot;);
+  el.className = `turn ${kind}`;
+  el.textContent = body;
+  log.appendChild(el);
+  el.scrollIntoView({ block: &quot;end&quot;, behavior: &quot;smooth&quot; });
+  return el;
+}
+
+form.addEventListener(&quot;submit&quot;, async (event) =&gt; {
+  event.preventDefault();
+  const question = text.value.trim();
+  if (!question || send.disabled) return;
+
+  send.disabled = true;
+  stats.textContent = &quot;&quot;;
+  addTurn(&quot;user&quot;, question);
+  history.push({ role: &quot;user&quot;, content: question });
+  const answer = addTurn(&quot;bot&quot;);
+
+  const started = performance.now();
+  let firstTokenAt = 0;
+  let tokens = 0;
+  let failed = false;
+
+  try {
+    const response = await fetch(&quot;/chat-stream&quot;, {
+      method: &quot;POST&quot;,
+      headers: { &quot;Content-Type&quot;: &quot;application/json&quot; },
+      body: JSON.stringify({ messages: history }),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = &quot;&quot;;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // SSE events are separated by a blank line, not by &quot;\n&quot;.
+      let split;
+      while ((split = buffer.indexOf(&quot;\n\n&quot;)) !== -1) {
+        const raw = buffer.slice(0, split);
+        buffer = buffer.slice(split + 2);
+        if (!raw.startsWith(&quot;data: &quot;)) continue;
+
+        const frame = JSON.parse(raw.slice(6));
+        if (frame.error) throw new Error(frame.error);
+        if (frame.done) continue;
+        if (frame.delta) {
+          if (!firstTokenAt) {
+            firstTokenAt = performance.now() - started;
+            stats.textContent = `first token ${Math.round(firstTokenAt)} ms`;
+          }
+          tokens += 1;
+          answer.textContent += frame.delta;
+        }
+      }
+    }
+
+    history.push({ role: &quot;assistant&quot;, content: answer.textContent });
+    const total = performance.now() - started;
+    stats.textContent =
+      `first token ${Math.round(firstTokenAt)} ms · ${tokens} deltas · ` +
+      `total ${Math.round(total)} ms (streaming saved ${Math.round(total - firstTokenAt)} ms of waiting)`;
+  } catch (error) {
+    failed = true;
+    answer.classList.add(&quot;error&quot;);
+    answer.textContent = String(error);
+    stats.textContent = &quot;stream failed — check the uvicorn terminal&quot;;
+  } finally {
+    send.disabled = false;
+    if (failed) history.pop();
+  }
+});
+&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;</pre>
+
+<p>Lesson: <a href="../../../lessons/0004-streaming-chat.html">Lesson 4 &mdash; Streaming Chat</a> &middot; <a href="README.md">README</a></p>
+
+</article>
+</body>
+</html>

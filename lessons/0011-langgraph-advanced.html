@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 11 — LangGraph, Advanced: Fan-Out, Fan-In, and the Join That Fires Early</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<article class="page">
+
+<p class="meta">Lesson 11 of the AI Engineering course · ~50 min · Prereq: <a href="0010-langgraph.html">Lesson 10</a> · <a href="../reference/skill-map.html">Skill Map →</a></p>
+
+<h1>LangGraph, Advanced: Fan-Out, Fan-In, and the Join That Fires Early</h1>
+
+<p class="lede">Lesson 10 ended with one node choosing between two. Real agents do not choose once: they ask three services at the same time, read the answers, and reconcile them. Drawing that is easy. Making the reconciliation wait for the right things — and only the right things — is the advanced part.</p>
+
+<div class="callout win">
+  <span class="label">Your win this lesson</span>
+  You'll build a multi-source research agent — five nodes by default, nine with the optional Reddit branch: Google and Bing (and Reddit, when enabled) fan out, a structured-output selector picks Reddit threads, comments are fetched, the analyses run in parallel, and one synthesis writes the answer. Then you'll break the join on purpose, watch synthesis run twice with partial data, fix it with one list edge, kill a source, and measure whether "more parallel" actually made the run faster.
+</div>
+
+<h2>Part 1 — The shape</h2>
+
+<p>This is the graph the lab builds. The model is DeepSeek; the source layer reads recorded snapshots by default, or calls BrightData with <code>--live</code>. <strong>Reddit is optional and off by default</strong> (<code>REDDIT_ENABLED=false</code>): a default run is Google + Bing → two analyses → synthesis, five nodes. The diagram and traces below show the full graph with <code>REDDIT_ENABLED=true</code>.</p>
+
+<figure>
+  <img src="../assets/examples/0011-langgraph-advanced/graph.png" alt="LangGraph: three search nodes fan out from START; they join at select_reddit_urls, then fetch_reddit, three analyses, and synthesize" width="640">
+  <figcaption>The full reference shape with Reddit enabled. Three searches in one superstep, three analyses in another, one synthesis at the end.</figcaption>
+</figure>
+
+<table>
+  <thead><tr><th>stage</th><th>nodes</th><th>what makes it a stage</th></tr></thead>
+  <tbody>
+    <tr><td><strong>fan-out</strong></td><td><code>search_google</code>, <code>search_bing</code>, <code>search_reddit</code> (optional)</td><td>two or three edges leave <code>START</code>; all enabled searches run in the same superstep</td></tr>
+    <tr><td><strong>join</strong></td><td><code>select_reddit_urls</code></td><td>with Reddit on, waits for all three searches, then runs once</td></tr>
+    <tr><td><strong>fan-out again</strong></td><td><code>analyze_google</code>, <code>analyze_bing</code>, <code>analyze_reddit</code> (optional)</td><td>edges from the search nodes (and <code>fetch_reddit</code> when enabled)</td></tr>
+    <tr><td><strong>final join</strong></td><td><code>synthesize</code></td><td>waits for every enabled analysis, then writes the answer</td></tr>
+  </tbody>
+</table>
+
+<p>The state carries one field per source, plus one field that all three analyzers write at the same time. That last field needs a reducer:</p>
+
+<pre><code>def merge_analyses(left: dict[str, str], right: dict[str, str]) -&gt; dict[str, str]:
+    return {**left, **right}
+
+
+class State(TypedDict):
+    question: str
+    google_results: list[dict]
+    bing_results: list[dict]
+    reddit_results: list[dict]
+    selected_urls: list[str]
+    reddit_posts: list[dict]
+    analyses: Annotated[dict[str, str], merge_analyses]
+    answer: str</code></pre>
+
+<p><strong>Why a reducer here?</strong> Three nodes in one superstep all return <code>{"analyses": {"google": ...}}</code>. Without the annotation, LangGraph refuses the concurrent write:</p>
+
+<pre><code>InvalidUpdateError: At key 'analyses': Can receive only one value per step.
+Use an Annotated key to handle multiple values.</code></pre>
+
+<p>With it, each analyzer contributes one key and the graph merges them. This is the same reducer idea as lesson 10's <code>add_messages</code>, applied to a dictionary instead of a list — and it is what makes a fan-in possible without three near-identical state fields.</p>
+
+<p>The wiring is short because the topology is in the edges, not in the node bodies:</p>
+
+<pre><code>for source in ("google", "bing", "reddit"):
+    graph.add_edge(START, f"search_{source}")
+
+graph.add_edge(
+    ["search_google", "search_bing", "search_reddit"], "select_reddit_urls"
+)
+graph.add_edge("select_reddit_urls", "fetch_reddit")
+for source in ("google", "bing", "reddit"):
+    graph.add_edge("fetch_reddit", f"analyze_{source}")
+
+graph.add_edge(
+    ["analyze_google", "analyze_bing", "analyze_reddit"], "synthesize"
+)
+graph.add_edge("synthesize", END)</code></pre>
+
+<p>The list argument is not cosmetic. It is the difference between "wait for all three" and "run whenever a predecessor finishes" — Part 3 is entirely about that difference.</p>
+
+<h2>The source layer: one interface, two providers</h2>
+
+<p>The graph never touches a search API. A provider is an object with four members:</p>
+
+<pre><code>class SourceProvider(Protocol):
+    name: str
+    def search(self, engine, question, limit=5) -&gt; list[dict]: ...
+    def reddit_search(self, question, limit=5) -&gt; list[dict]: ...
+    def reddit_threads(self, urls) -&gt; list[dict]: ...
+    def check(self) -&gt; None: ...</code></pre>
+
+<table>
+  <thead><tr><th>provider</th><th>where the data comes from</th><th>needs</th></tr></thead>
+  <tbody>
+    <tr><td><strong>snapshot</strong> (default)</td><td><code>data/*.json</code>, ranked by query overlap; deterministic</td><td>nothing — no key, no network</td></tr>
+    <tr><td><strong>brightdata</strong></td><td>SERP request for Google/Bing; Reddit discovery and comments through the datasets API</td><td><code>BRIGHTDATA_API_KEY</code> + a SERP zone</td></tr>
+  </tbody>
+</table>
+
+<p>Choose a provider by precedence: <code>--provider NAME</code>, then <code>--live</code> (BrightData shorthand), then <code>SEARCH_PROVIDER</code> in <code>.env</code>, then <code>snapshot</code>.</p>
+
+<pre><code>uv run python agent.py                      # local JSON
+uv run python agent.py --live               # BrightData
+uv run python agent.py --provider snapshot  # same as the default</code></pre>
+
+<p>Keys go in <code>.env</code> next to the script (copy <code>.env.example</code>):</p>
+
+<pre><code>DEEPSEEK_API_KEY=...
+BRIGHTDATA_API_KEY=...
+BRIGHTDATA_ZONE=your_zone_name
+REDDIT_ENABLED=false</code></pre>
+
+<p><code>REDDIT_ENABLED</code> controls the third branch: <code>false</code> (default) runs Google + Bing only; <code>true</code> adds the selector, comment fetch and Reddit analysis. <code>--check</code> reports <code>reddit disabled (REDDIT_ENABLED=false)</code> when it is off, and skips the BrightData Reddit trigger entirely.</p>
+
+<p>BrightData needs a SERP / Web Scraper API zone from <em>your</em> account; <code>ai_agent2</code> is not a default, and leaving it in place gives <code>HTTP 400: zone "ai_agent2" not found</code>. Run <code>uv run python agent.py --zones</code> to list active zones (<code>no active zones</code> means create one) and <code>uv run python agent.py --check</code> to test the key, zone and Reddit trigger without any DeepSeek calls — a 400 prints the API's own message.</p>
+
+<p>Live Reddit calls are asynchronous snapshots — trigger, poll, download — so they are slower; any provider error inside a node becomes an empty source rather than a crashed run (Part 4). The Reddit dataset ids default to BrightData's public ones and can be overridden with <code>BRIGHTDATA_REDDIT_DATASET</code> and <code>BRIGHTDATA_COMMENTS_DATASET</code>.</p>
+
+<h3>Adding another provider (Oxylabs, SerpAPI, your own index)</h3>
+
+<p>No third adapter is implemented, on purpose: the interface is the extension point. Write a class with those four members, then register it in <code>sources.py</code>:</p>
+
+<pre><code>from oxylabs_provider import OxylabsProvider
+
+PROVIDERS["oxylabs"] = OxylabsProvider</code></pre>
+
+<p>Return <code>{title, url, snippet}</code> from the two search methods and <code>{title, url, comments}</code> from <code>reddit_threads</code> (dropping URLs it does not recognize); make <code>check()</code> raise a clear error when a key is missing. Then <code>--provider oxylabs</code> works, and the graph, prompts and state do not change.</p>
+
+<h2>Part 2 — One run, two supersteps</h2>
+
+<p>A superstep is the unit of execution: every node whose incoming edges are satisfied runs in that step, and their updates merge at the end. Here is a real run with <code>REDDIT_ENABLED=true</code>:</p>
+
+<pre><code>question: Should a small support team build its agent on LangGraph or a plain tool loop?
+graph:    reference (fan-out, fan-in)
+source:   snapshot
+reddit:   on
+
+[   0.0s] search_bing          5 results
+[   0.0s] search_google        5 results
+[   0.0s] search_reddit        5 results
+[   1.6s] select_reddit_urls   3 urls
+[   1.6s] fetch_reddit         3 threads / 9 comments
+[   4.1s] analyze_bing         analyses += bing
+[   4.4s] analyze_google       analyses += google
+[   4.4s] analyze_reddit       analyses += reddit
+[   6.6s] synthesize           180 words
+
+sources: google=5 bing=5 reddit=5 | urls=3 | threads=3
+graph: bing, google, reddit | nodes=9 | 6.6s</code></pre>
+
+<p>Read the timestamps as <em>superstep boundaries</em>, not node durations. The three searches share the first, so they all report at 0.0 s. The three analyses share the step after the fetch, so they report within 0.2 s of each other. A fast node that shares a step with a slow one appears late — remember that before you attribute latency to the wrong box.</p>
+
+<p>The final line proves the reducer worked: <code>analyses</code> holds <code>bing</code>, <code>google</code> and <code>reddit</code>, merged from three concurrent writes. If one key is missing, that analyzer never ran or was skipped; if it holds a placeholder, the source returned nothing.</p>
+
+<h2>Part 3 — The join that fires early</h2>
+
+<p>With <code>REDDIT_ENABLED=true</code>, the tempting optimization is this: Google and Bing analyses do not read Reddit, so why wait for Reddit selection and fetching? Move them onto their own edges from their searches (<code>--critical</code>). The graph is cleaner. Then wire the final join the obvious way — separate edges:</p>
+
+<pre><code>for source in ("google", "bing", "reddit"):
+    graph.add_edge(f"analyze_{source}", "synthesize")</code></pre>
+
+<p>That is not a barrier when its predecessors start in different supersteps. Real trace, <code>--critical --loose-join</code>:</p>
+
+<pre><code>[   2.4s] analyze_bing         analyses += bing
+[   2.7s] analyze_google       analyses += google
+[   5.2s] synthesize           179 words     &lt;- fires with two analyses
+[   7.6s] analyze_reddit       analyses += reddit
+[   9.9s] synthesize           180 words     &lt;- fires again with all three
+...
+nodes=10 | 9.9s</code></pre>
+
+<p><code>synthesize</code> ran twice. The first answer was discarded, and the run paid for an extra DeepSeek call. The second run is the one you see, so the output looks fine — the waste is only visible in the trace.</p>
+
+<p>This is not a model quirk. A handful of nodes and a sleep reproduce it with no LLM at all: a fast branch reaches the join, which runs, then the slow branch reaches it and it runs again.</p>
+
+<pre><code>a     sees []
+b     sees []
+c     sees ['a', 'b']
+slow  sees ['a', 'b']
+d     sees ['a', 'b', 'c', 'slow']
+e     sees ['a', 'b', 'c', 'slow']        &lt;- first fire, d is missing
+e     sees ['a', 'b', 'c', 'slow', 'd', 'e']  &lt;- second fire</code></pre>
+
+<p>The fix is one argument: pass the predecessors as a list, which LangGraph treats as an explicit join.</p>
+
+<pre><code>graph.add_edge(
+    ["analyze_google", "analyze_bing", "analyze_reddit"], "synthesize"
+)</code></pre>
+
+<p><strong>The rule:</strong> a fan-in that must see every branch is a list edge, or a dedicated join node with a counter you can assert on. Separate edges do not create a global barrier across supersteps. And the failure is silent: no exception, just an extra call and a wrong intermediate answer.</p>
+
+<h2>Part 4 — Failure is a branch too</h2>
+
+<p>A fan-out multiplies your exposure: each provider is another chance to time out. The graph should still finish. <code>--fail bing</code> injects an empty result for one source (trace with <code>REDDIT_ENABLED=true</code>):</p>
+
+<pre><code>[   0.0s] search_bing          0 results
+[   1.6s] analyze_bing         analyses += bing
+...
+**Missing/empty sources:** Bing returned no results.
+sources: google=5 bing=0 reddit=5 | urls=3 | threads=3 | nodes=9 | 6.3s</code></pre>
+
+<p>Three things make that work. The source node returns <code>[]</code> instead of raising. The analyzer sees an empty payload and writes a placeholder without calling the model. Synthesis is told to name any missing source. The join completes, and the answer is honest about its evidence.</p>
+
+<p>Raising inside a node would fail the run, so every other branch's work would be lost with it. Normalize failure at the boundary — empty data plus a recorded gap — and let the graph decide what an answer with two sources is worth.</p>
+
+<h2>Part 5 — More parallel is not automatically faster</h2>
+
+<p>With Reddit enabled, the critical-path shape looks faster: Google and Bing analyses finish at ~2.3 s instead of ~3.5 s. But the final answer still waits for the Reddit branch:</p>
+
+<pre><code>[   1.4s] select_reddit_urls   3 urls
+[   2.1s] analyze_google       analyses += google
+[   2.3s] analyze_bing         analyses += bing
+[   2.3s] fetch_reddit         3 threads / 9 comments
+[   4.7s] analyze_reddit       analyses += reddit
+[   6.7s] synthesize           167 words</code></pre>
+
+<figure>
+  <img src="../assets/examples/0011-langgraph-advanced/graph-critical.png" alt="Critical-path LangGraph: search_bing and search_google feed their analyses directly, while Reddit goes through select and fetch" width="560">
+  <figcaption>The critical-path shape: Google and Bing leave the Reddit branch. The final join is a list edge, or <code>synthesize</code> fires early.</figcaption>
+</figure>
+
+<p>In our runs the reference shape took 5.9–6.6 s and the critical-path shape 6.7 s. No speedup — because Reddit was the critical path. Moving Google and Bing earlier cannot shorten a run whose last branch is Reddit selection plus fetch plus Reddit analysis. The restructuring is still correct (those dependencies genuinely do not exist), but the stopwatch is the judge.</p>
+
+<table>
+  <thead><tr><th>situation</th><th>does fan-out help?</th></tr></thead>
+  <tbody>
+    <tr><td>independent, I/O-bound branches (three searches, two stores)</td><td>yes — that is the case it was built for</td></tr>
+    <tr><td>branches that share a rate limit or a connection pool</td><td>not necessarily — you moved the queue, not the work</td></tr>
+    <tr><td>one slow branch and two fast ones</td><td>only if you shorten the slow branch; the join waits for it</td></tr>
+    <tr><td>cheap local functions</td><td>no — the scheduling overhead is the cost</td></tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <span class="label">Interview · "How do you make an agent faster?"</span>
+  "I find the critical path first. Fan-out helps when the branches are independent and I/O-bound, but the join waits for the slowest one, so moving fast branches earlier buys nothing. In our research agent, restructuring Google and Bing off the Reddit branch looked right and measured the same — Reddit was still the long pole. The other half is correctness: with separate edges the final synthesis fired twice with partial state, so fan-ins that need every branch use an explicit list edge. I'd rather measure one run than add arrows."
+</div>
+
+<h2>Check yourself</h2>
+
+<div class="quiz">
+<script type="application/json">
+{
+  "questions": [
+    {
+      "q": "Three edges leave START for three search nodes. What happens?",
+      "options": [
+        "They run one after another in edge order",
+        "They run in the same superstep, concurrently",
+        "Only the first edge is executed",
+        "LangGraph rejects multiple START edges"
+      ],
+      "correct": 1,
+      "explain": "Nodes whose incoming edges are satisfied in the same step run together. The three searches complete in one superstep; that is the fan-out."
+    },
+    {
+      "q": "Why does the analyses field need a reducer?",
+      "options": [
+        "To sort the three analysis strings",
+        "To keep the longest analysis only",
+        "To stop the model from writing prose",
+        "Because three parallel nodes write one key"
+      ],
+      "correct": 3,
+      "explain": "All three analyzers return {\"analyses\": {...}} in the same step. Without Annotated[dict, merge], LangGraph raises InvalidUpdateError for the concurrent write."
+    },
+    {
+      "q": "What did separate edges to synthesize cause in the critical graph?",
+      "options": [
+        "It ran twice, once with partial analyses",
+        "It waited correctly for all three branches",
+        "It never ran because of a cycle",
+        "It ran once but dropped the Reddit key"
+      ],
+      "correct": 0,
+      "explain": "The trace shows synthesize at 5.2s with two analyses, then again at 9.9s with all three. Separate edges from different supersteps are not a barrier."
+    },
+    {
+      "q": "Which wiring makes synthesize wait for all three analyses?",
+      "options": [
+        "Three add_edge calls, one per analyzer",
+        "A single add_edge from the first analyzer",
+        "add_edge([all three analyzers], \"synthesize\")",
+        "A conditional edge that returns synthesize"
+      ],
+      "correct": 2,
+      "explain": "A list argument is an explicit join. Separate edges describe possible paths and can fire the target as each predecessor's superstep completes."
+    },
+    {
+      "q": "Why was the critical-path graph not faster in our run?",
+      "options": [
+        "DeepSeek ignored the parallel requests",
+        "The Reddit branch was still the long pole",
+        "The reducer serialized every node",
+        "Fan-out is never faster than a chain"
+      ],
+      "correct": 1,
+      "explain": "Moving Google and Bing earlier cannot shorten a run that waits for Reddit selection, fetch and analysis. Fan-out only helps when it shortens the critical path."
+    },
+    {
+      "q": "What should a source node do when its provider fails?",
+      "options": [
+        "Raise so the graph stops immediately",
+        "Retry until the provider recovers",
+        "Return the model's guess instead",
+        "Return empty results and record the gap"
+      ],
+      "correct": 3,
+      "explain": "An exception fails the whole superstep and discards the other branches' work. Empty data plus an explicit missing-source note lets the join finish honestly."
+    },
+    {
+      "q": "Why can a join fire before a slow branch finishes?",
+      "options": [
+        "Separate edges from different supersteps are not a barrier",
+        "LangGraph runs nodes in alphabetical order",
+        "The reducer returns before the nodes finish",
+        "The checkpointer replays the last step"
+      ],
+      "correct": 0,
+      "explain": "A target with separate incoming edges fires when its reachable predecessors finish; a branch that starts a superstep later does not block it. A list edge is the explicit barrier."
+    }
+  ]
+}
+</script>
+</div>
+
+<h2>Primary sources for this lesson</h2>
+<p><a href="https://langchain-ai.github.io/langgraph/">LangGraph documentation</a> — the graph API pages for nodes, edges, reducers and streaming; the <a href="https://docs.langchain.com/oss/python/langgraph/errors/INVALID_CONCURRENT_GRAPH_UPDATE">concurrent-update error page</a> explains the reducer requirement in Part 1. Read the concepts, then run the lab: the join behavior in Part 3 is visible in a trace long before it is obvious in prose.</p>
+<p>On the LangChain side: <a href="https://docs.langchain.com/oss/python/langchain/models">Models and structured output</a> for the Reddit URL selector, and the <a href="https://docs.langchain.com/oss/python/integrations/chat/deepseek">ChatDeepSeek integration page</a> for the model handle.</p>
+
+<h2>What's next</h2>
+<p><a href="0012-python-libraries-for-ai.html">Lesson 12</a> is the library map: the packages every AI engineer should know, how each is used, and the ones a complete stack needs that such lists usually miss. The graph you just built is the skeleton those libraries plug into.</p>
+
+<div class="footer-nav">
+  <div class="ask"><strong>Synthesis ignoring a branch?</strong> Print the <code>analyses</code> dict from the final state first — a missing key means the node never ran, a placeholder means the source was empty, and a stale value means the join fired early. Those are three different bugs with three different fixes.</div>
+  <div class="links">
+    <a href="0010-langgraph.html">← Lesson 10</a>
+    <a href="../reference/skill-map.html">Skill Map &amp; Glossary</a>
+    <a href="../assets/examples/0011-langgraph-advanced/index.html">Example page</a>
+  </div>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</article>
+</body>
+</html>

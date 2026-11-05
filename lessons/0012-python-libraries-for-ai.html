@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 12 — Python Libraries Every AI Engineer Should Know</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<article class="page">
+
+<p class="meta">Lesson 12 of the AI Engineering course · ~50 min · Reference-style · Prereq: <a href="0001-ai-engineering-landscape-2026.html">Lesson 1</a> + working Python · <a href="../reference/skill-map.html">Skill Map →</a></p>
+
+<h1>Python Libraries Every AI Engineer Should Know</h1>
+
+<p class="lede">An AI application is not one framework. It is a stack of small contracts: data comes in, gets validated, is stored, is sent to a model, is traced, and is tested. The entries below cover that stack; the second half of this lesson adds the packages the usual list misses — agents, MCP, evals, local embeddings, and the plumbing that keeps flaky APIs from taking your service down.</p>
+
+<div class="callout win">
+  <span class="label">Your win this lesson</span>
+  You'll leave with a layer-by-layer map: what each library is for, the shortest useful way to use it, and the moment it earns its place. You'll also get a gap table of 16 entries the usual library list omits — the packages a complete stack needs, from agents and MCP to evals and local embeddings.
+</div>
+
+<h2>The map, before the details</h2>
+
+<table>
+  <thead><tr><th>layer</th><th>entries</th><th>the question it answers</th></tr></thead>
+  <tbody>
+    <tr><td><strong>contracts &amp; config</strong></td><td>Pydantic, pydantic-settings, python-dotenv</td><td>what shape is this data, and is the app configured correctly?</td></tr>
+    <tr><td><strong>service &amp; jobs</strong></td><td>FastAPI, Celery</td><td>how does a request enter, and what happens when work is slow?</td></tr>
+    <tr><td><strong>data</strong></td><td>psycopg, pymongo, SQLAlchemy, Alembic, pandas</td><td>where does state live, and how does it change safely?</td></tr>
+    <tr><td><strong>model access</strong></td><td>OpenAI / Anthropic / Google SDKs, Ollama, Instructor</td><td>how do I call a model, and how do I trust its output?</td></tr>
+    <tr><td><strong>orchestration</strong></td><td>LangChain, LlamaIndex</td><td>how do I compose prompts, tools, and retrieval?</td></tr>
+    <tr><td><strong>retrieval</strong></td><td>Pinecone, Weaviate, Qdrant, pgvector</td><td>where do embeddings live and how are they searched?</td></tr>
+    <tr><td><strong>observability</strong></td><td>Langfuse, LangSmith</td><td>what did the model see, cost, and return?</td></tr>
+    <tr><td><strong>optimization</strong></td><td>DSPy</td><td>can the prompt be found instead of hand-written?</td></tr>
+    <tr><td><strong>documents</strong></td><td>PyMuPDF, pypdf, Textract, Azure Document Intelligence</td><td>how do I turn files into text and structure?</td></tr>
+    <tr><td><strong>prompts</strong></td><td>Jinja2</td><td>how do I render prompts without f-string sprawl?</td></tr>
+  </tbody>
+</table>
+
+<h2>Part 1 — Contracts and configuration</h2>
+
+<h3>Pydantic</h3>
+<p><strong>What:</strong> runtime validation built from type hints. A <code>BaseModel</code> declares the shape; invalid data raises before it reaches your logic. In AI work this is the boundary between messy model output and the rest of your program.</p>
+<pre><code>from pydantic import BaseModel, Field
+
+class Ticket(BaseModel):
+    order_id: str
+    urgency: int = Field(ge=1, le=5)
+
+ticket = Ticket.model_validate_json(llm_output)</code></pre>
+<p><strong>Use when:</strong> any untrusted data enters — an HTTP body, an LLM's JSON, a config file. <strong>Don't use it</strong> as a dataframe replacement or for per-row validation of a million rows; that is pandas or a database constraint.</p>
+
+<h3>pydantic-settings</h3>
+<p><strong>What:</strong> Pydantic's <code>BaseSettings</code> moved into its own package in Pydantic v2. It reads environment variables (and <code>.env</code>) into a typed settings object, so a missing key fails at startup instead of at the first request.</p>
+<pre><code>from pydantic_settings import BaseSettings, SettingsConfigDict
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env")
+    deepseek_api_key: str
+    database_url: str
+
+settings = Settings()   # raises if a required value is missing</code></pre>
+<p><strong>Use when:</strong> the app has more than two settings, or a wrong value should stop the process. <strong>Don't use it</strong> for per-request values; settings are process-level.</p>
+
+<h3>python-dotenv</h3>
+<p><strong>What:</strong> loads <code>KEY=VALUE</code> pairs from a local <code>.env</code> file into the environment. It is a convenience for development, not a secret manager.</p>
+<pre><code>from dotenv import load_dotenv
+load_dotenv()   # existing environment variables win</code></pre>
+<p><strong>Use when:</strong> local development with API keys you must not commit. <strong>Don't use it</strong> as production security: deployed services should get secrets from the platform's secret store. <code>pydantic-settings</code> can read <code>.env</code> itself, so you often need only one of the two in a service.</p>
+
+<h2>Part 2 — Service and background work</h2>
+
+<h3>FastAPI (+ Uvicorn)</h3>
+<p><strong>What:</strong> an HTTP framework whose request and response models are Pydantic, which gives you validation, serialization, and OpenAPI docs for free. Uvicorn is the ASGI server that actually runs it.</p>
+<pre><code>from fastapi import FastAPI
+
+app = FastAPI()
+
+@app.post("/tickets")
+def create_ticket(ticket: Ticket) -&gt; Ticket:
+    return ticket</code></pre>
+<p><strong>Use when:</strong> the product needs an HTTP API, especially one that streams or calls models asynchronously. <strong>Don't use it</strong> to hide slow work inside a request; a 40-second chain belongs in a queue (next entry).</p>
+
+<h3>Celery</h3>
+<p><strong>What:</strong> a task queue. Your endpoint writes a job and returns; worker processes pick the job up, retry it, and scale independently. It needs a broker (Redis or RabbitMQ) and usually a result backend.</p>
+<pre><code>@celery.task(bind=True, max_retries=3)
+def run_agent(self, ticket_id: str) -&gt; None:
+    ...   # multiple model calls, tools, writes</code></pre>
+<p><strong>Use when:</strong> work outlives the request, can take seconds to minutes, or must survive a deploy. <strong>Don't use it</strong> for a 200 ms task; FastAPI's <code>BackgroundTasks</code> is enough, and Celery adds an operational component.</p>
+
+<h2>Part 3 — Data</h2>
+
+<h3>psycopg (PostgreSQL)</h3>
+<p><strong>What:</strong> the modern PostgreSQL driver for Python (psycopg 3). It gives you direct SQL, transactions, and access to Postgres-only features such as <code>COPY</code> and pgvector.</p>
+<pre><code>import psycopg
+
+with psycopg.connect(dsn) as conn:
+    conn.execute("INSERT INTO tickets (id, body) VALUES (%s, %s)", (tid, body))</code></pre>
+<p><strong>Use when:</strong> you want SQL you can read, bulk operations, or an extension the ORM does not model well. <strong>Don't use it</strong> to hand-roll every query when an ORM would keep the schema coherent.</p>
+
+<h3>pymongo (MongoDB)</h3>
+<p><strong>What:</strong> the official MongoDB driver. Documents map naturally to event payloads and model outputs whose shape changes.</p>
+<pre><code>collection.insert_one({"ticket_id": tid, "route": "billing", "raw": payload})</code></pre>
+<p><strong>Use when:</strong> the data is document-shaped and the schema is still moving. <strong>Don't use it</strong> when you need joins, strong relational constraints, or multi-row transactions as the default path.</p>
+
+<h3>SQLAlchemy</h3>
+<p><strong>What:</strong> Python's standard SQL toolkit and ORM. Models are classes; sessions manage transactions; the same code can target Postgres, SQLite, or MySQL.</p>
+<pre><code>class Ticket(Base):
+    __tablename__ = "tickets"
+    id: Mapped[str] = mapped_column(primary_key=True)
+    body: Mapped[str]
+
+session.add(Ticket(id=tid, body=body))
+session.commit()</code></pre>
+<p><strong>Use when:</strong> the app has real relational models and more than one developer. <strong>Don't use it</strong> to hide a query you do not understand; <code>text()</code> and raw SQL are legitimate escape hatches.</p>
+
+<h3>Alembic</h3>
+<p><strong>What:</strong> migration control for SQLAlchemy schemas. You generate a revision from model changes, review it, and apply it — in order, in every environment.</p>
+<pre><code>alembic revision --autogenerate -m "add ticket route"
+alembic upgrade head</code></pre>
+<p><strong>Use when:</strong> the schema changes after the first deploy. <strong>Don't use it</strong> as a substitute for backups, and always review autogenerated migrations before production.</p>
+
+<h3>pandas</h3>
+<p><strong>What:</strong> tabular data in memory. For AI engineering its daily use is evaluation sets, CSV/JSONL inspection, and joining model outputs with labels.</p>
+<pre><code>df = pd.read_json("evals.jsonl", lines=True)
+df.groupby("route")["passed"].mean()</code></pre>
+<p><strong>Use when:</strong> exploring a dataset or computing a metric over many rows. <strong>Don't use it</strong> in the request path for a single record, and don't treat it as a database.</p>
+
+<h2>Part 4 — Model access</h2>
+
+<h3>Provider SDKs: OpenAI, Anthropic, Google, Ollama</h3>
+<p><strong>What:</strong> the official clients. They expose the parts the quickstart hides: tool calling, structured output, vision, image generation, caching, and streaming. Ollama runs open models locally behind a similar chat interface.</p>
+<pre><code>from openai import OpenAI
+
+client = OpenAI()
+reply = client.chat.completions.create(
+    model="...", messages=[{"role": "user", "content": "..."}]
+)</code></pre>
+<p><strong>Use when:</strong> you need a provider-specific capability, or you are learning what the frameworks abstract. <strong>Don't</strong> learn four SDKs on day one; go deep on one, then compare. Read the API reference beyond the first page — that is where tools and structured output live.</p>
+
+<h3>Instructor</h3>
+<p><strong>What:</strong> structured output on top of provider clients. You pass a Pydantic model as <code>response_model</code>; Instructor validates the result and can retry when the model returns something malformed. It is model-agnostic.</p>
+<pre><code>from instructor import from_openai
+
+client = from_openai(OpenAI())
+ticket = client.chat.completions.create(
+    model="...", response_model=Ticket, messages=[...]
+)</code></pre>
+<p><strong>Use when:</strong> several providers must return the same typed object, or you want validation-driven retries. <strong>Don't use it</strong> if your provider's native structured output already meets the contract; one less dependency is a feature.</p>
+
+<h2>Part 5 — Orchestration</h2>
+
+<h3>LangChain</h3>
+<p><strong>What:</strong> a toolkit of model, message, tool, and retriever abstractions with integrations for most providers and stores. Modern LangChain sits on top of LangGraph and uses <code>create_agent</code> for the agent harness.</p>
+<pre><code>from langchain_deepseek import ChatDeepSeek
+
+model = ChatDeepSeek(model="deepseek-flash", temperature=0)</code></pre>
+<p><strong>Use when:</strong> you want provider-neutral messages/tools and ready-made integrations, or your team already uses it. <strong>Don't use it</strong> before you understand the raw loop; abstractions are harder to debug when you cannot see the call underneath. This course uses it after lessons 2–3 for exactly that reason.</p>
+
+<h3>LlamaIndex</h3>
+<p><strong>What:</strong> a data framework for RAG: readers, node parsers, indexes, retrievers, query engines, and response synthesizers.</p>
+<pre><code>index = VectorStoreIndex.from_documents(documents)
+engine = index.as_query_engine()
+answer = engine.query("What is the refund window?")</code></pre>
+<p><strong>Use when:</strong> the project is document-heavy and you want its ingestion/query pipeline out of the box. <strong>Don't use it</strong> for a single query over one table; a direct store call is clearer.</p>
+
+<h2>Part 6 — Vector databases</h2>
+<p><strong>What:</strong> stores for embeddings plus similarity search, usually with metadata filters. The RAG pipeline writes chunks and reads the nearest ones.</p>
+
+<table>
+  <thead><tr><th>store</th><th>shape</th><th>choose it when</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Pinecone</strong></td><td>managed, serverless</td><td>you want no index operations and can pay for managed service</td></tr>
+    <tr><td><strong>Weaviate</strong></td><td>self-host or cloud, hybrid search</td><td>you need hybrid/BM25 + vector in one engine and a schema</td></tr>
+    <tr><td><strong>Qdrant</strong></td><td>Rust service, rich filters</td><td>filtered search and self-hosting are first-class requirements</td></tr>
+    <tr><td><strong>pgvector</strong></td><td>Postgres extension</td><td>you already run Postgres and want one database, not two</td></tr>
+  </tbody>
+</table>
+
+<pre><code>-- pgvector: one extension, one table
+CREATE EXTENSION IF NOT EXISTS vector;
+SELECT id FROM chunks ORDER BY embedding &lt;=&gt; %s LIMIT 6;</code></pre>
+
+<p><strong>Use when:</strong> retrieval needs a dedicated index (scale, filters, hybrid search). <strong>Don't</strong> add one before measuring: pgvector or an embedded store often carries a small corpus, and a second database is a second backup/ops surface.</p>
+
+<h2>Part 7 — Observability</h2>
+
+<h3>Langfuse and LangSmith</h3>
+<p><strong>What:</strong> tracing for LLM applications. Every generation becomes a span with prompt, response, model, latency, token counts, and cost; you can attach user/session metadata and inspect a bad run end to end. Langfuse is open source and self-hostable; LangSmith is the LangChain-native platform.</p>
+<pre><code># Langfuse (decorator style)
+from langfuse import observe
+
+@observe()
+def answer(question: str) -&gt; str:
+    ...</code></pre>
+<p><strong>Use when:</strong> any model call reaches a real user. <strong>Don't</strong> log raw prompts and responses containing PII or secrets without a policy; redact at the SDK boundary. Pick one — two tracers double the work.</p>
+
+<h2>Part 8 — Prompt optimization</h2>
+
+<h3>DSPy</h3>
+<p><strong>What:</strong> "programming, not prompting." You declare signatures and modules, provide a metric and examples, and an optimizer searches for better prompts or weights instead of you hand-tuning strings.</p>
+<pre><code>class Answer(dspy.Signature):
+    question: str = dspy.InputField()
+    answer: str = dspy.OutputField()
+
+program = dspy.ChainOfThought(Answer)
+optimized = dspy.BootstrapFewShot(metric=metric).compile(program, trainset=examples)</code></pre>
+<p><strong>Use when:</strong> you already have a metric and a dataset, and prompt tuning has become the bottleneck. <strong>Don't use it</strong> on day one; without evals, the optimizer has nothing to optimize against.</p>
+
+<h2>Part 9 — Documents</h2>
+
+<h3>PyMuPDF and pypdf</h3>
+<p><strong>What:</strong> PDF text extraction. PyMuPDF (<code>fitz</code>) is fast and exposes layout blocks; pypdf is pure Python and simple. Both are local libraries.</p>
+<pre><code>import fitz
+doc = fitz.open("policy.pdf")
+text = "\n".join(page.get_text() for page in doc)</code></pre>
+<p><strong>Use when:</strong> the PDFs are born-digital and you need text fast. <strong>Don't</strong> expect either to reconstruct complex tables or scanned pages; benchmark both on your documents.</p>
+
+<h3>Amazon Textract and Azure Document Intelligence</h3>
+<p><strong>What:</strong> managed OCR/document services that return text, tables, forms, and layout for scans and messy documents. You call them through their SDKs/APIs and pay per page.</p>
+<pre><code>import boto3
+textract = boto3.client("textract")
+result = textract.detect_document_text(Document={"Bytes": pdf_bytes})</code></pre>
+<p><strong>Use when:</strong> the documents are scanned, table-heavy, or the local parsers lose structure that matters. <strong>Don't</strong> reach for them before trying a local parser; managed OCR adds latency, cost, and a data-residency question.</p>
+
+<h2>Part 10 — Prompt templates</h2>
+
+<h3>Jinja2</h3>
+<p><strong>What:</strong> a mature templating engine. Prompts become templates with variables, conditionals, loops, and filters instead of a pile of f-strings.</p>
+<pre><code>from jinja2 import Environment
+
+template = Environment().from_string(
+    "Answer {{ customer }} using these facts:\n{% for f in facts %}- {{ f }}\n{% endfor %}"
+)
+prompt = template.render(customer="Dana", facts=facts)</code></pre>
+<p><strong>Use when:</strong> prompts are reused, versioned, or assembled from context. <strong>Don't</strong> render templates from untrusted input — Jinja2 is powerful enough to be an injection surface; keep templates in your repo.</p>
+
+<h2>Part 11 — What the usual list misses</h2>
+
+<p>The entries above are a strong <em>backend</em> stack. They are weaker on the parts that define AI engineering in 2026: stateful agents, a standard tool protocol, evaluation, local embeddings, and the small plumbing that keeps provider calls alive. These are the gaps a production stack needs — several are used in this course.</p>
+
+<table>
+  <thead><tr><th>library</th><th>the gap it fills</th><th>verdict</th></tr></thead>
+  <tbody>
+    <tr><td><strong>LangGraph</strong></td><td>stateful agent graphs, checkpoints, human-in-the-loop, explicit routing</td><td>add now — <a href="0010-langgraph.html">lessons 10</a>–<a href="0011-langgraph-advanced.html">11</a></td></tr>
+    <tr><td><strong>mcp</strong></td><td>one protocol for tools/resources/prompts across processes and clients</td><td>add now — <a href="0009-mcp.html">lesson 9</a></td></tr>
+    <tr><td><strong>LanceDB</strong></td><td>embedded vector + BM25 full-text search, no server</td><td>add now — <a href="0007-rag-service.html">lesson 7</a></td></tr>
+    <tr><td><strong>Chroma</strong></td><td>the simplest embedded vector store for prototypes</td><td>know it</td></tr>
+    <tr><td><strong>Docling</strong></td><td>layout-aware document parsing plus <code>HybridChunker</code> for RAG</td><td>add now — <a href="0007-rag-service.html">lesson 7</a></td></tr>
+    <tr><td><strong>Unstructured</strong></td><td>one API for PDF, DOCX, HTML, PPTX, email; partition by element</td><td>alternative to Docling</td></tr>
+    <tr><td><strong>Ragas</strong></td><td>RAG metrics: faithfulness, answer relevancy, context precision/recall</td><td>add when you ship RAG</td></tr>
+    <tr><td><strong>DeepEval</strong></td><td>pytest-style LLM evaluation with assertions and reports</td><td>add when evals enter CI — <a href="0005-your-first-evals.html">lesson 5</a></td></tr>
+    <tr><td><strong>sentence-transformers</strong></td><td>local embedding models and cross-encoder rerankers</td><td>add for private/offline retrieval</td></tr>
+    <tr><td><strong>tiktoken</strong></td><td>token counting and context-budget checks before the call</td><td>add now</td></tr>
+    <tr><td><strong>httpx</strong></td><td>async HTTP with explicit timeouts; the client under many SDKs</td><td>add now</td></tr>
+    <tr><td><strong>tenacity</strong></td><td>retries with exponential backoff and jitter for 429/5xx</td><td>add now</td></tr>
+    <tr><td><strong>numpy</strong></td><td>vector math, cosine similarity, cheap numeric work</td><td>add now</td></tr>
+    <tr><td><strong>scikit-learn</strong></td><td>metrics, clustering, train/test splits for evaluation work</td><td>know it</td></tr>
+    <tr><td><strong>pytest + pytest-asyncio</strong></td><td>tests for sync and async pipelines; a natural runner for an eval suite</td><td>add now</td></tr>
+    <tr><td><strong>redis</strong></td><td>cache, rate limits, and the usual Celery broker</td><td>add when you scale</td></tr>
+  </tbody>
+</table>
+
+<p><strong>Tooling, not libraries:</strong> <code>uv</code> (one lockfile, one environment per project), <code>ruff</code> (lint and format), and <code>mypy</code> (types) are not AI packages, but they are the difference between a demo and a repository someone else can run. This course uses <code>uv</code> for every lab.</p>
+
+<p><strong>On the radar, not on the list:</strong> Playwright or trafilatura for web extraction when an agent must read pages; Guardrails or LLM Guard for input/output policy; OpenTelemetry if your tracing must cross service boundaries; Pydantic AI, the Microsoft Agent Framework, and vendor agent SDKs when a job specifically demands them. Learn them against a project, not as collectibles.</p>
+
+<h2>Part 12 — What to install, in order</h2>
+
+<table>
+  <thead><tr><th>project</th><th>start with</th><th>add when it hurts</th></tr></thead>
+  <tbody>
+    <tr><td>a chat endpoint</td><td>provider SDK, Pydantic, FastAPI, Uvicorn, python-dotenv</td><td>httpx + tenacity (timeouts/retries), Langfuse (traces)</td></tr>
+    <tr><td>a RAG service</td><td>Docling or PyMuPDF, sentence-transformers or an embedding API, LanceDB or pgvector</td><td>Ragas/DeepEval, a reranker, a managed vector store</td></tr>
+    <tr><td>an agent</td><td>LangGraph + the raw tool loop, MCP if tools cross processes</td><td>Celery/Redis, human-approval gates, checkpoints in Postgres</td></tr>
+    <tr><td>a production service</td><td>SQLAlchemy + Alembic, pytest, structured logging</td><td>Celery, Redis, OpenTelemetry, a secret manager</td></tr>
+    <tr><td>prompt tuning</td><td>an eval set and a metric</td><td>DSPy once the metric is stable</td></tr>
+  </tbody>
+</table>
+
+<p><strong>The honest rule:</strong> every dependency is a liability you operate. Add a library when a measured problem demands it, not because a stack list has a slot for it. The entries above are a vocabulary; your project decides which sentences to use.</p>
+
+<h2>Check yourself</h2>
+
+<div class="quiz">
+<script type="application/json">
+{
+  "questions": [
+    {
+      "q": "Which library validates an LLM's JSON into a typed object before your code uses it?",
+      "options": [
+        "pandas",
+        "Pydantic",
+        "Celery",
+        "Jinja2"
+      ],
+      "correct": 1,
+      "explain": "BaseModel plus model_validate_json turns untrusted output into a checked object. pandas is for tabular analysis, Celery for queues, Jinja2 for templates."
+    },
+    {
+      "q": "When is Celery the right choice over FastAPI BackgroundTasks?",
+      "options": [
+        "The task must finish before the response",
+        "The task is short and CPU-bound",
+        "You need request-body validation",
+        "Work must outlive the request and scale on workers"
+      ],
+      "correct": 3,
+      "explain": "Celery adds a broker and workers, which pays off when jobs are long, retryable, and must survive a deploy. BackgroundTasks is enough for short, best-effort work."
+    },
+    {
+      "q": "Which vector store runs embedded in your process with no server?",
+      "options": [
+        "Pinecone",
+        "Weaviate",
+        "LanceDB",
+        "pgvector"
+      ],
+      "correct": 2,
+      "explain": "LanceDB is embedded (and adds BM25 full-text search). Pinecone is managed, Weaviate is a service, and pgvector needs Postgres."
+    },
+    {
+      "q": "What does pydantic-settings add over reading os.getenv directly?",
+      "options": [
+        "Typed, validated config at startup",
+        "Automatic retries with backoff",
+        "A relational ORM and migrations",
+        "Prompt templating with loops"
+      ],
+      "correct": 0,
+      "explain": "BaseSettings parses environment values into typed fields, so a missing key or malformed URL fails at boot. Retries are tenacity, ORM is SQLAlchemy, templates are Jinja2."
+    },
+    {
+      "q": "Which library adds retries with exponential backoff for provider 429s?",
+      "options": [
+        "tiktoken",
+        "httpx",
+        "tenacity",
+        "Alembic"
+      ],
+      "correct": 2,
+      "explain": "tenacity wraps a call with stop/wait policies. httpx is the HTTP client, tiktoken counts tokens, Alembic manages schema migrations."
+    },
+    {
+      "q": "Which pair covers local embeddings and cross-encoder reranking?",
+      "options": [
+        "pypdf + Jinja2",
+        "sentence-transformers + its CrossEncoder",
+        "Ragas + DeepEval",
+        "numpy + pandas"
+      ],
+      "correct": 1,
+      "explain": "sentence-transformers provides SentenceTransformer for embeddings and CrossEncoder for reranking. Ragas/DeepEval evaluate, pypdf parses, and numpy/pandas are not models."
+    },
+    {
+      "q": "Which gap matters most when the agent must keep state across steps?",
+      "options": [
+        "LangGraph",
+        "Alembic",
+        "pypdf",
+        "Weaviate"
+      ],
+      "correct": 0,
+      "explain": "LangGraph makes state, routing, and checkpoints explicit, so a run can pause and resume. Alembic is migrations, pypdf is PDF text, Weaviate is a vector store."
+    }
+  ]
+}
+</script>
+</div>
+
+<h2>Primary sources for this lesson</h2>
+<p>Each entry links to its official docs, which are the primary source for that library. Start with <a href="https://docs.pydantic.dev/">Pydantic</a>, <a href="https://fastapi.tiangolo.com/">FastAPI</a>, <a href="https://docs.sqlalchemy.org/">SQLAlchemy</a>, and <a href="https://langchain-ai.github.io/langgraph/">LangGraph</a>; those four cover most of the daily surface. For the retrieval layer, read <a href="https://github.com/pgvector/pgvector">pgvector</a> and <a href="https://lancedb.github.io/lancedb/">LanceDB</a>; for evaluation, <a href="https://docs.ragas.io/">Ragas</a> and <a href="https://docs.confident-ai.com/">DeepEval</a>.</p>
+<p>Provider references: <a href="https://platform.openai.com/docs">OpenAI</a>, <a href="https://docs.anthropic.com">Anthropic</a>, <a href="https://ai.google.dev/gemini-api/docs">Google Gemini</a>, <a href="https://docs.ollama.com/">Ollama</a>. Read the tool-calling and structured-output pages, not only the quickstart — that is where the capabilities that change your architecture live.</p>
+<p>The course labs that turn these into practice: <a href="0002-your-first-llm-api-call.html">lesson 2</a> (provider + Pydantic), <a href="0003-function-calling.html">lesson 3</a> (tool loop), <a href="0005-your-first-evals.html">lesson 5</a> (evals), <a href="0007-rag-service.html">lesson 7</a> (Docling + LanceDB), <a href="0009-mcp.html">lesson 9</a> (MCP), and <a href="0010-langgraph.html">lessons 10</a>–<a href="0011-langgraph-advanced.html">11</a> (LangGraph).</p>
+
+<h2>What's next</h2>
+<p><a href="0013-pydantic.html">Lesson 13</a> starts with the contract layer: Pydantic models, validators, settings, and the schema behind structured output. After that, lessons 14–16 put a few of these packages to work — a local model, the coding workflow, a delivery pipeline — because knowing a library exists is the cheap half.</p>
+
+<div class="footer-nav">
+  <div class="ask"><strong>Not sure which of two libraries you need?</strong> Name the constraint that hurts: latency, cost, schema churn, ops burden, or a missing capability. The right answer usually falls out of the constraint, not the popularity ranking.</div>
+  <div class="links">
+    <a href="0011-langgraph-advanced.html">← Lesson 11</a>
+    <a href="../reference/skill-map.html">Skill Map &amp; Glossary</a>
+    <a href="0001-ai-engineering-landscape-2026.html">Lesson 1</a>
+  </div>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</article>
+</body>
+</html>

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Example 0015 - Document Copilot starter repo</title>
+<link rel="stylesheet" href="../../course.css">
+</head>
+<body>
+<article class="page">
+
+<p class="meta">Example 0015 · Companion to <a href="../../../lessons/0015-ai-coding.html">Lesson 15</a> · <a href="README.md">README</a></p>
+
+<h1>Document Copilot — the starter repo</h1>
+
+<p class="lede">An internal AI chatbot for analysts: ask a corpus of documents in plain English and get sourced answers. This is the <strong>client brief and skeleton</strong>, not a finished application — the backend and frontend are intentionally empty so the lesson's workflow is the exercise. It is copied into the course from <code>daveebbelaar/document-copilot</code>.</p>
+
+<h2>What is in the tree</h2>
+<table>
+  <thead><tr><th>path</th><th>role</th></tr></thead>
+  <tbody>
+    <tr><td><a href="AGENTS.md"><code>AGENTS.md</code></a></td><td>repo-wide agent rules — read first</td></tr>
+    <tr><td><a href="docs/client-brief.md"><code>docs/client-brief.md</code></a></td><td>the client one-pager: users, outcomes, constraints</td></tr>
+    <tr><td><a href="docs/architecture.md"><code>docs/architecture.md</code></a></td><td>the proposed stack, data model, retrieval and deployment shape</td></tr>
+    <tr><td><a href="backend/AGENTS.md"><code>backend/AGENTS.md</code></a></td><td>FastAPI/Python conventions and commands</td></tr>
+    <tr><td><a href="frontend/AGENTS.md"><code>frontend/AGENTS.md</code></a></td><td>React/Vite/TypeScript conventions and commands</td></tr>
+    <tr><td><a href="backend/.env.example"><code>backend/.env.example</code></a></td><td>backend environment variables</td></tr>
+    <tr><td><a href="frontend/.env.example"><code>frontend/.env.example</code></a></td><td>frontend environment variables</td></tr>
+    <tr><td><a href="data/download.py"><code>data/download.py</code></a></td><td>standalone SEC EDGAR sample downloader (stdlib only)</td></tr>
+    <tr><td><a href="docs/guides/supabase-setup.md"><code>docs/guides/</code></a></td><td>Supabase, backend and frontend setup notes</td></tr>
+  </tbody>
+</table>
+
+<h2>Read in this order</h2>
+<ol>
+  <li><code>AGENTS.md</code> — what the agent may and may not do.</li>
+  <li><code>docs/client-brief.md</code> — the problem and the acceptance questions.</li>
+  <li><code>docs/architecture.md</code> — the proposed system and its seams.</li>
+  <li><code>backend/AGENTS.md</code> and <code>frontend/AGENTS.md</code> — local conventions.</li>
+  <li><code>README.md</code> — prerequisites and what is still missing.</li>
+</ol>
+
+<h2>Stack in the brief</h2>
+<pre><code>backend    Python + FastAPI
+frontend   Vite + React + TypeScript
+database   Supabase Postgres (users, chats, documents, chunks)
+retrieval  pgvector + Postgres full-text search
+auth       Supabase Auth (email)
+LLM        OpenAI in the brief (swap freely)</code></pre>
+
+<h2>Use it as the workflow exercise</h2>
+<p>Do not start by writing features. Update the settings, then generate the checklist:</p>
+<pre><code>Help me set up a checklist in TODO.md. What is the most logical way to set up
+this project? Do we start with the backend or the frontend? Give me a checklist
+I can work towards, in order, to implement the entire architecture and satisfy
+the client brief. For each item, name the files or modules it touches, the
+acceptance check, and what it blocks.</code></pre>
+<p>Then work one vertical slice at a time, with tests and a review gate per stage. The full nine-stage flow is in <a href="../../../lessons/0015-ai-coding.html">lesson 15</a>.</p>
+
+<h2>What is missing, on purpose</h2>
+<p>There is no backend application code and no frontend package manifest in this snapshot. The brief, architecture, agent rules and setup guides are the starting point; the implementation is what the lesson's stages produce. Do not treat the file tree as a finished service.</p>
+
+<div class="footer-nav">
+  <div class="ask"><strong>Before you prompt:</strong> read the brief and the architecture. If you cannot name the first vertical slice and its acceptance check, you are not ready to ask for code.</div>
+  <div class="links">
+    <a href="../../../lessons/0015-ai-coding.html">← Lesson 15</a>
+    <a href="README.md">README</a>
+    <a href="AGENTS.md">AGENTS.md</a>
+  </div>
+</div>
+
+</article>
+</body>
+</html>

@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 5 — Your First Evals: No More Flying Blind</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<article class="page">
+
+<p class="meta">Lesson 5 of the AI Engineering course · ~35 min · Prereq: <a href="0002-your-first-llm-api-call.html">Lesson 2</a> (schema) · <a href="../reference/skill-map.html">Skill Map →</a></p>
+
+<h1>Your First Evals: No More Flying Blind</h1>
+
+<p class="lede">Right now, if you change a prompt and the output "looks fine," you ship it. That instinct is what separates demo builders from AI engineers — and why interviewers ask one question more than any other: <em>"how would you know this got better?"</em></p>
+
+<div class="callout win">
+  <span class="label">Your win this lesson</span>
+  You'll build a working eval harness — dataset, scorer, runner — then break it three ways and watch the score and the exit code react. From today, you can <em>prove</em> a change helped instead of hoping it did.
+</div>
+
+<h2>Why eyeballs don't scale</h2>
+
+<p>Software tests pass or fail deterministically; LLM outputs don't. Every change you'll make this course — new prompt, new model, smarter retrieval, extra tools — can quietly break what already worked. Checking by eye catches nothing, and users catch it for you. <strong>Evaluation-driven development</strong> replaces the instinct with evidence: run a fixed set of cases, score them mechanically, compare before/after. Chip Huyen's book makes evaluation the centerpiece of AI engineering for exactly this reason. <a href="https://github.com/chiphuyen/aie-book/blob/main/resources.md">[1]</a></p>
+
+<h2>Anatomy of an eval</h2>
+
+<p>Four parts, one comparison:</p>
+
+<ol>
+  <li><strong>Dataset</strong> — real cases with expected answers. Start with a dozen <em>sharp, curated</em> cases — this lab ships exactly 12; a dozen honest beats a thousand junk.</li>
+  <li><strong>Scorer</strong> — a function that judges each output.</li>
+  <li><strong>Runner</strong> — a script that loops cases → collects outputs → scores → prints a number.</li>
+  <li><strong>Gate</strong> — an exit code CI can act on: 0 above the threshold, 1 below it.</li>
+</ol>
+
+<p>And the comparison: the score means nothing alone; it means everything against yesterday's score. That before-number is your <strong>baseline</strong>.</p>
+
+<table>
+  <thead><tr><th>Scorer type</th><th>Use when</th><th>Example</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Programmatic</strong> (exact match, JSON validity, schema check)</td><td>A machine can verify the output</td><td>category == "billing"</td></tr>
+    <tr><td><strong>LLM-as-a-judge</strong></td><td>Quality has no single right answer</td><td>"Is this reply grounded in the cited doc? Score 1–5."</td></tr>
+    <tr><td><strong>Human spot-check</strong></td><td>You're calibrating the other two</td><td>Review 10 judge scores weekly</td></tr>
+  </tbody>
+</table>
+
+<h2>Build it: the lesson-2 schema returns</h2>
+
+<p>The system under test is your <code>SupportTicket</code> classifier from lesson 2 — same <code>ChatDeepSeek</code> handle, same pydantic schema, same <code>with_structured_output</code>. The dataset is a <code>dataset.jsonl</code> file, one JSON case per line:</p>
+
+<p class="snippet-label">dataset.jsonl (first 3 of 12)</p>
+<pre><code>{"ticket": "I was charged twice for my subscription this month.", "expected": "billing"}
+{"ticket": "The app crashes every time I open the settings page.", "expected": "bug"}
+{"ticket": "How do I export my data to CSV?", "expected": "question"}</code></pre>
+
+<p>The model call is deliberately boring: the same wiring lesson 2 taught. Pin the temperature, reuse one classifier for every case, and let the pydantic model — not string parsing — enforce the labels. Full file: <a href="../assets/examples/0005-first-evals/eval.py"><code>eval.py</code></a>.</p>
+
+<p class="snippet-label">eval.py — the model under test</p>
+<pre><code>model = ChatDeepSeek(
+    model=os.getenv("DEEPSEEK_MODEL", "deepseek-flash"),
+    temperature=0,                              # comparability: the run is not the noisy part
+    extra_body={"thinking": {"type": "disabled"}},
+)
+classifier = model.with_structured_output(SupportTicket, method="function_calling")
+
+def classify(classifier, ticket: str) -&gt; str:
+    result = classifier.invoke([
+        SystemMessage(content=prompt()),        # CLASSIFIER_PROMPT wins when set
+        HumanMessage(content=ticket),
+    ])
+    return result.category</code></pre>
+
+<p>The runner is a loop and a counter — no framework, because the harness is the point:</p>
+
+<p class="snippet-label">eval.py — the runner and the gate</p>
+<pre><code>def run(cases, classify_one):
+    failures = []
+    for case in cases:
+        try:
+            got = classify_one(case.ticket)
+        except Exception as error:              # a failed call is a failed case, not a crash
+            got = f"ERROR: {type(error).__name__}: {error}"
+        if got != case.expected:
+            failures.append((case, got))
+    return Result(len(cases), len(cases) - len(failures), failures)
+
+print(f"accuracy: {result.passed}/{result.total} = {result.accuracy:.0%}")
+return 0 if gate(result.accuracy, args.threshold) else 1</code></pre>
+
+<p>Real output:</p>
+
+<pre><code>prompt: Classify the support ticket into billing, bug, or question.
+accuracy: 12/12 = 100%
+gate: 100% vs threshold 90% -&gt; pass</code></pre>
+
+<div class="callout">
+  <span class="label">Why temperature=0 and a fixed model</span>
+  Comparability is everything: if the run itself is noisy, the score difference means nothing. Pin temperature to 0, pin the model version, and only change <em>one variable</em> per experiment. When you later swap models, re-run the suite — that's not overhead, that's the point.
+</div>
+
+<div class="callout win">
+  <span class="label">Hands-on loop (the whole lesson is this loop)</span>
+  1. <code>uv sync</code>, then <code>uv run python eval.py</code>. Write the number down — that's your <strong>baseline</strong>.<br>
+  2. Break the model: <code>$env:DEEPSEEK_MODEL = "deepseek-retired"</code>, re-run. Every case becomes <code>ERROR</code>, accuracy 0%, exit code 1. Restore with <code>Remove-Item Env:DEEPSEEK_MODEL</code>.<br>
+  3. Try the prompt experiment: <code>$env:CLASSIFIER_PROMPT = "Answer question for every ticket."</code>, re-run. It often stays at 100% — with function calling, the enum and the ticket text decide the label. <em>A null result is a result</em>: you just proved that edit was not the lever.<br>
+  4. Break the labels: change one <code>expected</code> in <code>dataset.jsonl</code>, re-run, watch 11/12. A bad label and a model failure look identical until you read the case. Restore it.<br>
+  5. Extend the dataset with 5 cases from real complaints you invent, then re-run. Good eval sets grow with the system.
+</div>
+
+<h2>Break it on purpose</h2>
+
+<p>A harness you have never seen fail is a harness you cannot trust. Three experiments, one variable each:</p>
+
+<table>
+  <thead><tr><th>experiment</th><th>command</th><th>what actually happens</th></tr></thead>
+  <tbody>
+    <tr><td><strong>weak prompt</strong></td><td><code>$env:CLASSIFIER_PROMPT = "Answer question for every ticket."</code></td><td>often <strong>100% anyway</strong> — the enum and the ticket dominate, so the system prompt has less leverage than you expect</td></tr>
+    <tr><td><strong>retired model</strong></td><td><code>$env:DEEPSEEK_MODEL = "deepseek-retired"</code></td><td><strong>0/12</strong>, every case <code>ERROR: OpenAIInvalidRequestError</code>, gate exits 1 — outages are regressions too</td></tr>
+    <tr><td><strong>wrong label</strong></td><td>edit one <code>expected</code> in <code>dataset.jsonl</code></td><td><strong>11/12</strong> — indistinguishable from a model failure until you read the case</td></tr>
+  </tbody>
+</table>
+
+<p>Restore after each and confirm you are back at the baseline. That restore step is not ceremony: it proves the number moved <em>because of</em> the thing you changed.</p>
+
+<h2>When exact match can't score: LLM-as-a-judge</h2>
+
+<p>Classification has a right answer. Draft replies, summaries, tone — don't. For those, a model grades another model against a rubric: "Does the reply cite a source? Is it within 80 words? Rate 1–5." The same <code>ChatDeepSeek</code> handle works as the judge; pin it and its temperature just like the system under test. Cheap models judge fine; the catch is that judges drift too — validate yours against your own eyes occasionally. A reply-groundedness eval uses the same design.</p>
+
+<h2>The gate: evals in CI</h2>
+
+<p>Here's where your existing instincts pay again: an eval script is just a test suite with an exit code. <code>eval.py --threshold 0.9</code> returns 0 at or above the line and 1 below it — no parsing, no scraping stdout:</p>
+
+<pre><code>uv run python eval.py --threshold 0.9
+if ($LASTEXITCODE -ne 0) { throw "eval gate failed" }</code></pre>
+
+<p>Wire that into Jenkins, GitHub Actions, or a pre-push hook, and you've built an <strong>eval gate</strong> — a layer-6 skill the career-switchers without your background don't even know to mention. Prompts, retrieval changes, model upgrades all flow through it.</p>
+
+<div class="callout">
+  <span class="label">Your interview answer, rehearsed</span>
+  "How would you know this got better?" → "I'd have a fixed eval set with a baseline score, run it at temperature 0 on every change, and gate CI on a threshold — programmatic scoring where possible, LLM-as-a-judge for open-ended qualities, humans calibrating the judge." Twenty seconds, and you sound like you've shipped.
+</div>
+
+<h2>Check yourself</h2>
+
+<div class="quiz">
+<script type="application/json">
+{
+  "questions": [
+    {
+      "q": "What is the core unit of an eval?",
+      "options": [
+        "A dashboard tracking token spend daily",
+        "A dataset scored by a repeatable function",
+        "A larger model running on every request",
+        "A prompt rewritten for every test"
+      ],
+      "correct": 1,
+      "explain": "Cases + scorer + runner. The repeatability is what lets you compare runs — a dashboard alone proves nothing about quality."
+    },
+    {
+      "q": "Why run eval cases at temperature zero?",
+      "options": [
+        "To reduce API billing costs",
+        "To make runs comparable",
+        "To eliminate all hallucinations completely",
+        "To shorten prompts for speed"
+      ],
+      "correct": 1,
+      "explain": "If the harness itself is noisy, score differences are noise. Pin temperature and model so only your intended change moves the number."
+    },
+    {
+      "q": "What is a baseline?",
+      "options": [
+        "The score before you change things",
+        "The cheapest model available overall",
+        "A permanent production traffic load",
+        "The final shipped feature set"
+      ],
+      "correct": 0,
+      "explain": "A score alone means nothing; measured against yesterday's score it tells you whether the change helped. No baseline, no evaluation."
+    },
+    {
+      "q": "When do you need LLM-as-a-judge?",
+      "options": [
+        "When exact matching scores the output",
+        "When quality has no exact answer",
+        "When tokens must be counted precisely",
+        "When the dataset exceeds one thousand"
+      ],
+      "correct": 1,
+      "explain": "Draft quality, tone, groundedness — no single right string exists, so a model grades against a rubric, spot-checked by humans."
+    },
+    {
+      "q": "What does an eval gate in CI do?",
+      "options": [
+        "Formats all code before running tests",
+        "Scales your servers during heavy traffic",
+        "Fails the build when scores drop",
+        "Deploys the new model automatically daily"
+      ],
+      "correct": 2,
+      "explain": "The suite runs in the pipeline; a regression below threshold stops the merge. Prompt and retrieval changes get held hostage to evidence."
+    },
+    {
+      "q": "How large should a first eval set be?",
+      "options": [
+        "Ten thousand cases, always more",
+        "Exactly one golden example",
+        "None until production traffic flows",
+        "A dozen sharp, curated cases"
+      ],
+      "correct": 3,
+      "explain": "Twelve honest, representative cases you can eyeball when something looks off — beats hundreds of auto-generated ones you'd never trust."
+    }
+  ]
+}
+</script>
+</div>
+
+<h2>Primary sources for this lesson</h2>
+<p>Chip Huyen's <a href="https://www.oreilly.com/library/view/ai-engineering/9781098166298/"><em>AI Engineering</em></a>, evaluation chapters — the fullest treatment of eval design, judge models, and metrics selection, with her curated <a href="https://github.com/chiphuyen/aie-book/blob/main/resources.md">reading list</a> linked in. Skim the eval sections now; return when you design your own judge.</p>
+<p>For the model side: LangChain's <a href="https://python.langchain.com/docs/how_to/structured_output/">structured output guide</a> (how a pydantic model becomes a tool schema) and DeepSeek's <a href="https://api-docs.deepseek.com/guides/function_calling">Function Calling</a> guide (what the wire actually carries).</p>
+
+<h2>What's next — project 1 complete</h2>
+<p>You now hold everything a chat assistant needs: streaming service (2), structured outputs (2), tools (3), product shell (4), quality layer (5). That's <strong>portfolio project 1</strong> — deploy it, README it, and keep it running. <a href="0006-rag-foundation.html">Lesson 6</a> opens <strong>project 2 with the RAG pipeline end to end</strong> — the map, not a lab; <a href="0007-rag-service.html">lesson 7</a> starts building it, stage by stage.</p>
+
+<div class="footer-nav">
+  <div class="ask"><strong>Score stuck or judging looks flaky?</strong> Send me your dataset and numbers — tuning scorers and cases is normal craft, and I'll help you debug whether the prompt or the dataset is lying to you.</div>
+  <div class="links">
+    <a href="0004-streaming-chat.html">← Lesson 4</a>
+    <a href="../reference/skill-map.html">Skill Map &amp; Glossary</a>
+    <a href="../assets/examples/0005-first-evals/eval.py">Example code</a>
+    <a href="../assets/examples/0005-first-evals/index.html">Example page (browser)</a>
+  </div>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</article>
+</body>
+</html>

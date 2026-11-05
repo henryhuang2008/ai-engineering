@@ -1,0 +1,52 @@
+[
+  {
+    "title": "LangGraph feels like overkill for my 3-tool agent",
+    "url": "https://www.reddit.com/r/LangChain/comments/demo1/overkill/",
+    "snippet": "OP asks whether a three-tool support bot needs a graph. Replies split between keeping the loop and moving once checkpoints became necessary.",
+    "comments": [
+      "If it is one loop and one process, keep the loop. The graph buys you recovery and inspection, and you are not feeling that pain yet.",
+      "We moved after a deploy killed a 20-step run and we had to start over. Resuming from a checkpoint was the feature that paid for the migration.",
+      "The hidden cost is not the framework, it is the state design. Once you have five fields and two reducers, write them down before the code."
+    ]
+  },
+  {
+    "title": "What actually broke in your agent in production?",
+    "url": "https://www.reddit.com/r/LangChain/comments/demo2/broke/",
+    "snippet": "A thread about production failures. State loss, retries that re-billed model calls, and tools returning empty results dominate.",
+    "comments": [
+      "A search provider timed out and the whole run died because the node raised. Now every source returns an empty list and the answer says what is missing.",
+      "Retries are the quiet cost. Without a checkpoint, a failure at step seven re-runs steps one through six, including the expensive ones.",
+      "Our worst bug was a fan-out where two nodes wrote the same state key. LangGraph refused the update, which was the right call."
+    ]
+  },
+  {
+    "title": "Fan-out in LangGraph: does it really run in parallel?",
+    "url": "https://www.reddit.com/r/LangChain/comments/demo3/fanout/",
+    "snippet": "Users compare traces from three search nodes started from START. They complete in one superstep, but a later join can serialize the whole graph.",
+    "comments": [
+      "The three searches finish together, then everything waits for the slowest one. That is the join, not the fan-out.",
+      "Draw the dependency arrows before you draw the boxes. Half the joins I see are accidental: the node only reads one branch but waits for three.",
+      "Parallelism helps when the branches are I/O bound. If they all hit the same rate limit, you just moved the queue."
+    ]
+  },
+  {
+    "title": "Do you use LangGraph for RAG pipelines?",
+    "url": "https://www.reddit.com/r/LangChain/comments/demo4/rag/",
+    "snippet": "Discussion of graph-shaped retrieval: query rewrite, parallel retrievers, rerank, generate. Most say a linear chain is enough until retrieval branches.",
+    "comments": [
+      "A chain is a graph with one path. Do not add nodes for the diagram; add them when a branch or a retry needs state.",
+      "Parallel retrievers plus a merge is the first place a graph beat our chain. Latency dropped because the two stores were queried at once.",
+      "Keep the merge deterministic. If two retrievers disagree, the reranker should decide, not the synthesis prompt."
+    ]
+  },
+  {
+    "title": "Plain Python vs LangGraph for support bots",
+    "url": "https://www.reddit.com/r/LangChain/comments/demo5/support/",
+    "snippet": "Support engineers compare a four-node graph with a hand-written loop and an approval queue. The graph wins on auditability; the loop wins on setup time.",
+    "comments": [
+      "The approval gate is where the graph earns its keep. A paused thread can wait two days and a different worker can resume it.",
+      "Our loop was fine until we needed per-ticket traces for compliance. The graph gave us that for free.",
+      "For a small team, start with the loop and an eval set. Migrate when an operational requirement forces you, not because the diagram looks better."
+    ]
+  }
+]

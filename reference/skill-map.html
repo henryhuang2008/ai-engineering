@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reference — AI Engineering Skill Map &amp; Glossary (2026)</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<article class="page">
+
+<p class="meta">Reference document · Companion to <a href="../lessons/0001-ai-engineering-landscape-2026.html">Lesson 1</a> · Prints as a cheat sheet</p>
+
+<h1>AI Engineering Skill Map &amp; Glossary</h1>
+
+<p class="lede">The compressed form of the landscape: the six-layer stack, the four hiring pillars, and the vocabulary you'll hear in every AI engineering interview. Designed to be skimmed, not read.</p>
+
+<h2>The six-layer stack</h2>
+
+<div class="stack">
+  <div class="layer"><strong>L6 · Prod</strong> Deploy (Docker/K8s/cloud), monitoring &amp; tracing, cost/latency tuning, guardrails, CI with eval gates, security (prompt injection defense)</div>
+  <div class="layer"><strong>L5 · Agents</strong> Tool/function calling, agent loop (plan→act→observe), orchestration (LangGraph, CrewAI, OpenAI Agents SDK), <strong>MCP servers</strong>, Agent Skills, agent identity &amp; permissions</div>
+  <div class="layer"><strong>L4 · RAG</strong> Chunking, embeddings, vector stores, hybrid search, reranking, evaluation of retrieval quality</div>
+  <div class="layer"><strong>L3 · Context</strong> System prompts, few-shot examples, context window budgeting, structured/JSON output, conversation state &amp; memory</div>
+  <div class="layer"><strong>L2 · APIs</strong> Chat completions, streaming, tokens &amp; pricing, model selection, tool-call schemas, provider SDKs</div>
+  <div class="layer"><strong>L1 · Found.</strong> Python/C#, APIs, SQL/NoSQL, async, Git, system design, testing, containers, cloud</div>
+</div>
+
+<h2>The four hiring pillars</h2>
+<p>From DeepLearning.AI's analysis of 10,000+ job postings: <a href="https://www.deeplearning.ai/resources/ai-engineering-skills/">skills map</a></p>
+<ol>
+  <li><strong>Building &amp; deploying AI applications</strong> — the stack above, end to end</li>
+  <li><strong>Software engineering fundamentals</strong> — so you can steer coding agents and make sound tradeoffs</li>
+  <li><strong>Using coding agents</strong> — Claude Code, Copilot, Cursor: fluency here multiplies your output</li>
+  <li><strong>Shaping the build</strong> — architecture decisions: what to chain, parallelize, or solve with code vs. LLM</li>
+</ol>
+
+<h2>The 2026 agent standards: MCP &amp; Agent Skills</h2>
+<p>Two standards now shape the agent layer of almost every job posting:</p>
+<ul>
+  <li><strong>MCP (Model Context Protocol)</strong> — the agent's API. Open-sourced by Anthropic, donated to the Linux Foundation's Agentic AI Foundation (co-founded with OpenAI, backed by Google, Microsoft, AWS); 10,000+ public servers; adopted by ChatGPT, Cursor, Copilot, and VS Code. <a href="https://www.anthropic.com/news/donating-the-model-context-protocol-and-establishing-of-the-agentic-ai-foundation">[announcement]</a> Job titles now exist whose entire domain is "own the MCP ecosystem" — building, securing, and observing MCP servers that wire agents into enterprise systems (Jira, GitHub, Snowflake, ServiceNow). For you: building an MCP server is structurally identical to building a service with REST APIs — one of your strongest transferable skills.</li>
+  <li><strong>Agent Skills</strong> — the agent's playbook. File-based packages (instructions, scripts, resources) that agents load on demand to gain reusable capabilities. Complements MCP: MCP connects tools; Skills encode know-how.</li>
+</ul>
+
+<h2>SDK decision guide (2026)</h2>
+<p>Learn in this order — primitives before frameworks, so every abstraction stays transparent:</p>
+<table>
+  <thead><tr><th>Tool</th><th>What it is</th><th>Verdict</th></tr></thead>
+  <tbody>
+    <tr class="you"><td><strong>Function calling</strong><br>(hand-written loop, thin primitives)</td><td>The native LLM primitive: declare tools (schemas grown from typed functions), model returns a structured call, your code executes it. Every framework wraps this.</td><td><strong>Learn first — non-negotiable.</strong> One lesson, loop written by hand.</td></tr>
+    <tr class="you"><td><code>openai</code> + <code>anthropic</code> Python SDKs</td><td>The provider SDKs. Chat, streaming, tools, structured output.</td><td><strong>Learn first.</strong> The two dominant providers; raw layer under every framework.</td></tr>
+    <tr class="you"><td><strong>LangGraph</strong> (+ LangChain)</td><td>Agent orchestration: state graphs, checkpoints, human-in-the-loop. ~13.6M weekly downloads (Nov 2026); names LinkedIn, Uber, Klarna as users; a fixture in Agentic AI Engineer postings. Cisco, Google, Accenture, Barclays hiring on it.</td><td><strong>Learn — market default for agents.</strong> After raw API, LangChain is a toolkit not magic.</td></tr>
+    <tr><td><strong>Microsoft Agent Framework</strong> (1.0, Apr 2026)</td><td>The successor to Semantic Kernel and AutoGen: .NET and Python at parity, graph workflows, multi-agent patterns, MCP + A2A, Azure Foundry hosting. Semantic Kernel is in maintenance mode.</td><td><strong>Your differentiator.</strong> The Azure/.NET enterprise world — your home turf — is where it's demanded. Learn as a second orchestration option, after LangGraph.</td></tr>
+    <tr><td>OpenAI Agents SDK · Claude Agent SDK</td><td>Lightweight vendor-native agent runtimes (Claude Agent SDK: ~20M weekly downloads; powers Claude Code).</td><td><strong>Aware, don't deep-dive.</strong> Vendor lock-in risk; principles transfer from LangGraph.</td></tr>
+    <tr class="you"><td><strong>Next.js + Vercel AI SDK</strong></td><td>Next.js (App Router) as the product shell; AI SDK provides <code>streamText</code> route handlers and React's <code>useChat</code>. ~30M weekly AI SDK downloads — #2 of all AI frameworks (Oct 2026), native to the JS/TS world.</td><td><strong>Learn — your frontend differentiator.</strong> Primary shell for the chat assistant (project 1); product teams value AI UX skills that Python-only candidates lack.</td></tr>
+    <tr><td>Pydantic AI · CrewAI · AutoGen</td><td>Agent frameworks competing in LangGraph's slot; Pydantic AI is well-built and makes typed dependencies, tools and outputs explicit; CrewAI and AutoGen rotate on hype.</td><td><strong>Learn the contract here.</strong> Lesson 17 uses Pydantic AI with Pydantic v2 and DeepSeek; adoption is still far below LangGraph, but the typed-agent pattern transfers.</td></tr>
+  </tbody>
+</table>
+<p>Supporting cast you'll pick up along the way: <strong>FastAPI + pydantic</strong> (Python service layer — your .NET controller instincts map directly), a vector store (start with one: Chroma or Qdrant), and <strong>LangSmith</strong> or OpenTelemetry for tracing.</p>
+
+<h2>What job posts don't say, but interviews test</h2>
+<p>The keywords above get you the interview. These decide it:</p>
+<ul>
+  <li><strong>Evals before features</strong> — can you build a 50-case eval set and show a metric moving? Interviewers ask "how would you know this got better?" more than "which framework do you know?"</li>
+  <li><strong>Failure-mode vocabulary</strong> — hallucination, prompt injection, context poisoning, tool-call loops, ragged streaming. Naming failure modes fluently signals production experience.</li>
+  <li><strong>Cost/latency intuition</strong> — "this design costs ~$X/1k queries and p95 ~Y ms, here's the caching tier." Rough numbers beat hand-waving.</li>
+  <li><strong>Tracing</strong> — every multi-step agent needs observability (LangSmith, OpenTelemetry). Demo an agent with no tracing and you've demoed a black box.</li>
+  <li><strong>Coding-agent fluency</strong> — pillar 3 is real: interview processes increasingly observe you working <em>with</em> Claude Code/Copilot, not just coding against it.</li>
+</ul>
+
+<h2>Portfolio ladder (build toward the capstone)</h2>
+<p>Three projects, each a prerequisite for the next. Ship what you can, and write READMEs that explain tradeoffs. For the capstone, the honest scorecard of what is verified matters as much as the deployment.</p>
+<ol>
+  <li><strong>ChatOps assistant</strong> (lessons 2–5): FastAPI service, streaming UI in React, structured output, basic evals harness. Proves L2–3.</li>
+  <li><strong>Docs RAG service</strong> (lessons 6–8, plus the local variant in 14): ingest pipeline, chunking, embeddings, hybrid retrieval, grounded citations, retrieval checks. Proves L4 — the most-requested skill in postings.</li>
+  <li><strong>Capstone: <a href="../lessons/0017-project-supabase-rag-ai-coding.html">Grounded filing analyst</a></strong> (lesson 17): Supabase Postgres with pgvector and full-text search, a cost-capped ingestion pipeline, hybrid retrieval fused with RRF, a PydanticAI agent limited to three retrieval tools, a fail-closed citation validator, and a trust UI that opens the exact passage. Proves L4–6 end to end. The story: <em>"I built an analyst product where every claim is traceable — and I can show you which gates are still open."</em> The engineering, not the demo, is the portfolio.</li>
+</ol>
+
+<h2>Role map</h2>
+<table>
+  <thead><tr><th>Role</th><th>Focus</th><th>Day-to-day</th></tr></thead>
+  <tbody>
+    <tr><td><strong>AI engineer</strong></td><td>Apps on existing models</td><td>API integration, RAG, agents, evals, deployment</td></tr>
+    <tr><td>ML engineer</td><td>Training &amp; serving models</td><td>Model training, MLOps, GPU infrastructure</td></tr>
+    <tr><td>Data scientist</td><td>Analysis &amp; experiments</td><td>Statistics, A/B tests, notebooks, insights</td></tr>
+  </tbody>
+</table>
+
+<h2>Glossary</h2>
+<dl>
+  <dt><strong>Foundation model</strong></dt><dd>A large pre-trained model (LLM, image model) consumed as a service via API — the raw material of AI engineering.</dd>
+  <dt><strong>Token</strong></dt><dd>The unit of text a model reads/writes (~¾ of an English word). Pricing and context limits are measured in tokens.</dd>
+  <dt><strong>Context window</strong></dt><dd>The maximum tokens a model can consider at once — a fixed budget you spend on prompts, retrieved docs, history, and tool results.</dd>
+  <dt><strong>Prompt / system prompt</strong></dt><dd>Instructions sent to the model. The system prompt sets persistent behavior; user messages carry the task.</dd>
+  <dt><strong>Structured output</strong></dt><dd>Constraining model output to a JSON schema so downstream code can parse it reliably.</dd>
+  <dt><strong>Embedding</strong></dt><dd>A numeric vector representing text's meaning; similar meanings sit close together, enabling search by concept.</dd>
+  <dt><strong>RAG</strong></dt><dd>Retrieval-Augmented Generation: retrieve relevant docs, stuff them into context, then let the model answer with evidence.</dd>
+  <dt><strong>Chunking</strong></dt><dd>Splitting documents into retrievable pieces; chunk design materially affects RAG quality.</dd>
+  <dt><strong>Agent</strong></dt><dd>An LLM running in a loop: choose a tool, act, observe the result, decide next — until the task is done.</dd>
+  <dt><strong>Tool / function calling</strong></dt><dd>The primitive beneath every agent: you declare tools (the model only ever sees their schemas), the model returns a structured call request, your code executes it and feeds the result back. Learn the loop by hand, before any agent framework — everything else wraps this.</dd>
+  <dt><strong>MCP</strong></dt><dd>Model Context Protocol — the open standard for connecting agents to tools and data (Jira, GitHub, databases, SaaS APIs). Donated to the Linux Foundation's Agentic AI Foundation in Dec 2025; 10,000+ public servers; adopted by ChatGPT, Cursor, Copilot, VS Code. Building and securing MCP servers is now a named job category. <a href="https://modelcontextprotocol.io">spec</a></dd>
+  <dt><strong>Agent Skills</strong></dt><dd>Lightweight, file-based capability packages (instructions + scripts + resources) that agents load on demand — reusable know-how for coding and task agents, complementary to MCP's tool connections.</dd>
+  <dt><strong>MCP server</strong></dt><dd>A service that exposes a system's capabilities to agents via the MCP spec (tools, resources, prompts, transports like HTTP/SSE) — the modern equivalent of writing a REST API, with schema design, auth, and observability as the core skills.</dd>
+  <dt><strong>Evaluation (evals)</strong></dt><dd>Programmatic test sets that score model outputs; the AI-native replacement for unit tests.</dd>
+  <dt><strong>AI-as-a-judge</strong></dt><dd>Using a strong model to grade another model's output at scale.</dd>
+  <dt><strong>Hallucination</strong></dt><dd>Confident, fluent, incorrect output — the failure mode RAG and evals exist to control.</dd>
+  <dt><strong>Prompt injection</strong></dt><dd>An attack where malicious text inside inputs overrides your instructions — the AI-era SQL injection.</dd>
+  <dt><strong>Fine-tuning</strong></dt><dd>Additional training of a model on your data — usually the <em>last</em> lever, after context and RAG fail.</dd>
+  <dt><strong>LLMOps</strong></dt><dd>Production operations for LLM apps: tracing calls, monitoring quality/cost, gradual rollouts.</dd>
+</dl>
+
+<div class="footer-nav">
+  <div class="ask"><strong>Terms unclear?</strong> Ask me — I can expand any entry here or point you to the source it came from.</div>
+  <div class="links">
+    <a href="../lessons/0001-ai-engineering-landscape-2026.html">← Back to Lesson 1</a>
+    <a href="https://roadmap.sh/ai-engineer">roadmap.sh version</a>
+  </div>
+</div>
+
+</article>
+</body>
+</html>

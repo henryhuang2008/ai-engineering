@@ -1,0 +1,27 @@
+question: Should a small support team build its agent on LangGraph or a plain tool loop?
+graph:    reference (fan-out, fan-in)
+source:   snapshot
+
+[   0.0s] search_bing          5 results
+[   0.0s] search_google        5 results
+[   0.0s] search_reddit        5 results
+[   1.4s] select_reddit_urls   3 urls
+[   1.4s] fetch_reddit         3 threads / 9 comments
+[   3.6s] analyze_bing         analyses += bing
+[   3.8s] analyze_google       analyses += google
+[   4.0s] analyze_reddit       analyses += reddit
+[   6.6s] synthesize           200 words
+
+answer: **Recommendation: Start with a plain tool loop, and migrate to LangGraph only when a concrete operational requirement appears—most likely checkpointing or a human approval gate.**
+
+**Reasons:**
+1. **The loop is cheaper to build and read.** Multiple sources agree a `while` loop over `bind_tools` covers most single-turn support flows, and setup time favors the loop. Every graph node is another place to test.
+2. **The graph's payoff is operational, not benchmark-driven.** Practitioners say a graph "pays off at the second operational requirement, usually resume or approval." Checkpointers (MemorySaver for demos, PostgresSaver for production) let a run pause before a side effect and resume from another worker—valuable once a deploy kills a long job or an approval waits days.
+3. **Migration is low-risk.** Teams reportedly move the loop into a graph without changing prompts, so starting simple doesn't lock you in.
+
+**Caveat:** No source quantifies build or maintenance effort, latency, or a team-size threshold, so the trigger for migrating is judgment, not data. Write down your state fields and reducers before coding—that's the hidden cost.
+
+**Missing/empty sources:** None of the three result sets was empty, but all lack cost, latency, and team-size comparisons, and Reddit offers no account of a failed migration.
+
+sources: google=5 bing=5 reddit=5 | urls=3 | threads=3
+graph: bing, google, reddit | nodes=9 | 6.6s

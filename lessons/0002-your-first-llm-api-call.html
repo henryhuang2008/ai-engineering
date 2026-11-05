@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 2 — Your First LLM Call: Messages, Streaming, Tools, Typed Output</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<article class="page">
+
+<p class="meta">Lesson 2 of the AI Engineering course · ~30 min · Prereq: <a href="0001-ai-engineering-landscape-2026.html">Lesson 1</a> · <a href="../reference/skill-map.html">Skill Map →</a></p>
+
+<h1>Your First LLM Call: Messages, Streaming, Tools, Typed Output</h1>
+
+<p class="lede">Every AI product in this course is the same atom, dressed up: <strong>a list of messages goes in, one message comes out.</strong> Today you drive that atom through LangChain against DeepSeek — chat, streamed tokens, a tool round trip, and pydantic-typed output — and you learn exactly where a tool call stops being an agent.</p>
+
+<div class="callout win">
+  <span class="label">Your win this lesson</span>
+  You can send a system + human conversation, stream the reply, hand the model a tool and complete the round trip with a <code>ToolMessage</code>, and get a validated <code>SupportTicket</code> object back — all through one model handle you can point at DeepSeek, OpenAI, or Anthropic by changing one line.
+</div>
+
+<h2>The atom is still a list of messages</h2>
+
+<p>Forget the framework for a second. An LLM call is a <strong>list of messages</strong>, each with a role, and the model returns the next assistant message. That's the whole protocol — LangChain just gives each role a class instead of a dictionary:</p>
+
+<table>
+  <thead><tr><th>LangChain class</th><th>Role on the wire</th><th>Who writes it</th></tr></thead>
+  <tbody>
+    <tr><td><code>SystemMessage</code></td><td><code>system</code></td><td>You — standing rules, persona, output contract</td></tr>
+    <tr><td><code>HumanMessage</code></td><td><code>user</code></td><td>The person (or your UI)</td></tr>
+    <tr><td><code>AIMessage</code></td><td><code>assistant</code></td><td>The model — may carry structured <code>tool_calls</code></td></tr>
+    <tr><td><code>ToolMessage</code></td><td><code>tool</code></td><td>Your code, after it runs a tool</td></tr>
+  </tbody>
+</table>
+
+<p>RAG adds retrieved documents to that list; an agent repeats the call and appends tool results. Same atom, different plumbing.</p>
+
+<h2>The model handle</h2>
+
+<p>DeepSeek's API is OpenAI-compatible, and <code>langchain-deepseek</code> wraps that transport in the standard LangChain chat interface. One handle, four stages:</p>
+
+<pre><code>import os
+from langchain_deepseek import ChatDeepSeek
+
+model = ChatDeepSeek(
+    model="deepseek-flash",
+    api_key=os.environ["DEEPSEEK_API_KEY"],   # or just set the env var and omit
+    temperature=0,
+    extra_body={"thinking": {"type": "disabled"}},
+)</code></pre>
+
+<p>Two 2026 details matter. <strong>DeepSeek thinks by default</strong> — the <code>extra_body</code> above switches that off because this lesson is about plumbing, not reasoning; delete it to watch the reasoning tokens. And <strong><code>deepseek-flash</code> is the current model name</strong> (served by DeepSeek-V4.1-Flash), with <code>deepseek-v4-pro</code> as the larger option. Login, key, and current names: <a href="https://api-docs.deepseek.com/">DeepSeek quick start</a>.</p>
+
+<p>Why LangChain instead of calling the compatible <code>openai</code> client directly? Because you get one message model and one <code>Runnable</code> contract across providers — the same <code>invoke()</code> and <code>stream()</code> signatures whether the backend is DeepSeek, Qwen or a local Ollama model — plus tool binding and structured-output plumbing that every later lesson reuses. It is a thin layer, not magic — and Lesson 3 builds the loop explicitly from <code>@tool</code>, <code>bind_tools()</code> and <code>ToolMessage</code>, so you can see every step.</p>
+
+<h2>Stage 1 — chat: history is the memory</h2>
+
+<p>The model has no memory between calls. A conversation is <em>you</em> re-sending the growing list:</p>
+
+<pre><code>from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+
+messages = [
+    SystemMessage(content="You are a terse support assistant. Answer in one sentence."),
+    HumanMessage(content="My invoice charged me twice. What should I do?"),
+]
+reply = model.invoke(messages)
+print(reply.content)
+# e.g. Send us the invoice number and we will refund the duplicate charge
+#      within three business days.
+
+thread = messages + [reply, HumanMessage(content="And how long does the refund take?")]
+print(model.invoke(thread).content)
+# e.g. Refunds post within three business days.</code></pre>
+
+<p>The lab prints the count so the reframe sticks: <strong>turn 1 sends 2 messages; turn 2 sends 4</strong> — system, human, the model's own earlier answer, and the new human turn. The wording of the replies will vary between runs; the shape will not. Your database instincts apply here: the message list is the row you re-read, not server-side session state. Persisting it is your application's job — <a href="0010-langgraph.html">L10</a> makes the graph's state explicit, which is where a checkpointer later plugs in.</p>
+
+<h2>Stage 2 — streaming: the same answer, in pieces</h2>
+
+<p><code>invoke()</code> waits for the whole message. <code>stream()</code> yields <code>AIMessageChunk</code> objects as tokens arrive — and the chunks are not a summary; concatenated, they are the exact reply:</p>
+
+<pre><code>baseline = model.invoke(messages).content
+pieces = [chunk.content for chunk in model.stream(messages) if chunk.content]
+print("".join(pieces) == baseline)   # True</code></pre>
+
+<p>Run it and print the count. Two things hold every time: <strong>the last chunk is often empty</strong> — it carries finish metadata rather than words — and <strong>joining the text chunks reproduces the <code>invoke()</code> reply exactly</strong>. The chunk <em>count</em> is provider- and model-dependent (do not pin a number in a test or a dashboard); the invariant is the join. The empty tail is what bites people: never print <code>chunk.content</code> as if every chunk were text, and never count chunks as words.</p>
+
+<p>Streaming is a product decision before it is a transport decision: the metric users feel is <strong>TTFT — time to first token</strong>. Lesson 4 builds the FastAPI + SSE service and the React <code>useChat</code> shell around exactly this loop.</p>
+
+<h2>Stage 3 — tools: one round trip, not an agent</h2>
+
+<p>You declare a Python function, LangChain turns its signature and docstring into a JSON schema, and the model can ask you to run it. The model never executes code — it returns a structured request, and <em>you</em> remain the permission layer:</p>
+
+<pre><code>from langchain_core.tools import tool
+from langchain_core.messages import ToolMessage
+
+ORDERS = {"A-1042": "shipped from the Sydney warehouse, arriving Thursday"}
+
+@tool
+def get_order_status(order_id: str) -&gt; str:
+    """Look up an order's fulfilment status by its id, for example A-1042."""
+    return ORDERS.get(order_id, f"no order found for {order_id}")
+
+bound = model.bind_tools([get_order_status])
+messages = [
+    SystemMessage(content="You are a terse support assistant. Answer in one sentence."),
+    HumanMessage(content="Where is order A-1042?"),
+]
+
+ai = bound.invoke(messages)
+call = ai.tool_calls[0]
+# e.g. {'name': 'get_order_status', 'args': {'order_id': 'A-1042'},
+#       'id': 'call_...', 'type': 'tool_call'}
+
+result = get_order_status.invoke(call["args"])
+# shipped from the Sydney warehouse, arriving Thursday
+
+thread = messages + [ai, ToolMessage(content=result, tool_call_id=call["id"])]
+print(bound.invoke(thread).content)
+# e.g. Order A-1042 has shipped and should arrive Thursday.</code></pre>
+
+<p>Three contracts are doing the work. The <strong>schema</strong> tells the model what it may call and which arguments exist. The <strong>tool call id</strong> pairs the result with the request — that's why <code>ToolMessage</code> requires <code>tool_call_id</code>; the id itself is generated by the provider, so read it, never hard-code it. And the <strong>second call</strong> is where the model turns the observation into an answer. The thread is <strong>4 messages before that final call and 5 after</strong> — that count is structural, not model output.</p>
+
+<div class="callout">
+  <span class="label">So… is this an agent?</span>
+  <strong>No — and the distinction is the lesson.</strong> This is <em>one</em> tool round trip: model asks, code runs, model answers. An agent is the same round trip placed inside a loop that repeats until the model returns no tool calls, with a stop condition and a budget. You have the primitive now; Lesson 3 writes the loop by hand, and lessons 10–11 turn it into an explicit graph. Calling every tool call an "agent" is how demos get mistaken for systems.
+</div>
+
+<h2>Stage 4 — structured output: the model as a typed function</h2>
+
+<p>Free text is useless to code. Declare a pydantic model and LangChain exposes it to the model as a schema; what comes back is a <strong>validated instance</strong>, not a dictionary you hope is shaped right:</p>
+
+<pre><code>from typing import Literal
+from pydantic import BaseModel, Field
+
+class SupportTicket(BaseModel):
+    category: Literal["billing", "bug", "question"] = Field(
+        description="billing, bug, or question")
+    urgency: int = Field(ge=1, le=5, description="1-5, 5 being most urgent")
+    summary: str = Field(description="one sentence, no invented facts")
+    order_id: str | None = Field(default=None, description="order id if mentioned")
+
+classifier = model.with_structured_output(SupportTicket, method="function_calling")
+ticket = classifier.invoke([
+    SystemMessage(content="Classify the support ticket. Extract the order id."),
+    HumanMessage(content="My invoice charged me twice for order A-1042. Fix it now."),
+])
+print(ticket)
+# e.g. category='billing' urgency=5 summary='Duplicate charge on the invoice
+#      for order A-1042.' order_id='A-1042'</code></pre>
+
+<p>Under the hood this is the tool-calling path you just learned: the pydantic model becomes a tool, the model calls it with JSON arguments, and LangChain parses and validates the result. That's why the call works on DeepSeek, which has <strong>no OpenAI-style <code>json_schema</code> response format</strong> — the lab passes <code>method="function_calling"</code> explicitly to make the mechanism visible. <code>Literal</code> gives you an enum; <code>ge</code>/<code>le</code> give you range validation. A value outside the contract raises instead of silently poisoning downstream code.</p>
+
+<p>This <code>SupportTicket</code> is not a toy: it is the classifier contract a support agent needs. Twenty minutes into the course, you have its first component.</p>
+
+<div class="callout">
+  <span class="label">Temperature</span>
+  <code>temperature=0</code> ≈ deterministic, higher ≈ creative. Extraction, classification, and tool arguments want boring and repeatable — 0. Creative copy is the exception, not the default. In production most calls should be boring.
+</div>
+
+<h2>Run it yourself</h2>
+
+<p>This lab talks to the <strong>live DeepSeek API</strong> — there is no fake-model mode. You need a key from <a href="https://platform.deepseek.com/api_keys">platform.deepseek.com/api_keys</a>, and the account needs a small balance (DeepSeek is prepaid).</p>
+
+<p>Everything in the lab is also on one page: <a href="../assets/examples/0002-first-llm-api/index.html"><strong>examples/0002-first-llm-api</strong></a> — README, <code>pyproject.toml</code>, <code>langchain_lab.py</code> and <code>evals.py</code>, rendered in the browser.</p>
+
+<pre><code># 1. key, for this terminal only
+$env:DEEPSEEK_API_KEY = "sk-..."        # PowerShell
+export DEEPSEEK_API_KEY="sk-..."        # bash / zsh
+
+# ...or persist it for future terminals, then reopen the terminal
+setx DEEPSEEK_API_KEY "sk-..."          # Windows
+echo 'export DEEPSEEK_API_KEY="sk-..."' &gt;&gt; ~/.zshrc
+
+# 2. sync dependencies and run
+cd assets\examples\0002-first-llm-api
+uv sync                          # create .venv from pyproject.toml + uv.lock
+uv run python langchain_lab.py   # four stages, live DeepSeek
+uv run python evals.py           # 32 checks (+2 live when a key is set)</code></pre>
+
+<p>No <code>venv</code> + <code>pip</code> dance: <code>uv sync</code> reads <code>pyproject.toml</code> and installs the exact graph pinned in <code>uv.lock</code>, and <code>uv run</code> executes inside that environment without activation. No uv yet? <code>winget install --id=astral-sh.uv</code>.</p>
+
+<p>Without a key the lab prints those exact commands and exits 1 — no hidden fallback, because a canned answer would teach you the wrong thing about what a model actually returns. <code>evals.py</code> runs the offline checks (ticket schema, tool contract, message shapes, model wiring, the missing-key message, the uv project) and, when <code>DEEPSEEK_API_KEY</code> is set, adds one live call; with no key it reports the smoke test as skipped.</p>
+
+<p>Optional overrides: <code>DEEPSEEK_MODEL</code> (default <code>deepseek-flash</code>) and <code>DEEPSEEK_BASE_URL</code> (default <code>https://api.deepseek.com</code>) — useful for trying <code>deepseek-v4-pro</code> or a proxy.</p>
+
+<p>Cost, concretely: <code>deepseek-flash</code> lists at <strong>$0.15 per 1M input tokens</strong> (cache miss, off-peak) and <strong>$0.60 per 1M output tokens</strong> off-peak; peak hours double those. The lab's handful of short calls costs a fraction of a cent. Treat the cost dashboard as part of the product from day one — that's layer 6 work you already have instincts for.</p>
+
+<div class="callout win">
+  <span class="label">Hands-on loop (do this, not just read it)</span>
+  1. Run the lab twice and diff the output. The shapes match; the wording doesn't. That gap is why evals exist.<br>
+  2. Add <code>customer_sentiment: Literal["angry", "neutral", "happy"]</code> to <code>SupportTicket</code> and re-run. Watch it appear in the schema the model sees.<br>
+  3. Break the contract: send an empty messages list, then a <code>ToolMessage</code> with a wrong <code>tool_call_id</code>. Read the errors.<br>
+  4. Classify the same ticket ten times and diff the outputs. Any drift is why Lesson 5 exists — even <code>temperature=0</code> is not a bit-identical guarantee.
+</div>
+
+<h2>Check yourself</h2>
+
+<div class="quiz">
+<script type="application/json">
+{
+  "questions": [
+    {
+      "q": "Which LangChain class carries the person's input?",
+      "options": [
+        "SystemMessage",
+        "HumanMessage",
+        "AIMessage",
+        "ToolMessage"
+      ],
+      "correct": 1,
+      "explain": "HumanMessage maps to the user role. SystemMessage sets standing rules, AIMessage is the model's reply, and ToolMessage carries a tool's result back to the model."
+    },
+    {
+      "q": "Why does the second chat turn send four messages instead of one?",
+      "options": [
+        "The message list is the memory — prior turns must be re-sent",
+        "DeepSeek stores the conversation server-side",
+        "Pydantic requires a fixed four-message schema",
+        "Streaming only works with an even number of messages"
+      ],
+      "correct": 0,
+      "explain": "Chat APIs are stateless. You resend system + human + the model's earlier answer + the new human turn; persistence is your application's job (lesson 10 keeps state in the returned object, and a checkpointer is the production step)."
+    },
+    {
+      "q": "What does model.stream() yield?",
+      "options": [
+        "One complete AIMessage at the end",
+        "Raw HTTP bytes for the frontend",
+        "AIMessageChunk pieces whose join equals the invoke() text",
+        "A database cursor over conversation rows"
+      ],
+      "correct": 2,
+      "explain": "Each chunk carries a delta; concatenating the text chunks reproduces the full reply. The final chunk is often empty — it carries finish metadata, not words."
+    },
+    {
+      "q": "In the tool round trip, who actually executes get_order_status?",
+      "options": [
+        "The DeepSeek server, inside the model",
+        "LangChain's runtime, automatically",
+        "Pydantic, during validation",
+        "Your code — the model only returns a structured call request"
+      ],
+      "correct": 3,
+      "explain": "The model emits name + JSON args + call id. Your code decides whether to run it, runs it, and sends the result back as a ToolMessage. You are the permission layer."
+    },
+    {
+      "q": "Why does ToolMessage require tool_call_id?",
+      "options": [
+        "To pair the result with the exact request it answers",
+        "To encrypt the tool output",
+        "To count tokens for billing",
+        "To select the model version"
+      ],
+      "correct": 0,
+      "explain": "A thread can contain several tool calls, including parallel ones. The id is the join key between request and observation — mismatched ids are a classic silent failure."
+    },
+    {
+      "q": "Why use method=\"function_calling\" for structured output on DeepSeek?",
+      "options": [
+        "It makes the model reason step by step",
+        "It streams the pydantic object token by token",
+        "DeepSeek lacks OpenAI's json_schema response format, so the schema travels as a tool",
+        "It bypasses validation for speed"
+      ],
+      "correct": 2,
+      "explain": "LangChain exposes the pydantic model as a tool, the model returns JSON args, and LangChain validates them into the class. DeepSeek supports tool calls and JSON output, but not OpenAI-style json_schema enforcement."
+    },
+    {
+      "q": "Is the Stage 3 tool call an agent?",
+      "options": [
+        "Yes — any tool call makes a system agentic",
+        "Yes — because the model chose the tool by itself",
+        "No — it needs at least three tools to qualify",
+        "No — it is one round trip; an agent loops until no tool calls remain"
+      ],
+      "correct": 3,
+      "explain": "One ask → execute → answer cycle is the primitive. An agent repeats that cycle with a stop condition and budget; Lesson 3 writes that loop by hand, and lessons 10–11 make it an explicit graph."
+    }
+  ]
+}
+</script>
+</div>
+
+<h2>Primary sources for this lesson</h2>
+<p><a href="https://api-docs.deepseek.com/">DeepSeek — Your First API Call</a> (base URL, key, model names), then <a href="https://api-docs.deepseek.com/guides/tool_calls">Tool Calls</a> and <a href="https://api-docs.deepseek.com/quick_start/pricing">Models &amp; Pricing</a>. On the LangChain side: <a href="https://docs.langchain.com/oss/python/langchain/messages">Messages</a>, <a href="https://docs.langchain.com/oss/python/langchain/streaming">Streaming</a>, <a href="https://docs.langchain.com/oss/python/langchain/models">Models (structured output)</a>, and the <a href="https://docs.langchain.com/oss/python/integrations/chat/deepseek">ChatDeepSeek integration page</a>. Run the code, then read — the docs make more sense after the transcript.</p>
+
+<h2>What's next</h2>
+<p><a href="0003-function-calling.html">Lesson 3</a>: <strong>the tool loop</strong> — today's single round trip becomes call → execute → observe → call, repeating until the model stops asking. That loop is the agent primitive, and you'll write it by hand before any framework hides it. After that: streaming UI (4), evals (5), RAG (6–8), MCP (9), LangGraph (10–11), then libraries, Pydantic, a local model, AI coding and delivery (12–16).</p>
+
+<div class="footer-nav">
+  <div class="ask"><strong>Errors while running the code?</strong> Paste them to me — a wrong <code>tool_call_id</code>, a pydantic validation error, or a DeepSeek 402 are all normal first-run bumps. Also ask "why is my stream empty at the end?" — that one has a one-line answer.</div>
+  <div class="links">
+    <a href="0001-ai-engineering-landscape-2026.html">← Lesson 1</a>
+    <a href="../reference/skill-map.html">Skill Map &amp; Glossary</a>
+    <a href="../assets/examples/0002-first-llm-api/langchain_lab.py">Example code</a>
+    <a href="../assets/examples/0002-first-llm-api/index.html">Example page (browser)</a>
+    <a href="../assets/examples/0002-first-llm-api/README.md">Example README</a>
+  </div>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</article>
+</body>
+</html>

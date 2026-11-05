@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Example 0005 - Your first evals</title>
+<link rel="stylesheet" href="../../course.css">
+</head>
+<body>
+<article class="page">
+
+<p class="meta">Example 0005 &middot; Companion to <a href="../../../lessons/0005-your-first-evals.html">Lesson 5</a> &middot; <a href="README.md">README</a></p>
+
+<h1>Your first evals: dataset, scorer, runner, gate</h1>
+
+<p class="lede">Four parts, one comparison: a <code>dataset.jsonl</code> of 12 curated tickets, a scorer (<code>got == expected</code>), a runner (<code>run()</code> &rarr; <code>Result</code>), and a gate (<code>--threshold</code>, exit 1 below the line). The harness is plain Python; the model call is the lesson-2 stack &mdash; one <code>ChatDeepSeek</code> handle, <code>with_structured_output(SupportTicket)</code>, <code>temperature=0</code>. Baseline 12/12; point it at a retired model and every case becomes <code>ERROR</code>, the score hits 0%, and the gate fails.</p>
+
+<h2>Key and run</h2>
+<pre>cd assets\examples\0005-first-evals
+uv sync
+$env:DEEPSEEK_API_KEY = "sk-..."        # PowerShell, this terminal
+uv run python eval.py                   # baseline: 12/12 = 100%
+uv run python eval.py --threshold 1.0   # gate: any miss exits 1</pre>
+<p>Key page: <a href="https://platform.deepseek.com/api_keys">platform.deepseek.com/api_keys</a>. No key &rarr; <code>eval.py</code> exits 1 and prints the two commands; there is no canned fallback. Optional overrides: <code>DEEPSEEK_MODEL</code> (default <code>deepseek-flash</code>), <code>DEEPSEEK_BASE_URL</code>, and <code>CLASSIFIER_PROMPT</code> (the system prompt under test).</p>
+
+<h2>README.md</h2>
+<pre># 0005 — Your first evals: dataset, scorer, runner, gate
+
+Four parts, one comparison. The harness is plain Python — a JSONL file, a loop, a
+counter — and the model call is the lesson-2 stack: one `ChatDeepSeek` handle,
+`with_structured_output(SupportTicket)`, `temperature=0`. Nothing here is a
+framework; everything here is a habit you will use on every change for the rest
+of the course.
+
+| part | what it is | in this lab |
+|---|---|---|
+| dataset | fixed cases with expected answers | `dataset.jsonl`, 12 curated tickets |
+| scorer | a function that judges one output | `got == expected` — classification has a right answer |
+| runner | loops cases, collects outputs, prints a number | `run()` -&gt; `Result(accuracy, failures)` |
+| gate | an exit code CI can act on | `--threshold 0.9` -&gt; exit 1 below the line |
+
+`dataset.jsonl` is read as `utf-8-sig`, so a case file saved by Windows PowerShell
+(which prepends a BOM) still loads instead of failing on line 1.
+
+## Run
+
+```powershell
+cd assets\examples\0005-first-evals
+uv sync
+$env:DEEPSEEK_API_KEY = &quot;sk-...&quot;          # this terminal only
+uv run python eval.py                     # accuracy on the 12 cases
+uv run python eval.py --threshold 1.0     # gate: any miss exits 1
+```
+
+Real output:
+
+```
+prompt: Classify the support ticket into billing, bug, or question.
+accuracy: 12/12 = 100%
+gate: 100% vs threshold 90% -&gt; pass
+```
+
+Write that number down. It is your **baseline**, and it only means something
+compared with the next run.
+
+## Break it on purpose
+
+A harness you have not seen fail is a harness you cannot trust. Three experiments,
+each one variable:
+
+| experiment | command | what actually happens |
+|---|---|---|
+| weak prompt | `$env:CLASSIFIER_PROMPT = &quot;Answer question for every ticket.&quot;` | often **100% anyway** — with function calling the enum + ticket text decide the label, so the system prompt has less leverage than you expect. A null result is a result: the change did not matter. |
+| retired model | `$env:DEEPSEEK_MODEL = &quot;deepseek-retired&quot;` | **0/12**, every case prints `ERROR: OpenAIInvalidRequestError ...`, gate exits 1. The gate catches outages, not only quality. |
+| wrong label | change one `expected` in `dataset.jsonl` | **11/12** — a bad label is indistinguishable from a model failure until you read the case. |
+
+Restore after each (`Remove-Item Env:CLASSIFIER_PROMPT`, `Remove-Item Env:DEEPSEEK_MODEL`)
+and re-run to confirm you are back at the baseline. One variable per experiment is
+the whole discipline.
+
+## The gate
+
+`eval.py` returns 0 when accuracy is at or above `--threshold`, 1 otherwise. That
+is all CI needs:
+
+```powershell
+uv run python eval.py --threshold 0.9
+if ($LASTEXITCODE -ne 0) { throw &quot;eval gate failed&quot; }
+```
+
+Wire that into Jenkins, GitHub Actions, or a pre-push hook and a prompt change can
+no longer merge on vibes. The default threshold is 0.9; `--threshold 1.0` is the
+strict mode while a suite is small.
+
+## Checking your work
+
+The lab is its own check: a correct harness prints `12/12 = 100%` and exits 0. If
+the number differs, the `FAIL` lines tell you which moved — the model (errors), the
+labels (one case), or the wiring (everything).
+
+## DeepSeek notes
+
+- `with_structured_output(SupportTicket, method=&quot;function_calling&quot;)` uses DeepSeek&#x27;s
+  tool calling. The pydantic model becomes the tool schema, so the label enum is
+  enforced by the API, not by string parsing.
+- `temperature=0` makes runs comparable. DeepSeek still does not promise identical
+  text across runs, which is why the scorer compares **labels**, not prose.
+- Thinking is disabled (`extra_body={&quot;thinking&quot;: {&quot;type&quot;: &quot;disabled&quot;}}`): this lab
+  measures the classifier, not the reasoning trace.
+- Overrides: `DEEPSEEK_MODEL` (default `deepseek-flash`), `DEEPSEEK_BASE_URL`,
+  `CLASSIFIER_PROMPT` (the system prompt under test).
+
+## Files
+
+| file | role |
+|---|---|
+| `eval.py` | the whole harness: schema, model wiring, runner, gate, CLI |
+| `dataset.jsonl` | 12 cases, one `{&quot;ticket&quot;, &quot;expected&quot;}` per line |
+| `pyproject.toml` | dependencies and Python floor — the single source of truth |
+| `uv.lock` | the pinned dependency graph `uv sync` installs |
+| `index.html` | this page, generated for the course — not needed to run the lab |
+
+Generated, safe to delete and recreate: `.venv\` (`uv sync`).
+
+Versions pinned by `uv.lock`: `langchain 1.4.8`, `langchain-core 1.7.4`,
+`langchain-deepseek 1.1.1`, `pydantic 2.14.2` (Python 3.12).
+
+Lesson: [lessons/0005-your-first-evals.html](../../../lessons/0005-your-first-evals.html)</pre>
+
+<h2>eval.py</h2>
+<pre>&quot;&quot;&quot;0005-first-evals - dataset, scorer, runner, gate. The model is DeepSeek.
+
+The harness is deliberately plain Python: a JSONL file, a loop, a counter. The
+model call reuses the LangChain handle from lesson 2, so the only thing this
+lesson adds is the part that tells you whether a change helped.
+
+Four parts, one comparison:
+
+  1. dataset   dataset.jsonl - one {&quot;ticket&quot;, &quot;expected&quot;} case per line
+  2. scorer    `got == expected` (classification has a right answer)
+  3. runner    run() - case in, label out, accuracy and every failure printed
+  4. gate      `--threshold` - exit 1 when accuracy drops, so CI can stop a merge
+
+Run it twice: once as-is (write the number down - that is your baseline), once
+with CLASSIFIER_PROMPT sabotaged. The score moves; that is the whole point.
+
+This lab talks to the live DeepSeek API. Set DEEPSEEK_API_KEY first:
+
+  PowerShell (this session):  $env:DEEPSEEK_API_KEY = &quot;sk-...&quot;
+  PowerShell (persist):       setx DEEPSEEK_API_KEY &quot;sk-...&quot;   # reopen the terminal
+
+Get a key at https://platform.deepseek.com/api_keys. No key -&gt; exit 1 with these
+instructions, never a guess.
+&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable, Literal
+
+from pydantic import BaseModel, Field
+
+HERE = Path(__file__).resolve().parent
+DATASET = HERE / &quot;dataset.jsonl&quot;
+DEFAULT_THRESHOLD = 0.9
+DEFAULT_PROMPT = &quot;Classify the support ticket into billing, bug, or question.&quot;
+
+
+class SupportTicket(BaseModel):
+    &quot;&quot;&quot;The lesson-2 schema, now also the eval&#x27;s expected shape.&quot;&quot;&quot;
+
+    category: Literal[&quot;billing&quot;, &quot;bug&quot;, &quot;question&quot;] = Field(
+        description=&quot;billing, bug, or question&quot;
+    )
+    urgency: int = Field(ge=1, le=5, description=&quot;1-5, 5 being most urgent&quot;)
+    summary: str
+
+
+@dataclass(frozen=True)
+class Case:
+    ticket: str
+    expected: str
+
+
+@dataclass
+class Result:
+    total: int
+    passed: int
+    failures: list[tuple[Case, str]] = field(default_factory=list)
+
+    @property
+    def accuracy(self) -&gt; float:
+        return self.passed / self.total if self.total else 0.0
+
+
+# --- model wiring -----------------------------------------------------------
+
+
+def missing_key_message() -&gt; str:
+    return (
+        &quot;DEEPSEEK_API_KEY is not set.\n&quot;
+        &#x27;  PowerShell (this session):  $env:DEEPSEEK_API_KEY = &quot;sk-...&quot;\n&#x27;
+        &#x27;  PowerShell (persist):       setx DEEPSEEK_API_KEY &quot;sk-...&quot;   # reopen terminal\n&#x27;
+        &quot;  Get a key:                  https://platform.deepseek.com/api_keys&quot;
+    )
+
+
+def build_model() -&gt; Any:
+    &quot;&quot;&quot;Return a live ChatDeepSeek handle, or explain exactly what is missing.&quot;&quot;&quot;
+    if not os.getenv(&quot;DEEPSEEK_API_KEY&quot;):
+        raise RuntimeError(missing_key_message())
+
+    from langchain_deepseek import ChatDeepSeek
+
+    return ChatDeepSeek(
+        model=os.getenv(&quot;DEEPSEEK_MODEL&quot;, &quot;deepseek-flash&quot;),
+        api_key=os.getenv(&quot;DEEPSEEK_API_KEY&quot;),
+        api_base=os.getenv(&quot;DEEPSEEK_BASE_URL&quot;, &quot;https://api.deepseek.com&quot;),
+        temperature=0,  # comparability: the run must not be the noisy part
+        max_retries=2,
+        timeout=60,
+        extra_body={&quot;thinking&quot;: {&quot;type&quot;: &quot;disabled&quot;}},
+    )
+
+
+def build_classifier(model: Any) -&gt; Any:
+    &quot;&quot;&quot;One structured-output wrapper for every case, not one per case.&quot;&quot;&quot;
+    return model.with_structured_output(SupportTicket, method=&quot;function_calling&quot;)
+
+
+def prompt() -&gt; str:
+    &quot;&quot;&quot;The prompt under test. An env var makes sabotage a one-line experiment.&quot;&quot;&quot;
+    return os.getenv(&quot;CLASSIFIER_PROMPT&quot;) or DEFAULT_PROMPT
+
+
+def classify(classifier: Any, ticket: str) -&gt; str:
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    result = classifier.invoke(
+        [SystemMessage(content=prompt()), HumanMessage(content=ticket)]
+    )
+    return result.category
+
+
+# --- dataset + runner -------------------------------------------------------
+
+
+def load_cases(path: Path = DATASET) -&gt; list[Case]:
+    # utf-8-sig: a dataset saved by Windows PowerShell still loads (BOM tolerated).
+    text = path.read_text(encoding=&quot;utf-8-sig&quot;)
+    cases: list[Case] = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+            cases.append(Case(ticket=row[&quot;ticket&quot;], expected=row[&quot;expected&quot;]))
+        except (json.JSONDecodeError, KeyError) as error:
+            raise ValueError(f&quot;{path.name}:{number}: bad case ({error})&quot;) from error
+    if not cases:
+        raise ValueError(f&quot;{path.name}: no cases&quot;)
+    return cases
+
+
+def run(cases: list[Case], classify_one: Callable[[str], str]) -&gt; Result:
+    &quot;&quot;&quot;The entire runner: call once per case, count matches, keep the misses.&quot;&quot;&quot;
+    failures: list[tuple[Case, str]] = []
+    for case in cases:
+        try:
+            got = classify_one(case.ticket)
+        except Exception as error:  # noqa: BLE001 - a failed call is a failed case
+            got = f&quot;ERROR: {type(error).__name__}: {error}&quot;
+        if got != case.expected:
+            failures.append((case, got))
+    return Result(total=len(cases), passed=len(cases) - len(failures), failures=failures)
+
+
+def gate(accuracy: float, threshold: float) -&gt; bool:
+    &quot;&quot;&quot;CI&#x27;s only question: did the number fall below the line?&quot;&quot;&quot;
+    return accuracy &gt;= threshold
+
+
+def main(argv: list[str] | None = None) -&gt; int:
+    parser = argparse.ArgumentParser(description=&quot;Score the ticket classifier on a fixed set.&quot;)
+    parser.add_argument(
+        &quot;--threshold&quot;,
+        type=float,
+        default=DEFAULT_THRESHOLD,
+        help=f&quot;fail below this accuracy (default {DEFAULT_THRESHOLD:.0%})&quot;,
+    )
+    parser.add_argument(&quot;--dataset&quot;, type=Path, default=DATASET)
+    args = parser.parse_args(argv)
+
+    try:
+        model = build_model()
+    except RuntimeError as error:
+        print(f&quot;error: {error}&quot;, file=sys.stderr)
+        return 1
+
+    cases = load_cases(args.dataset)
+    classifier = build_classifier(model)
+    result = run(cases, lambda ticket: classify(classifier, ticket))
+
+    print(f&quot;prompt: {prompt()[:70]}&quot;)
+    print(f&quot;accuracy: {result.passed}/{result.total} = {result.accuracy:.0%}&quot;)
+    for case, got in result.failures:
+        print(f&quot;  FAIL expected={case.expected} got={got}  ticket={case.ticket[:60]}&quot;)
+
+    ok = gate(result.accuracy, args.threshold)
+    verdict = &quot;pass&quot; if ok else &quot;FAIL&quot;
+    print(f&quot;gate: {result.accuracy:.0%} vs threshold {args.threshold:.0%} -&gt; {verdict}&quot;)
+    return 0 if ok else 1
+
+
+if __name__ == &quot;__main__&quot;:
+    raise SystemExit(main())</pre>
+
+<h2>dataset.jsonl</h2>
+<pre>{&quot;ticket&quot;: &quot;I was charged twice for my subscription this month.&quot;, &quot;expected&quot;: &quot;billing&quot;}
+{&quot;ticket&quot;: &quot;The app crashes every time I open the settings page.&quot;, &quot;expected&quot;: &quot;bug&quot;}
+{&quot;ticket&quot;: &quot;How do I export my data to CSV?&quot;, &quot;expected&quot;: &quot;question&quot;}
+{&quot;ticket&quot;: &quot;My invoice shows a plan I never upgraded to.&quot;, &quot;expected&quot;: &quot;billing&quot;}
+{&quot;ticket&quot;: &quot;The login button does nothing when I click it.&quot;, &quot;expected&quot;: &quot;bug&quot;}
+{&quot;ticket&quot;: &quot;What&#x27;s the difference between the pro and team plans?&quot;, &quot;expected&quot;: &quot;question&quot;}
+{&quot;ticket&quot;: &quot;Cancel this please — I want a refund for unused days.&quot;, &quot;expected&quot;: &quot;billing&quot;}
+{&quot;ticket&quot;: &quot;The dashboard chart renders blank on Safari.&quot;, &quot;expected&quot;: &quot;bug&quot;}
+{&quot;ticket&quot;: &quot;Can two people share one account?&quot;, &quot;expected&quot;: &quot;question&quot;}
+{&quot;ticket&quot;: &quot;Why was I billed after I already cancelled?&quot;, &quot;expected&quot;: &quot;billing&quot;}
+{&quot;ticket&quot;: &quot;File uploads fail with a 502 error.&quot;, &quot;expected&quot;: &quot;bug&quot;}
+{&quot;ticket&quot;: &quot;Where can I find your privacy policy?&quot;, &quot;expected&quot;: &quot;question&quot;}</pre>
+
+<h2>pyproject.toml</h2>
+<pre>[project]
+name = &quot;0005-first-evals&quot;
+version = &quot;0.1.0&quot;
+description = &quot;Lesson 5 lab: dataset, scorer, runner, and gate with LangChain + DeepSeek&quot;
+requires-python = &quot;&gt;=3.11&quot;
+dependencies = [
+    &quot;langchain&gt;=1.4,&lt;2&quot;,
+    &quot;langchain-deepseek&gt;=1.1,&lt;2&quot;,
+    &quot;pydantic&gt;=2.9,&lt;3&quot;,
+]</pre>
+
+<p>Lesson: <a href="../../../lessons/0005-your-first-evals.html">Lesson 5 &mdash; Your First Evals</a> &middot; <a href="README.md">README</a></p>
+
+</article>
+</body>
+</html>

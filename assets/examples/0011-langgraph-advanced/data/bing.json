@@ -1,0 +1,27 @@
+[
+  {
+    "title": "Is LangGraph overkill for a small agent?",
+    "url": "https://example.com/discuss/langgraph-overkill",
+    "snippet": "Practitioners compare a three-tool support bot built as a plain loop with the same bot rebuilt as a graph. The consensus: the graph pays off at the second operational requirement, usually resume or approval."
+  },
+  {
+    "title": "LangGraph vs a hand-written loop: the real tradeoff",
+    "url": "https://example.com/discuss/graph-vs-loop",
+    "snippet": "A hand-written loop is faster to read and has no dependency. A graph makes state and routing explicit, which helps when several people edit the flow or when a run must be replayed."
+  },
+  {
+    "title": "Checkpointers explained: memory, sqlite, postgres",
+    "url": "https://example.com/guides/checkpointers",
+    "snippet": "MemorySaver is enough for a demo. SqliteSaver covers a single box in development. PostgresSaver is the usual production default because several workers can read the same thread."
+  },
+  {
+    "title": "The cost of one extra LLM call in an agent",
+    "url": "https://example.com/notes/cost-of-an-extra-call",
+    "snippet": "At support volume, one avoidable LLM round trip per ticket is usually more expensive than the infrastructure. Measure the critical path, not the number of nodes: parallel branches can hide latency."
+  },
+  {
+    "title": "Human-in-the-loop without a server",
+    "url": "https://example.com/guides/human-in-the-loop",
+    "snippet": "A checkpoint plus an interrupt lets a graph pause before a side effect and resume from another process. The approval decision should be stored as data, never inferred from the model's prose."
+  }
+]

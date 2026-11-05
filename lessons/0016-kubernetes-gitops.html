@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 16 — Kubernetes GitOps: Jenkins Builds, Git Declares, Argo CD Reconciles</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<article class="page">
+
+<p class="meta">Lesson 16 of the AI Engineering course · ~55 min · Prereq: <a href="0015-ai-coding.html">Lesson 15</a> + Docker and Git basics · <a href="../reference/skill-map.html">Skill Map →</a></p>
+
+<h1>Kubernetes GitOps: Jenkins Builds, Git Declares, Argo CD Reconciles</h1>
+
+<p class="lede">Continuous integration and continuous delivery are two different jobs. Jenkins should build, test, scan and push an image — then stop. The cluster should read its desired state from Git and reconcile itself. That split is the whole point of GitOps: <strong>the CI system never holds a cluster credential, and every deployment is a reviewable commit.</strong></p>
+
+<div class="callout win">
+  <span class="label">Your win this lesson</span>
+  You'll be able to draw the full pipeline, lay out the two repositories, write a Jenkinsfile that builds and updates a GitOps tag, define the Argo CD Application that syncs it, promote through dev → staging → prod by pull request, and roll back with <code>git revert</code> instead of a kubectl command.
+</div>
+
+<h2>Part 1 — Two planes, one source of truth</h2>
+
+<figure>
+  <img src="../assets/images/kubernetes-gitops.svg" alt="GitOps pipeline: developer to GitHub app repo, Jenkins test/build/scan/push, registry, GitOps repo, Argo CD, Kubernetes dev/staging/prod, with promotion by pull request" width="900">
+  <figcaption>Jenkins owns the CI plane; Argo CD owns the CD plane. The only arrow into the cluster is Argo CD's sync.</figcaption>
+</figure>
+
+<ol>
+  <li><strong>Developer</strong> opens a pull request against the application repository.</li>
+  <li><strong>GitHub</strong> runs the PR checks and, on merge, notifies Jenkins through a webhook.</li>
+  <li><strong>Jenkins</strong> checks out the commit, runs tests, builds the image, scans it and pushes an immutable tag to the registry.</li>
+  <li><strong>Jenkins</strong> commits the new image tag to the GitOps repository — that is the deployment request.</li>
+  <li><strong>Argo CD</strong> watches the GitOps repository and compares it with the live cluster.</li>
+  <li><strong>Argo CD</strong> applies the difference to Kubernetes and reports health.</li>
+  <li><strong>Promotion</strong> is a pull request from one environment overlay to the next; rollback is a revert of the commit that introduced the bad image.</li>
+</ol>
+
+<table>
+  <thead><tr><th>component</th><th>credentials it needs</th><th>what it may write</th></tr></thead>
+  <tbody>
+    <tr><td>Jenkins</td><td>registry push token, GitOps repo write token</td><td>images and Git commits — <strong>no kubeconfig</strong></td></tr>
+    <tr><td>Argo CD</td><td>cluster sync role, GitOps repo read</td><td>Kubernetes resources in allowed namespaces</td></tr>
+    <tr><td>Developer</td><td>app repo write, GitOps repo PR</td><td>code and desired-state PRs, never a direct prod sync</td></tr>
+    <tr><td>Registry</td><td>push from CI, pull from cluster</td><td>image layers and tags</td></tr>
+  </tbody>
+</table>
+
+<p><strong>Why this is safer, not just tidier:</strong> a compromised CI job can push an image and a Git commit, but it cannot delete a namespace, read a cluster secret, or run <code>kubectl</code>. The blast radius is two repositories and one registry. The cluster trusts one reconciler, and every change has a commit author, a diff and a revert path.</p>
+
+<h2>Part 2 — The two repositories</h2>
+
+<p>Keep the application and the desired state apart. They have different reviewers, different change rates and different permissions.</p>
+
+<pre><code>app-repo/
+├─ src/                     application code
+├─ tests/
+├─ Dockerfile
+└─ Jenkinsfile              CI only
+
+gitops-repo/
+├─ base/
+│  ├─ deployment.yaml
+│  ├─ service.yaml
+│  └─ kustomization.yaml
+└─ overlays/
+   ├─ dev/
+   │  ├─ kustomization.yaml   image tag + replicas
+   │  └─ patch.yaml
+   ├─ staging/
+   └─ prod/</code></pre>
+
+<p>The image tag is the deployment artifact. Pin an immutable value — the commit SHA or the image digest — never <code>latest</code>:</p>
+
+<pre><code># overlays/dev/kustomization.yaml
+resources:
+  - ../../base
+images:
+  - name: ghcr.io/acme/document-copilot
+    newTag: 4f2c1a9d7e6b</code></pre>
+
+<p>A tag is a pointer; a digest is the exact bytes. For production, record the digest in the overlay or let the promotion step copy it, so a re-tagged image cannot silently change what is running.</p>
+
+<p><strong>Why separate repos?</strong> The app repo can be public or broadly writable; the GitOps repo can be private and protected. CI gets write access only to the GitOps repo, not the cluster. Promotion becomes a pull request with a diff, approvals and history. A monorepo can work, but the permission boundary is weaker and the CI token now has a path to production manifests.</p>
+
+<h2>Part 3 — Jenkins: build, scan, push, commit</h2>
+
+<p>The pipeline has one job that matters at the end: update the GitOps tag. It does not run <code>kubectl apply</code>.</p>
+
+<pre><code>pipeline {
+  agent any
+
+  environment {
+    IMAGE = "ghcr.io/acme/document-copilot"
+    TAG   = "${env.GIT_COMMIT.take(12)}"
+  }
+
+  stages {
+    stage('Checkout') { steps { checkout scm } }
+
+    stage('Test') {
+      steps {
+        sh 'uv sync --frozen'
+        sh 'uv run pytest -q'
+        sh 'uv run ruff check .'
+      }
+    }
+
+    stage('Build') {
+      steps { sh "docker build -t ${IMAGE}:${TAG} ." }
+    }
+
+    stage('Scan') {
+      steps {
+        sh "trivy image --exit-code 1 --severity HIGH,CRITICAL ${IMAGE}:${TAG}"
+      }
+    }
+
+    stage('Push') {
+      steps {
+        withCredentials([usernamePassword(
+          credentialsId: 'ghcr-push',
+          usernameVariable: 'REG_USER',
+          passwordVariable: 'REG_PASS'
+        )]) {
+          sh 'echo "$REG_PASS" | docker login ghcr.io -u "$REG_USER" --password-stdin'
+          sh "docker push ${IMAGE}:${TAG}"
+        }
+      }
+    }
+
+    stage('Update GitOps') {
+      steps {
+        withCredentials([sshUserPrivateKey(
+          credentialsId: 'gitops-deploy-key',
+          keyFileVariable: 'GITOPS_KEY'
+        )]) {
+          sh '''
+            git clone git@github.com:acme/gitops.git
+            cd gitops
+            (cd overlays/dev && kustomize edit set image \
+              ghcr.io/acme/document-copilot=ghcr.io/acme/document-copilot:${TAG})
+            git config user.name  "jenkins"
+            git config user.email "jenkins@acme.test"
+            git commit -am "deploy document-copilot ${TAG}"
+            git push origin main
+          '''
+        }
+      }
+    }
+  }
+}</code></pre>
+
+<p><strong>Credential notes:</strong> use a registry token scoped to push, and a deploy key scoped to the GitOps repository. Jenkins has no <code>kubeconfig</code>, no cluster role and no cloud admin role. If a build step needs to read a secret, inject only that secret into that stage. The agent image needs Docker (or BuildKit), Trivy, Kustomize and Git; pin that image like any other dependency.</p>
+
+<p><strong>Triggering:</strong> a GitHub webhook on pushes to <code>main</code>; pull requests run the same test and build stages but skip <code>Push</code> and <code>Update GitOps</code>. Use ephemeral agents (the Jenkins Kubernetes plugin) so a build cannot poison the controller.</p>
+
+<p><strong>GitHub Actions is the same design</strong> with a different runner: <code>docker/build-push-action</code>, <code>trivy-action</code>, then a commit to the GitOps repo. Jenkins is not the architecture; the split is.</p>
+
+<h2>Part 4 — Argo CD: the only cluster writer</h2>
+
+<p>Install Argo CD into its own namespace:</p>
+
+<pre><code>kubectl create namespace argocd
+kubectl apply -n argocd -f \
+  https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+kubectl -n argocd port-forward svc/argocd-server 8080:443
+argocd admin initial-password -n argocd</code></pre>
+
+<p>Then declare the application. This is the object that watches Git and reconciles the cluster:</p>
+
+<pre><code>apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: document-copilot-dev
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/acme/gitops.git
+    targetRevision: main
+    path: overlays/dev
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: document-copilot-dev
+  syncPolicy:
+    automated:
+      prune: true        # remove resources deleted from Git
+      selfHeal: true     # revert manual drift
+    syncOptions:
+      - CreateNamespace=true</code></pre>
+
+<p><strong>What <code>selfHeal</code> means:</strong> if someone edits a deployment with <code>kubectl</code>, Argo CD notices the live state no longer matches Git and reverts it. Drift becomes a signal, not a new normal. <code>prune</code> is the other half: deleting a manifest deletes the resource. Both are powerful; both deserve a review and a non-production rehearsal first.</p>
+
+<p>For several environments, use an <code>ApplicationSet</code> with a list or Git generator, or one <code>Application</code> per overlay. Keep the source path and destination namespace explicit; do not let a single app sync every environment with a floating branch.</p>
+
+<h2>Part 5 — Promotion and rollback without kubectl</h2>
+
+<table>
+  <thead><tr><th>environment</th><th>sync</th><th>approval</th></tr></thead>
+  <tbody>
+    <tr><td><strong>dev</strong></td><td>automatic on every GitOps commit</td><td>none</td></tr>
+    <tr><td><strong>staging</strong></td><td>automatic after the promotion PR merges</td><td>one reviewer, CI green</td></tr>
+    <tr><td><strong>prod</strong></td><td>manual sync or a sync window</td><td>PR approval + release owner</td></tr>
+  </tbody>
+</table>
+
+<p><strong>Promotion</strong> is not a Jenkins job copying files. It is a pull request that changes the image tag in the next overlay:</p>
+
+<pre><code># promote the exact image that passed staging
+git checkout -b promote/document-copilot-4f2c1a9
+# edit overlays/staging/kustomization.yaml (or prod) to the tested digest
+git commit -am "promote document-copilot 4f2c1a9 to staging"
+git push -u origin promote/document-copilot-4f2c1a9
+# open the PR, review the diff, merge; Argo CD syncs</code></pre>
+
+<p><strong>Rollback</strong> is the same mechanism in reverse:</p>
+
+<pre><code>git revert &lt;bad-deploy-commit&gt;
+git push origin main
+argocd app history document-copilot-prod
+argocd app wait document-copilot-prod --health</code></pre>
+
+<p>Do not “fix” production with <code>kubectl rollout undo</code> or a hot edit. That creates drift Argo CD will revert, and it leaves no reviewed history. Revert the commit; the cluster follows Git. If the bad image is already running, the revert is still the audit trail — pair it with an incident note.</p>
+
+<h2>Part 6 — Security and operations</h2>
+
+<ul>
+  <li><strong>Secrets:</strong> never commit plaintext. Use External Secrets Operator to pull from a vault/cloud secret manager, or Sealed Secrets if you want encrypted secrets in Git. The app reads a Kubernetes Secret; the pipeline never sees it.</li>
+  <li><strong>Supply chain:</strong> scan with Trivy, generate an SBOM (Syft), sign with cosign, and admit only signed images with Kyverno or OPA Gatekeeper. Scanning without admission is advice, not a control.</li>
+  <li><strong>Least privilege:</strong> Jenkins gets registry push + GitOps repo write; Argo CD gets a namespace-scoped sync role. Use Argo CD Projects and Kubernetes RBAC to bound each application.</li>
+  <li><strong>Policy:</strong> Pod Security Standards, resource limits, NetworkPolicies, and a deny-by-default egress policy are the baseline for a production namespace.</li>
+  <li><strong>Observability:</strong> Argo CD health is not application health. Add readiness/liveness probes, Prometheus metrics, logs and alerts; a green sync with a failing app is still an outage.</li>
+  <li><strong>Notifications:</strong> Argo CD Notifications or your CI chat integration for sync failures and degraded health; a silent pipeline is a failed pipeline.</li>
+</ul>
+
+<h2>Part 7 — A local rehearsal</h2>
+
+<p>You do not need a cloud cluster to learn the shape. A local kind cluster plus Argo CD is enough for the CD half; Jenkins can run in Docker or you can substitute GitHub Actions while you learn.</p>
+
+<pre><code>kind create cluster --name gitops
+kubectl create namespace argocd
+kubectl apply -n argocd -f \
+  https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+# a GitOps repo you control, with overlays/dev pointing at a public image
+kubectl apply -f application-dev.yaml
+argocd app get document-copilot-dev
+argocd app sync document-copilot-dev</code></pre>
+
+<p>Use the <a href="../assets/examples/0015-document-copilot/index.html">document-copilot</a> skeleton as the application: finish the FastAPI backend through lesson 15's workflow, containerize it, push one image, and let Argo CD deploy it to a <code>dev</code> namespace. The first sync is the lesson; changing the tag in Git and watching Argo CD reconcile is the second.</p>
+
+<h2>Part 8 — Failure modes, by stage</h2>
+
+<table>
+  <thead><tr><th>symptom</th><th>stage</th><th>first check</th></tr></thead>
+  <tbody>
+    <tr><td><code>ImagePullBackOff</code></td><td>registry / pull secret</td><td>image tag exists; namespace has the pull secret; registry auth</td></tr>
+    <tr><td><code>CrashLoopBackOff</code></td><td>application</td><td>logs, missing env/secret, readiness probe, command</td></tr>
+    <tr><td>Argo CD <code>OutOfSync</code> but no sync</td><td>sync policy / RBAC</td><td>auto-sync enabled? project allows the namespace? diff in UI</td></tr>
+    <tr><td><code>ComparisonError</code></td><td>manifest / CRD</td><td>invalid YAML, missing CRD, unsupported field</td></tr>
+    <tr><td>Jenkins cannot push</td><td>credentials</td><td>token scope, registry login, branch protection on GitOps</td></tr>
+    <tr><td>Webhook never fires</td><td>GitHub → Jenkins</td><td>delivery log, URL reachability, secret/token</td></tr>
+    <tr><td>Prod changes by hand keep reverting</td><td>Argo CD selfHeal</td><td>that is the feature; make the change in Git</td></tr>
+    <tr><td>Same tag, different behavior</td><td>tag immutability</td><td>use a digest; never overwrite a tag; rebuild with a new SHA</td></tr>
+  </tbody>
+</table>
+
+<h2>Part 9 — The checklist</h2>
+
+<ol>
+  <li>Two repos: application + GitOps; branch protection on both.</li>
+  <li>Jenkins credentials: registry push, GitOps deploy key. No kubeconfig.</li>
+  <li>Image tag: commit SHA or digest, never <code>latest</code>.</li>
+  <li>Pipeline: test → build → scan → push → update overlay → commit.</li>
+  <li>Argo CD: one Application per environment; <code>prune</code>/<code>selfHeal</code> deliberate.</li>
+  <li>Promotion: PR per environment; prod sync window/approval.</li>
+  <li>Secrets: ESO or Sealed Secrets; no plaintext in Git.</li>
+  <li>Supply chain: Trivy + SBOM + cosign + admission policy.</li>
+  <li>Health: probes, metrics, logs, Argo CD notifications.</li>
+  <li>Rollback rehearsed: <code>git revert</code> → Argo sync → health check.</li>
+</ol>
+
+<h2>Check yourself</h2>
+
+<div class="quiz">
+<script type="application/json">
+{
+  "questions": [
+    {
+      "q": "Why should Jenkins not hold a kubeconfig?",
+      "options": [
+        "It makes image builds slower",
+        "Argo CD is the only cluster writer, which bounds the blast radius",
+        "Kubernetes rejects CI service accounts",
+        "Jenkins cannot parse YAML"
+      ],
+      "correct": 1,
+      "explain": "CI only needs registry push and GitOps repo write. If it is compromised, the attacker cannot delete namespaces or read cluster secrets; Argo CD remains the single reconciler."
+    },
+    {
+      "q": "What triggers the deployment after Jenkins pushes an image?",
+      "options": [
+        "A kubectl apply in the Jenkinsfile",
+        "A commit to the GitOps repository that changes the desired tag",
+        "A manual SSH into the cluster",
+        "The registry webhook restarts the pods"
+      ],
+      "correct": 1,
+      "explain": "The GitOps commit is the deployment request. Argo CD observes the repository and reconciles the cluster; Jenkins never talks to the API server."
+    },
+    {
+      "q": "Why pin an image tag to a commit SHA or digest?",
+      "options": [
+        "Tags are not supported by Kubernetes",
+        "It makes the image smaller",
+        "It makes rollback and audit reproducible",
+        "It removes the need for a registry"
+      ],
+      "correct": 2,
+      "explain": "A moving tag can point at different bytes. A SHA/digest identifies the exact build, so a revert restores the same image and the Git history explains what ran."
+    },
+    {
+      "q": "How do you promote an image from staging to production?",
+      "options": [
+        "Run kubectl set image in prod",
+        "Open a PR that changes the prod overlay to the tested digest",
+        "Rebuild the image with a prod tag",
+        "Restart the Jenkins controller"
+      ],
+      "correct": 1,
+      "explain": "Promotion is a reviewed desired-state change. The PR diff shows the exact image, approvals are recorded, and Argo CD syncs production after merge."
+    },
+    {
+      "q": "What is the GitOps rollback?",
+      "options": [
+        "kubectl rollout undo in the namespace",
+        "Delete the pod and let it restart",
+        "Revert the deploy commit and let Argo CD sync",
+        "Re-run the Jenkins build with the same tag"
+      ],
+      "correct": 2,
+      "explain": "Git is the source of truth. Reverting the commit restores the previous tag/digest, and Argo CD reconciles it. Manual rollbacks create drift and leave no audit path."
+    },
+    {
+      "q": "What does Argo CD selfHeal do?",
+      "options": [
+        "Restarts Jenkins after a failed build",
+        "Reverts manual cluster drift back to the Git state",
+        "Rebuilds images that fail a scan",
+        "Promotes every commit to production"
+      ],
+      "correct": 1,
+      "explain": "selfHeal detects that live resources no longer match the desired state in Git and reconciles them back. It is why hand edits do not stick."
+    },
+    {
+      "q": "Where should production secrets live?",
+      "options": [
+        "In the GitOps repository as plain YAML",
+        "In the Docker image as environment variables",
+        "In a secret manager, synced by ESO or Sealed Secrets",
+        "In the Jenkins console log"
+      ],
+      "correct": 2,
+      "explain": "Git holds desired state, not plaintext credentials. External Secrets Operator or Sealed Secrets keeps the secret outside the repo while Kubernetes receives a normal Secret."
+    }
+  ]
+}
+</script>
+</div>
+
+<h2>Primary sources for this lesson</h2>
+<p><a href="https://kubernetes.io/docs/">Kubernetes documentation</a> for Deployments, Services, namespaces, probes and RBAC. <a href="https://argo-cd.readthedocs.io/">Argo CD documentation</a> for Applications, sync policies, health and projects; <a href="https://kubectl.docs.kubernetes.io/guides/introduction/kustomize/">Kustomize</a> for overlays and image overrides. <a href="https://www.jenkins.io/doc/book/pipeline/">Jenkins Pipeline</a> for the declarative Jenkinsfile and credentials binding.</p>
+<p>Supply chain and secrets: <a href="https://trivy.dev/">Trivy</a> for image scanning, <a href="https://docs.sigstore.dev/cosign/overview/">cosign</a> for signing, <a href="https://external-secrets.io/">External Secrets Operator</a> and <a href="https://sealed-secrets.netlify.app/">Sealed Secrets</a>. For the cluster bootstrap, <a href="https://kind.sigs.k8s.io/">kind</a> is enough for the local rehearsal.</p>
+
+<h2>What's next</h2>
+<p>The delivery loop is now closed: code, image, desired state, cluster, health. <a href="0017-project-supabase-rag-ai-coding.html">Lesson 17</a> puts every layer to work in the capstone — a Supabase + pgvector filing analyst with hybrid retrieval, a PydanticAI agent, a fail-closed grounding contract, a citation UI, and a phased AI-coding workflow whose open gates stay visible. After that, the <a href="../reference/skill-map.html">skill map</a> lists the whole course in order, and <a href="0001-ai-engineering-landscape-2026.html">lesson 1</a> is the way back to the start.</p>
+
+<div class="footer-nav">
+  <div class="ask"><strong>Pipeline green but pods failing?</strong> Separate the planes: check the Argo CD diff first (desired vs live), then pod events and logs (image pull, secrets, probes). A sync error and a runtime error are different bugs with different owners.</div>
+  <div class="links">
+    <a href="0015-ai-coding.html">← Lesson 15</a>
+    <a href="0017-project-supabase-rag-ai-coding.html">Lesson 17 →</a>
+    <a href="../reference/skill-map.html">Skill Map &amp; Glossary</a>
+    <a href="../assets/examples/0015-document-copilot/index.html">Document Copilot</a>
+  </div>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</article>
+</body>
+</html>

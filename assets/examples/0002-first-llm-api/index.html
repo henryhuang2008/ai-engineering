@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Example 0002 - LangChain + DeepSeek</title>
+<link rel="stylesheet" href="../../course.css">
+</head>
+<body>
+<article class="page">
+
+<p class="meta">Example 0002 · Companion to <a href="../../../lessons/0002-your-first-llm-api-call.html">Lesson 2</a> · <a href="README.md">README</a></p>
+
+<h1>First LLM call: messages, streaming, tools, typed output</h1>
+
+<p class="lede">One <code>ChatDeepSeek</code> handle, four stages, no fake model. Chat sends <strong>2 messages, then 4</strong> (history is re-sent); streaming joins back to the exact <code>invoke()</code> reply; the tool round trip runs <code>get_order_status({'order_id': 'A-1042'})</code> and grows the thread <strong>4 → 5</strong>; structured output returns a validated <code>SupportTicket</code> instance. Stage 3 is <strong>one round trip, not an agent</strong>. Self-tests: <strong>32 checks</strong> offline, plus a live smoke when <code>DEEPSEEK_API_KEY</code> is set.</p>
+
+<h2>Key and run (uv)</h2>
+<pre>$env:DEEPSEEK_API_KEY = "sk-..."     # PowerShell, this terminal
+setx DEEPSEEK_API_KEY "sk-..."       # persist, then reopen the terminal
+
+cd assets\examples\0002-first-llm-api
+uv sync                              # .venv from pyproject.toml + uv.lock
+uv run python langchain_lab.py       # four stages, live DeepSeek
+uv run python evals.py               # 32 checks (+2 live with a key)</pre>
+<p>Key page: <a href="https://platform.deepseek.com/api_keys">platform.deepseek.com/api_keys</a>. No key → the lab prints those commands and exits 1; there is no canned fallback. Optional overrides: <code>DEEPSEEK_MODEL</code> (default <code>deepseek-flash</code>) and <code>DEEPSEEK_BASE_URL</code> (default <code>https://api.deepseek.com</code>). The lab disables DeepSeek thinking for speed, and structured output uses <code>method="function_calling"</code> because DeepSeek has no OpenAI-style <code>json_schema</code> response format. Wording varies between runs; the message counts and the tool-thread length do not. <code>uv.lock</code> pins the exact dependency graph, so <code>uv sync</code> is the whole install step.</p>
+
+<h2>README.md</h2>
+<pre># 0002 — First LLM call: messages, streaming, tools, structured output
+
+One LangChain model handle (`ChatDeepSeek`), four stages. The point is the **shape of
+the conversation**, not the vendor: every stage is messages in, messages out.
+
+| stage | what it shows | stable result |
+|---|---|---|
+| 1. chat | `SystemMessage` + `HumanMessage` → `AIMessage`; turn 2 re-sends the whole history | 2 messages, then **4** |
+| 2. streaming | `model.stream()` yields `AIMessageChunk` pieces; join them and you get the `invoke()` text | join == `invoke()`; the final chunk is often empty |
+| 3. tools | `bind_tools()` → `AIMessage.tool_calls` → your code runs the tool → `ToolMessage` → one more call | thread grows **4 → 5** (one round trip) |
+| 4. structured | `with_structured_output(SupportTicket, method=&quot;function_calling&quot;)` returns a validated pydantic instance | a `SupportTicket` object, not a dict |
+
+Stage 3 is **one round trip, not an agent**. The model asks; your code executes; the
+model answers. An agent is this loop repeated until no tool calls remain — that is
+Lesson 3, by hand.
+
+Model *wording* varies between runs. The counts above are structural (messages you
+constructed), and `evals.py` asserts the contract, not the sentences.
+
+## Run
+
+The lab calls the live DeepSeek API. There is no fake model and no offline mode.
+
+```powershell
+# key, this terminal only
+$env:DEEPSEEK_API_KEY = &quot;sk-...&quot;
+
+# or persist for future terminals, then reopen the terminal
+setx DEEPSEEK_API_KEY &quot;sk-...&quot;
+```
+
+```powershell
+cd assets\examples\0002-first-llm-api
+uv sync                        # create .venv from pyproject.toml + uv.lock
+uv run python langchain_lab.py # four stages against DeepSeek
+uv run python evals.py         # 32 offline checks; +2 live with a key
+```
+
+`uv sync` is the install step: `pyproject.toml` declares the dependencies and
+`uv.lock` pins the exact graph, so no `venv` + `pip` dance and no drift between
+machines. No uv yet: `winget install --id=astral-sh.uv`, or `pip install uv`.
+
+Get a key at &lt;https://platform.deepseek.com/api_keys&gt;; the account needs a small
+prepaid balance. Without a key the lab prints the two key commands and exits 1 — no
+silent fallback to canned text.
+
+Optional overrides:
+
+| variable | default |
+|---|---|
+| `DEEPSEEK_MODEL` | `deepseek-flash` |
+| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` |
+
+## DeepSeek notes
+
+- `deepseek-flash` is the current model name (DeepSeek-V4.1-Flash-1017) and supports
+  tool calls and JSON output; `deepseek-v4-pro` is the larger option.
+- The API is OpenAI-compatible, which is why `langchain-deepseek` can reuse the
+  OpenAI transport. The key is `DEEPSEEK_API_KEY`.
+- DeepSeek thinks by default; the lab passes
+  `extra_body={&quot;thinking&quot;: {&quot;type&quot;: &quot;disabled&quot;}}` because this lesson is about
+  plumbing. Remove it to watch the reasoning tokens (and pay for them).
+- DeepSeek has no OpenAI-style `json_schema` response format, so structured output
+  uses tool calling: `with_structured_output(SupportTicket, method=&quot;function_calling&quot;)`
+
+## Files
+
+| file | role |
+|---|---|
+| `langchain_lab.py` | the four stages and the live `ChatDeepSeek` wiring |
+| `evals.py` | 32 offline checks (schema, tool contract, message shapes, model config, missing-key message, no fake model, uv project) plus a conditional live smoke |
+| `pyproject.toml` | dependencies and Python floor — the single source of truth |
+| `uv.lock` | the pinned dependency graph `uv sync` installs |
+| `index.html` | this lab rendered for the course |
+
+Versions pinned by `uv.lock`: `langchain 1.4.8`, `langchain-core 1.7.4`,
+`langchain-deepseek 1.1.1`, `pydantic 2.14.2` (Python 3.12).
+
+Lesson: [lessons/0002-your-first-llm-api-call.html](../../../lessons/0002-your-first-llm-api-call.html)
+</pre>
+
+<h2>pyproject.toml</h2>
+<pre>[project]
+name = &quot;0002-first-llm-api&quot;
+version = &quot;0.1.0&quot;
+description = &quot;Lesson 2 lab: messages, streaming, tools, and structured output with LangChain + DeepSeek&quot;
+requires-python = &quot;&gt;=3.11&quot;
+dependencies = [
+    &quot;langchain&gt;=1.4,&lt;2&quot;,
+    &quot;langchain-deepseek&gt;=1.1,&lt;2&quot;,
+    &quot;pydantic&gt;=2.9,&lt;3&quot;,
+]
+</pre>
+
+<h2>langchain_lab.py</h2>
+<pre>&quot;&quot;&quot;0002-first-llm-api - chat, streaming, tools, and structured output with LangChain.
+
+One model handle, four stages:
+
+  1. chat       SystemMessage + HumanMessage -&gt; AIMessage, and a second turn where
+                the whole history is re-sent
+  2. streaming  model.stream() -&gt; AIMessageChunk pieces; join them and you have
+                exactly what invoke() returned
+  3. tools      bind_tools() -&gt; AIMessage.tool_calls -&gt; your code runs the tool -&gt;
+                ToolMessage -&gt; one more call. ONE round trip, not an agent loop.
+  4. structured model.with_structured_output(SupportTicket) -&gt; a validated pydantic
+                instance, via DeepSeek&#x27;s tool calling
+
+This lab talks to the live DeepSeek API. Set DEEPSEEK_API_KEY first:
+
+  PowerShell (this session):  $env:DEEPSEEK_API_KEY = &quot;sk-...&quot;
+  PowerShell (persist):       setx DEEPSEEK_API_KEY &quot;sk-...&quot;   # reopen the terminal
+
+Get a key at https://platform.deepseek.com/api_keys. No key -&gt; exit 1 with these
+instructions, never a guess.
+&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import os
+import sys
+from typing import Any, Literal
+
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
+from langchain_core.tools import BaseTool, tool
+from pydantic import BaseModel, Field
+
+MODEL = os.getenv(&quot;DEEPSEEK_MODEL&quot;, &quot;deepseek-flash&quot;)
+BASE_URL = os.getenv(&quot;DEEPSEEK_BASE_URL&quot;, &quot;https://api.deepseek.com&quot;)
+
+SYSTEM = &quot;You are a terse support assistant. Answer in one sentence.&quot;
+QUESTION_1 = &quot;My invoice charged me twice. What should I do?&quot;
+QUESTION_2 = &quot;And how long does the refund take?&quot;
+QUESTION_3 = &quot;Where is order A-1042?&quot;
+TICKET_TEXT = &quot;My invoice charged me twice for order A-1042. Fix it now.&quot;
+
+# --- the world the tool can touch (fixture) --------------------------------
+
+ORDERS = {
+    &quot;A-1042&quot;: &quot;shipped from the Sydney warehouse, arriving Thursday&quot;,
+    &quot;A-2001&quot;: &quot;processing, ships Friday&quot;,
+}
+
+
+@tool
+def get_order_status(order_id: str) -&gt; str:
+    &quot;&quot;&quot;Look up an order&#x27;s fulfilment status by its id, for example A-1042.&quot;&quot;&quot;
+    if order_id not in ORDERS:
+        return f&quot;no order found for {order_id}&quot;
+    return ORDERS[order_id]
+
+
+class SupportTicket(BaseModel):
+    &quot;&quot;&quot;A support ticket, classified into typed fields.&quot;&quot;&quot;
+
+    category: Literal[&quot;billing&quot;, &quot;bug&quot;, &quot;question&quot;] = Field(
+        description=&quot;billing, bug, or question&quot;
+    )
+    urgency: int = Field(ge=1, le=5, description=&quot;1-5, 5 being most urgent&quot;)
+    summary: str = Field(description=&quot;one sentence, no invented facts&quot;)
+    order_id: str | None = Field(default=None, description=&quot;order id if mentioned&quot;)
+
+
+# --- model wiring ----------------------------------------------------------
+
+
+def missing_key_message() -&gt; str:
+    return (
+        &quot;DEEPSEEK_API_KEY is not set.\n&quot;
+        &#x27;  PowerShell (this session):  $env:DEEPSEEK_API_KEY = &quot;sk-...&quot;\n&#x27;
+        &#x27;  PowerShell (persist):       setx DEEPSEEK_API_KEY &quot;sk-...&quot;   # reopen terminal\n&#x27;
+        &quot;  Get a key:                  https://platform.deepseek.com/api_keys&quot;
+    )
+
+
+def build_model() -&gt; Any:
+    &quot;&quot;&quot;Return a live ChatDeepSeek handle, or explain exactly what is missing.&quot;&quot;&quot;
+    if not os.getenv(&quot;DEEPSEEK_API_KEY&quot;):
+        raise RuntimeError(missing_key_message())
+
+    from langchain_deepseek import ChatDeepSeek
+
+    return ChatDeepSeek(
+        model=os.getenv(&quot;DEEPSEEK_MODEL&quot;, MODEL),
+        api_key=os.getenv(&quot;DEEPSEEK_API_KEY&quot;),
+        api_base=os.getenv(&quot;DEEPSEEK_BASE_URL&quot;, BASE_URL),
+        temperature=0,
+        max_retries=2,
+        timeout=60,
+        # DeepSeek thinks by default; this lab is about message plumbing,
+        # so keep replies short and cheap. Delete this to watch it reason.
+        extra_body={&quot;thinking&quot;: {&quot;type&quot;: &quot;disabled&quot;}},
+    )
+
+
+# --- output helpers --------------------------------------------------------
+
+
+def describe(message: BaseMessage) -&gt; str:
+    text = message.content if isinstance(message.content, str) else str(message.content)
+    return f&quot;{message.type:&lt;6} {text}&quot;
+
+
+def print_trace(messages: list[BaseMessage]) -&gt; None:
+    for index, message in enumerate(messages, start=1):
+        print(f&quot;  {index} {describe(message)}&quot;)
+
+
+def describe_tool(tool_obj: BaseTool) -&gt; str:
+    schema = tool_obj.args_schema
+    if hasattr(schema, &quot;model_json_schema&quot;):
+        schema = schema.model_json_schema()
+    required = schema.get(&quot;required&quot;, []) if isinstance(schema, dict) else []
+    return f&quot;{tool_obj.name}{required}&quot;
+
+
+# --- stages ----------------------------------------------------------------
+
+
+def stage_chat(model: Any) -&gt; list[BaseMessage]:
+    print(&quot;== 1. chat: a list of messages ===========================&quot;)
+    messages = [SystemMessage(content=SYSTEM), HumanMessage(content=QUESTION_1)]
+    print(f&quot;turn 1: {len(messages)} messages sent&quot;)
+    print_trace(messages)
+    reply = model.invoke(messages)
+    print(f&quot;reply 1: {reply.content}&quot;)
+
+    messages = messages + [reply, HumanMessage(content=QUESTION_2)]
+    print(f&quot;turn 2: {len(messages)} messages sent (the whole history is re-sent)&quot;)
+    print_trace(messages)
+    reply = model.invoke(messages)
+    print(f&quot;reply 2: {reply.content}&quot;)
+    print()
+    return messages
+
+
+def stage_stream(model: Any) -&gt; None:
+    print(&quot;== 2. streaming: the same reply, in pieces ===============&quot;)
+    messages = [SystemMessage(content=SYSTEM), HumanMessage(content=QUESTION_1)]
+    baseline = model.invoke(messages).content
+    chunks = list(model.stream(messages))
+    pieces = [str(chunk.content) for chunk in chunks if chunk.content]
+    joined = &quot;&quot;.join(pieces)
+    print(f&quot;chunks: {len(chunks)} ({len(pieces)} with text, {len(chunks) - len(pieces)} empty)&quot;)
+    print(f&quot;joined == invoke(): {joined == baseline}&quot;)
+    print(f&#x27;first chunk: &quot;{pieces[0]}&quot;&#x27;)
+    print(f&#x27;last text chunk: &quot;{pieces[-1]}&quot;&#x27;)
+    print()
+
+
+def stage_tools(model: Any) -&gt; None:
+    print(&quot;== 3. tools: one round trip, not an agent ================&quot;)
+    print(f&quot;tool schema: {describe_tool(get_order_status)}&quot;)
+    bound = model.bind_tools([get_order_status])
+    messages = [SystemMessage(content=SYSTEM), HumanMessage(content=QUESTION_3)]
+    ai = bound.invoke(messages)
+    call = ai.tool_calls[0]
+    print(f&quot;model requested: {call[&#x27;name&#x27;]}({call[&#x27;args&#x27;]})&quot;)
+
+    result = get_order_status.invoke(call[&quot;args&quot;])
+    print(f&quot;your code ran:   {result}&quot;)
+
+    tool_message = ToolMessage(content=result, tool_call_id=call[&quot;id&quot;])
+    print(f&quot;tool_call_id:    {call[&#x27;id&#x27;]} (matches the request)&quot;)
+
+    thread = messages + [ai, tool_message]
+    final = bound.invoke(thread)
+    thread = thread + [final]
+    print(f&quot;final:           {final.content}&quot;)
+    print(f&quot;thread length:   {len(thread)} messages&quot;)
+    print()
+
+
+def stage_structured(model: Any) -&gt; None:
+    print(&quot;== 4. structured output: natural language in, pydantic ==&quot;)
+    classifier = model.with_structured_output(SupportTicket, method=&quot;function_calling&quot;)
+    ticket = classifier.invoke(
+        [
+            SystemMessage(content=&quot;Classify the support ticket. Extract the order id.&quot;),
+            HumanMessage(content=TICKET_TEXT),
+        ]
+    )
+    assert isinstance(ticket, SupportTicket)
+    print(f&quot;result: category={ticket.category!r} urgency={ticket.urgency} &quot;
+          f&quot;order_id={ticket.order_id!r}&quot;)
+    print(f&quot;type:   {type(ticket).__name__} (validated instance)&quot;)
+    print()
+
+
+def run() -&gt; int:
+    try:
+        model = build_model()
+    except RuntimeError as error:
+        print(f&quot;error: {error}&quot;, file=sys.stderr)
+        return 1
+
+    print(f&quot;DeepSeek via LangChain -- live model ({MODEL})&quot;)
+    print()
+    stage_chat(model)
+    stage_stream(model)
+    stage_tools(model)
+    stage_structured(model)
+    print(&quot;done: 4 stages, live DeepSeek calls&quot;)
+    return 0
+
+
+def main() -&gt; int:
+    try:
+        return run()
+    except Exception as error:  # noqa: BLE001 - surface the provider error, keep exit codes
+        print(f&quot;error: {type(error).__name__}: {error}&quot;, file=sys.stderr)
+        print(
+            &quot;check DEEPSEEK_API_KEY, account balance, and network access.&quot;,
+            file=sys.stderr,
+        )
+        return 1
+
+
+if __name__ == &quot;__main__&quot;:
+    raise SystemExit(main())
+</pre>
+
+<h2>evals.py</h2>
+<pre>&quot;&quot;&quot;Self-tests for 0002-first-llm-api.
+
+No fake model: the lab talks to live DeepSeek. These checks cover everything that
+does not need the network (message shapes, tool schema, pydantic contract, model
+wiring, the missing-key instructions), plus one live smoke call when a key is set.
+&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import os
+import re
+import subprocess
+import sys
+import tomllib
+from pathlib import Path
+
+import langchain_lab as lab
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+
+HERE = Path(__file__).resolve().parent
+PY = sys.executable
+CHECKS: list[str] = []
+
+
+def check(name: str, condition: bool, detail: str = &quot;&quot;) -&gt; None:
+    if not condition:
+        raise AssertionError(f&quot;{name}: {detail}&quot; if detail else name)
+    CHECKS.append(name)
+
+
+def clean_env() -&gt; dict[str, str]:
+    env = {k: v for k, v in os.environ.items() if not k.startswith(&quot;DEEPSEEK_&quot;)}
+    env.pop(&quot;OPENAI_API_KEY&quot;, None)
+    return env
+
+
+def run_lab(env: dict[str, str], timeout: int = 90):
+    return subprocess.run(
+        [PY, &quot;langchain_lab.py&quot;],
+        cwd=HERE,
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding=&quot;utf-8&quot;,
+        errors=&quot;replace&quot;,
+        timeout=timeout,
+    )
+
+
+def with_env(values: dict[str, str]):
+    &quot;&quot;&quot;Temporarily set env vars, then restore exactly.&quot;&quot;&quot;
+
+    class _Ctx:
+        def __enter__(self):
+            self.old = os.environ.copy()
+            os.environ.update(values)
+
+        def __exit__(self, *args):
+            os.environ.clear()
+            os.environ.update(self.old)
+
+    return _Ctx()
+
+
+# --- tests -----------------------------------------------------------------
+
+
+def test_ticket_schema() -&gt; None:
+    schema = lab.SupportTicket.model_json_schema()
+    props = schema[&quot;properties&quot;]
+    check(&quot;category is an enum&quot;, props[&quot;category&quot;][&quot;enum&quot;] == [&quot;billing&quot;, &quot;bug&quot;, &quot;question&quot;])
+    check(&quot;urgency has 1..5 bounds&quot;, props[&quot;urgency&quot;][&quot;minimum&quot;] == 1 and props[&quot;urgency&quot;][&quot;maximum&quot;] == 5)
+    check(&quot;order_id is optional&quot;, &quot;order_id&quot; not in schema.get(&quot;required&quot;, []))
+    check(&quot;summary required&quot;, &quot;summary&quot; in schema.get(&quot;required&quot;, []))
+
+
+def test_ticket_validation() -&gt; None:
+    ticket = lab.SupportTicket(
+        category=&quot;billing&quot;, urgency=5, summary=&quot;Duplicate charge.&quot;, order_id=&quot;A-1042&quot;
+    )
+    check(&quot;valid ticket accepted&quot;, ticket.order_id == &quot;A-1042&quot;)
+    for bad in ({&quot;category&quot;: &quot;billing&quot;, &quot;urgency&quot;: 9, &quot;summary&quot;: &quot;x&quot;},
+                {&quot;category&quot;: &quot;other&quot;, &quot;urgency&quot;: 1, &quot;summary&quot;: &quot;x&quot;}):
+        try:
+            lab.SupportTicket(**bad)
+        except Exception:
+            check(f&quot;rejects {bad.get(&#x27;urgency&#x27;, bad.get(&#x27;category&#x27;))}&quot;, True)
+        else:
+            check(f&quot;rejects {bad}&quot;, False)
+
+
+def test_tool_contract() -&gt; None:
+    schema = lab.get_order_status.args_schema.model_json_schema()
+    check(&quot;tool name&quot;, lab.get_order_status.name == &quot;get_order_status&quot;)
+    check(&quot;tool takes order_id&quot;, schema.get(&quot;required&quot;) == [&quot;order_id&quot;])
+    check(&quot;tool description mentions status&quot;, &quot;status&quot; in lab.get_order_status.description.lower())
+    check(&quot;fixture returns a status&quot;, lab.get_order_status.invoke({&quot;order_id&quot;: &quot;A-1042&quot;}).startswith(&quot;shipped&quot;))
+    check(&quot;fixture handles unknown ids&quot;, &quot;no order found&quot; in lab.get_order_status.invoke({&quot;order_id&quot;: &quot;X-1&quot;}))
+
+
+def test_message_protocol() -&gt; None:
+    messages = [SystemMessage(content=lab.SYSTEM), HumanMessage(content=lab.QUESTION_1)]
+    check(&quot;turn 1 has 2 messages&quot;, len(messages) == 2)
+    check(&quot;roles are system + human&quot;, [m.type for m in messages] == [&quot;system&quot;, &quot;human&quot;])
+    reply = AIMessage(content=&quot;Send us the invoice number.&quot;)
+    thread = messages + [reply, HumanMessage(content=lab.QUESTION_2)]
+    check(&quot;turn 2 has 4 messages&quot;, len(thread) == 4)
+    check(&quot;history includes the AI reply&quot;, thread[2].type == &quot;ai&quot;)
+
+
+def test_model_config() -&gt; None:
+    with with_env({&quot;DEEPSEEK_API_KEY&quot;: &quot;test-key&quot;}):
+        model = lab.build_model()
+    check(&quot;live model class&quot;, type(model).__name__ == &quot;ChatDeepSeek&quot;, type(model).__name__)
+    check(&quot;default model name&quot;, model.model_name == &quot;deepseek-flash&quot;, model.model_name)
+    check(&quot;default base url&quot;, str(model.root_client.base_url).rstrip(&quot;/&quot;) == &quot;https://api.deepseek.com&quot;)
+    check(&quot;temperature zero&quot;, model.temperature == 0)
+    check(
+        &quot;thinking disabled for the lab&quot;,
+        model.extra_body == {&quot;thinking&quot;: {&quot;type&quot;: &quot;disabled&quot;}},
+        str(model.extra_body),
+    )
+
+
+def test_model_overrides() -&gt; None:
+    with with_env({
+        &quot;DEEPSEEK_API_KEY&quot;: &quot;test-key&quot;,
+        &quot;DEEPSEEK_MODEL&quot;: &quot;deepseek-v4-pro&quot;,
+        &quot;DEEPSEEK_BASE_URL&quot;: &quot;https://example.test&quot;,
+    }):
+        model = lab.build_model()
+    check(&quot;model override&quot;, model.model_name == &quot;deepseek-v4-pro&quot;, model.model_name)
+    check(&quot;base url override&quot;, str(model.root_client.base_url).rstrip(&quot;/&quot;) == &quot;https://example.test&quot;)
+
+
+def test_missing_key() -&gt; None:
+    result = run_lab(clean_env())
+    check(&quot;no key exits 1&quot;, result.returncode == 1, str(result.returncode))
+    check(&quot;shows session command&quot;, &#x27;$env:DEEPSEEK_API_KEY = &quot;sk-...&quot;&#x27; in result.stderr, result.stderr)
+    check(&quot;shows persist command&quot;, &quot;setx DEEPSEEK_API_KEY&quot; in result.stderr, result.stderr)
+    check(&quot;shows key page&quot;, &quot;platform.deepseek.com/api_keys&quot; in result.stderr, result.stderr)
+    check(&quot;no banner before failing&quot;, &quot;live model&quot; not in result.stdout, result.stdout)
+
+
+def test_no_fake_model() -&gt; None:
+    check(&quot;no FakeDeepSeek in the lab&quot;, not hasattr(lab, &quot;FakeDeepSeek&quot;))
+    source = (HERE / &quot;langchain_lab.py&quot;).read_text(encoding=&quot;utf-8&quot;)
+    check(&quot;lab has no scripted branch&quot;, &quot;--real&quot; not in source and &quot;scripted&quot; not in source.lower())
+
+
+def test_live_smoke() -&gt; tuple[bool, str]:
+    if not os.getenv(&quot;DEEPSEEK_API_KEY&quot;):
+        return False, &quot;skipped (no DEEPSEEK_API_KEY)&quot;
+    model = lab.build_model()
+    reply = model.invoke(
+        [SystemMessage(content=&quot;Answer in one sentence.&quot;), HumanMessage(content=&quot;Say hello.&quot;)]
+    )
+    check(&quot;live reply is an AIMessage&quot;, isinstance(reply, AIMessage), type(reply).__name__)
+    check(&quot;live reply has text&quot;, bool(str(reply.content).strip()))
+    return True, &quot;ran one live call&quot;
+
+
+def test_uv_project() -&gt; None:
+    &quot;&quot;&quot;The uv project is the single source of dependencies; keep it honest.&quot;&quot;&quot;
+    pyproject = HERE / &quot;pyproject.toml&quot;
+    check(&quot;pyproject.toml exists&quot;, pyproject.exists())
+    data = tomllib.loads(pyproject.read_text(encoding=&quot;utf-8&quot;))
+    declared = {
+        re.split(r&quot;[&lt;&gt;=!~ ]&quot;, dep, maxsplit=1)[0]
+        for dep in data[&quot;project&quot;][&quot;dependencies&quot;]
+    }
+    check(
+        &quot;declares langchain, langchain-deepseek, pydantic&quot;,
+        {&quot;langchain&quot;, &quot;langchain-deepseek&quot;, &quot;pydantic&quot;} &lt;= declared,
+        str(sorted(declared)),
+    )
+
+
+TESTS = [
+    (&quot;ticket schema&quot;, test_ticket_schema),
+    (&quot;ticket validation&quot;, test_ticket_validation),
+    (&quot;tool contract&quot;, test_tool_contract),
+    (&quot;message protocol&quot;, test_message_protocol),
+    (&quot;model config&quot;, test_model_config),
+    (&quot;model overrides&quot;, test_model_overrides),
+    (&quot;missing key instructions&quot;, test_missing_key),
+    (&quot;no fake model&quot;, test_no_fake_model),
+    (&quot;uv project&quot;, test_uv_project),
+]
+
+
+def main() -&gt; int:
+    failures = 0
+    for index, (name, test) in enumerate(TESTS, start=1):
+        try:
+            test()
+            print(f&quot;ok {index:02d} {name}&quot;)
+        except Exception as error:  # noqa: BLE001 - a test runner reports everything
+            failures += 1
+            print(f&quot;FAIL {index:02d} {name}: {error}&quot;)
+
+    try:
+        ran, note = test_live_smoke()
+    except Exception as error:  # noqa: BLE001
+        failures += 1
+        print(f&quot;FAIL 10 live smoke: {error}&quot;)
+    else:
+        print(f&quot;ok 10 live smoke: {note}&quot;)
+        if not ran:
+            print(&quot;     set DEEPSEEK_API_KEY to include the live call&quot;)
+
+    total = len(CHECKS)
+    print(f&quot;\n{total} checks passed, {failures} failed&quot;)
+    return 0 if failures == 0 else 1
+
+
+if __name__ == &quot;__main__&quot;:
+    raise SystemExit(main())
+</pre>
+
+<p>Lesson: <a href="../../../lessons/0002-your-first-llm-api-call.html">Lesson 2 — Your First LLM Call</a> · <a href="README.md">README</a></p>
+
+</article>
+</body>
+</html>

@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 6 — RAG: The Pipeline, End to End</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<article class="page">
+
+<p class="meta">Lesson 6 of the AI Engineering course · ~30 min · Prereq: <a href="0005-your-first-evals.html">Lesson 5</a> · <a href="../reference/skill-map.html">Skill Map →</a></p>
+
+<h1>RAG: The Pipeline, End to End</h1>
+
+<p class="lede">A RAG system is not "put documents in a prompt." It is eight stages, each with an input, an output, and a way to be wrong. This lesson is the map: the whole pipeline on one chart, the decision that matters at every stage, and the numbers to start with. There is no lab here — lesson 7 builds the whole chart, and later lessons take parts of it further.</p>
+
+<div class="callout win">
+  <span class="label">Your win this lesson</span>
+  You'll be able to draw the pipeline from memory, say what each stage costs and where it breaks, and name the first stage to inspect when an answer is wrong — instead of rewriting the prompt and hoping.
+</div>
+
+<h2>Why RAG, and why not fine-tuning</h2>
+
+<p>A model's weights freeze at a training cutoff: your policies, your prices, this week's incident report were never in them. There are two ways to close that gap. <strong>Fine-tuning</strong> retrains the weights on your data — slow, expensive, and stale the moment the document changes. <strong>Retrieval-augmented generation</strong> fetches the relevant text at question time and puts it in the prompt — no training, updates by editing a file, and every claim can point at a source.</p>
+
+<p>For facts that change or stay private, RAG wins decisively. Fine-tuning is for <em>style and behaviour</em>, and it is the last lever you pull, after context and retrieval have failed. The rest of this lesson is the retrieval half done properly. <a href="https://www.anthropic.com/news/contextual-retrieval">[Anthropic — Contextual Retrieval]</a></p>
+
+<h2>The workflow</h2>
+
+<p>Read the chart as two lanes, not eight boxes. <strong>Index once</strong> — parse, chunk, embed, store — runs when documents change and is allowed to take minutes. <strong>Answer every query</strong> — prepare, retrieve, rerank, generate — runs per question and must fit in a couple of seconds. Almost every RAG failure is one lane blamed for the other's problem.</p>
+
+<figure style="margin: 1.75rem 0;">
+<svg viewBox="0 0 720 976" width="100%" role="img" aria-labelledby="ragTitle ragDesc" style="font-family: -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 100%; height: auto;">
+  <title id="ragTitle">RAG workflow: four offline indexing stages and four online query stages</title>
+  <desc id="ragDesc">Index lane: parse documents with Docling, chunk with HybridChunker, embed the chunks, and write one LanceDB table whose rows hold text, metadata and vectors, with a BM25 full-text index on the text column. Query lane: prepare the query by embedding it and analysing it for BM25, hybrid retrieval fusing dense and BM25 by reciprocal rank fusion, cross-encoder reranking, then generation into a pydantic answer with citations. Chunk ids carry from index to citation.</desc>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#6b6b80"/>
+    </marker>
+  </defs>
+
+  <!-- ================= INDEX LANE ================= -->
+  <text x="20" y="26" font-size="12.5" font-weight="700" letter-spacing="1.4" fill="#0f4c5c">INDEX ONCE — OFFLINE</text>
+  <text x="20" y="44" font-size="12" fill="#6b6b80">runs when documents change; seconds per document, minutes per corpus</text>
+
+  <!-- 1 parse -->
+  <rect x="20" y="62" width="470" height="74" rx="8" fill="#ffffff" stroke="#e2e0da"/>
+  <rect x="32" y="86" width="26" height="26" rx="13" fill="#0f4c5c"/>
+  <text x="45" y="104" font-size="13" font-weight="700" text-anchor="middle" fill="#ffffff">1</text>
+  <text x="72" y="92" font-size="14" font-weight="700" fill="#1a1a2e">Parse</text>
+  <text x="72" y="112" font-size="12.5" fill="#3d3d56">Docling: reading order, headings, tables, OCR when needed</text>
+  <text x="506" y="92" font-size="11" font-family="Consolas, monospace" fill="#6b6b80">Markdown + page anchors</text>
+  <text x="506" y="108" font-size="11" font-family="Consolas, monospace" fill="#6b6b80">tables kept as tables</text>
+
+  <line x1="255" y1="138" x2="255" y2="152" stroke="#6b6b80" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- 2 chunk -->
+  <rect x="20" y="158" width="470" height="74" rx="8" fill="#ffffff" stroke="#e2e0da"/>
+  <rect x="32" y="182" width="26" height="26" rx="13" fill="#0f4c5c"/>
+  <text x="45" y="200" font-size="13" font-weight="700" text-anchor="middle" fill="#ffffff">2</text>
+  <text x="72" y="188" font-size="14" font-weight="700" fill="#1a1a2e">Chunk</text>
+  <text x="72" y="208" font-size="12.5" fill="#3d3d56">HybridChunker: structure first, then the token budget</text>
+  <text x="506" y="188" font-size="11" font-family="Consolas, monospace" fill="#6b6b80">chunk id, text,</text>
+  <text x="506" y="204" font-size="11" font-family="Consolas, monospace" fill="#6b6b80">heading path, source</text>
+
+  <line x1="255" y1="234" x2="255" y2="248" stroke="#6b6b80" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- 3 embed -->
+  <rect x="20" y="254" width="470" height="74" rx="8" fill="#ffffff" stroke="#e2e0da"/>
+  <rect x="32" y="278" width="26" height="26" rx="13" fill="#0f4c5c"/>
+  <text x="45" y="296" font-size="13" font-weight="700" text-anchor="middle" fill="#ffffff">3</text>
+  <text x="72" y="284" font-size="14" font-weight="700" fill="#1a1a2e">Embed and index</text>
+  <text x="72" y="304" font-size="12.5" fill="#3d3d56">dense vectors + BM25 over the same chunk text</text>
+  <text x="506" y="284" font-size="11" font-family="Consolas, monospace" fill="#6b6b80">vectors + BM25 index,</text>
+  <text x="506" y="300" font-size="11" font-family="Consolas, monospace" fill="#6b6b80">same chunk ids</text>
+
+  <line x1="255" y1="330" x2="255" y2="344" stroke="#6b6b80" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- 4 store -->
+  <rect x="20" y="350" width="470" height="74" rx="8" fill="#f7f6f3" stroke="#e2e0da"/>
+  <rect x="32" y="374" width="26" height="26" rx="13" fill="#0f4c5c"/>
+  <text x="45" y="392" font-size="13" font-weight="700" text-anchor="middle" fill="#ffffff">4</text>
+  <text x="72" y="380" font-size="14" font-weight="700" fill="#1a1a2e">Store</text>
+  <text x="72" y="400" font-size="12.5" fill="#3d3d56">LanceDB table: rows, vectors, and a BM25 FTS index</text>
+  <text x="506" y="380" font-size="11" font-family="Consolas, monospace" fill="#6b6b80">one persistent table,</text>
+  <text x="506" y="396" font-size="11" font-family="Consolas, monospace" fill="#6b6b80">doc hashes for re-index</text>
+
+  <!-- handoff -->
+  <line x1="255" y1="426" x2="255" y2="520" stroke="#6b6b80" stroke-width="1.5" stroke-dasharray="5 5" marker-end="url(#arrow)"/>
+  <text x="272" y="466" font-size="11.5" fill="#6b6b80">the online lane reads the same table</text>
+  <text x="272" y="484" font-size="11.5" fill="#6b6b80">chunk ids come back as citations</text>
+
+  <!-- ================= QUERY LANE ================= -->
+  <text x="20" y="544" font-size="12.5" font-weight="700" letter-spacing="1.4" fill="#c1666b">ANSWER EVERY QUERY — ONLINE</text>
+  <text x="20" y="562" font-size="12" fill="#6b6b80">once per question; the whole budget is one to three seconds</text>
+
+  <!-- 5 prepare query -->
+  <rect x="20" y="580" width="470" height="74" rx="8" fill="#ffffff" stroke="#e2e0da"/>
+  <rect x="32" y="604" width="26" height="26" rx="13" fill="#c1666b"/>
+  <text x="45" y="622" font-size="13" font-weight="700" text-anchor="middle" fill="#ffffff">5</text>
+  <text x="72" y="610" font-size="14" font-weight="700" fill="#1a1a2e">Prepare the query</text>
+  <text x="72" y="630" font-size="12.5" fill="#3d3d56">embed it; analyse it for BM25 exactly as the index did</text>
+  <text x="506" y="610" font-size="11" font-family="Consolas, monospace" fill="#6b6b80">query vector +</text>
+  <text x="506" y="626" font-size="11" font-family="Consolas, monospace" fill="#6b6b80">analysed terms</text>
+
+  <line x1="255" y1="656" x2="255" y2="670" stroke="#6b6b80" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- 6 retrieve -->
+  <rect x="20" y="676" width="470" height="74" rx="8" fill="#ffffff" stroke="#e2e0da"/>
+  <rect x="32" y="700" width="26" height="26" rx="13" fill="#c1666b"/>
+  <text x="45" y="718" font-size="13" font-weight="700" text-anchor="middle" fill="#ffffff">6</text>
+  <text x="72" y="706" font-size="14" font-weight="700" fill="#1a1a2e">Hybrid retrieve</text>
+  <text x="72" y="726" font-size="12.5" fill="#3d3d56">dense top 40 + BM25 top 40, fused by RRF</text>
+  <text x="506" y="706" font-size="11" font-family="Consolas, monospace" fill="#6b6b80">fused candidates (top 80)</text>
+
+  <line x1="255" y1="752" x2="255" y2="766" stroke="#6b6b80" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- 7 rerank -->
+  <rect x="20" y="772" width="470" height="74" rx="8" fill="#ffffff" stroke="#e2e0da"/>
+  <rect x="32" y="796" width="26" height="26" rx="13" fill="#c1666b"/>
+  <text x="45" y="814" font-size="13" font-weight="700" text-anchor="middle" fill="#ffffff">7</text>
+  <text x="72" y="802" font-size="14" font-weight="700" fill="#1a1a2e">Rerank</text>
+  <text x="72" y="822" font-size="12.5" fill="#3d3d56">cross-encoder reads query + chunk together, 80 down to 6</text>
+  <text x="506" y="802" font-size="11" font-family="Consolas, monospace" fill="#6b6b80">top 6 chunks in order</text>
+
+  <line x1="255" y1="848" x2="255" y2="862" stroke="#6b6b80" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- 8 generate -->
+  <rect x="20" y="868" width="470" height="74" rx="8" fill="#fdf8ec" stroke="#d4a843"/>
+  <rect x="32" y="892" width="26" height="26" rx="13" fill="#d4a843"/>
+  <text x="45" y="910" font-size="13" font-weight="700" text-anchor="middle" fill="#1a1a2e">8</text>
+  <text x="72" y="898" font-size="14" font-weight="700" fill="#1a1a2e">Generate</text>
+  <text x="72" y="918" font-size="12.5" fill="#3d3d56">LLM answers from the evidence, returns a pydantic object</text>
+  <text x="506" y="898" font-size="11" font-family="Consolas, monospace" fill="#6b6b80">Answer + citation ids</text>
+  <text x="506" y="914" font-size="11" font-family="Consolas, monospace" fill="#6b6b80">+ insufficient flag</text>
+</svg>
+<figcaption style="font-family: var(--sans); font-size: 0.82rem; color: var(--muted); margin-top: 0.6rem;"><strong>Figure 1.</strong> The pipeline in two lanes. Offline stages decide what the system <em>can</em> know; online stages decide what it <em>does</em> know in time. One table holds both representations, and the chunk id carries all the way to the citation.</figcaption>
+</figure>
+
+<p>The handoff between the lanes is deliberately boring: a chunk id plus metadata (source file, page, section, document hash). It is what makes citation checking possible later — the model never invents a source that is not in the retrieved set, because you verify it after generation.</p>
+
+<h2>The eight stages</h2>
+
+<h3>1. Parse: documents to structured Markdown</h3>
+<p><strong>Docling</strong> turns PDF, DOCX, PPTX, HTML and images into a structured document: blocks in reading order, heading hierarchy, tables as tables, figures with captions. Export to Markdown when you want to read it, JSON when you need page and section anchors. OCR is a switch, and scanned PDFs need it on. This stage is where most "the retrieval is bad" stories actually begin: a two-column PDF read left-to-right produces plausible, useless text.</p>
+<p><strong>Output</strong> structured Markdown/JSON with anchors. <strong>Breaks when</strong> OCR is off, reading order is guessed, or a table is flattened into a paragraph.</p>
+
+<h3>2. Chunk: structure first, token budget second</h3>
+<p>Docling's <strong>HybridChunker</strong> walks the document hierarchy, merges small items until the token budget, starts a new chunk at a heading boundary, and does not split a table across chunks. It can prepend the heading path to each chunk, so "the refund window is 48 hours" still carries <em>Billing → Refunds</em> when retrieved alone. Start at 400–600 tokens.</p>
+<p>Fixed windows with overlap are the baseline you compare against: 400–600 tokens, 10–15% overlap. Simpler and tool-agnostic, but they cut mid-sentence and mid-table. HybridChunker does not need overlap the way sliding windows do, because it is not sliding — it is following the document.</p>
+<p><strong>Output</strong> chunk records with id, text, heading path, source. <strong>Breaks when</strong> chunks are too small to hold an answer or too large to stay specific, or when a table is cut in half.</p>
+
+<h3>3. Embed and index: two representations, one corpus</h3>
+<p>Each chunk gets two representations. A <strong>dense embedding</strong> captures meaning, so "money back" finds "refund". A <strong>lexical index</strong> — BM25 — captures exact tokens, so "E-204", "Sky Pro" or an invoice number are findable at all. Neither is optional in a real corpus: dense misses identifiers, lexical misses paraphrase.</p>
+<p>In this course the embedder is <strong>Qwen <code>text-embedding-v4</code></strong> on Alibaba's DashScope: 1024 dimensions by default, 8,192 tokens per input, 100+ languages, strong on Chinese. <strong>DeepSeek has no embeddings endpoint</strong> — it is a chat model only — so generation and embedding come from two different vendors here. That is normal, and worth internalising early: nothing in RAG requires them to match, and swapping either one is an independent decision. Record the model name and dimension in the table's metadata; vectors from two models are not comparable, so a mixed table returns confident nonsense and nothing in the stack warns you.</p>
+<p>The same model also distinguishes a <em>document</em> from a <em>query</em> at embed time (DashScope's <code>text_type</code>). Use it — it is the cheapest accuracy win in the pipeline, and it belongs to stage 5.</p>
+<p><strong>Output</strong> vectors plus a BM25 index over the same chunk text. <strong>Breaks when</strong> the embedding model changes without a re-index, or when the two indexes are built from different text.</p>
+
+<h3>4. Store: one table, two indexes</h3>
+<p><strong>LanceDB</strong> keeps the whole corpus in one table: each row is a chunk — id, text, metadata, vector. Two indexes sit on that one table: a vector index for the dense side, and a <strong>BM25 full-text index</strong> on the text column, created with <code>create_fts_index</code>. That is the reason to pick it here. <strong>Chroma is a vector store, not a BM25 engine</strong> — its document filtering is substring matching, not ranked retrieval — so with Chroma you keep a lexical index beside it (BM25S, <code>rank_bm25</code>, SQLite FTS5) and join the two yourself. LanceDB removes that seam, and one metadata filter applies to both halves of a hybrid query.</p>
+<p>The full-text analyser is configured when the index is built — language, stemming, stopword removal, ASCII folding. That choice is frozen into the index, which is exactly why the query side has its own stage (5).</p>
+<p>Index incrementally: hash each document, re-embed only what changed, delete rows whose ids no longer exist. Re-embedding the corpus on every deploy is the most common way a RAG service quietly becomes expensive.</p>
+<p><strong>Output</strong> a persistent table plus document hashes. <strong>Breaks when</strong> documents are edited and old rows stay, when a re-index silently changes the embedding model, or when the full-text index is rebuilt with different analyser settings than the query side assumes.</p>
+
+<h3>5. Prepare the query: one question, two representations</h3>
+<p>Users do not type keywords. They type "my card got charged twice this month, can you sort it out?" — a sentence with pronouns, politeness and intent, and no overlap with the words your index was built from. Both retrievers need a representation of that sentence, and they need <em>different</em> ones:</p>
+<ul>
+<li><strong>Dense:</strong> embed the whole question with the exact model used at index time — same model, same normalisation, same instruction prefix if the model has one. Qwen <code>text-embedding-v4</code> exposes that asymmetry directly as <code>text_type="query"</code> versus <code>text_type="document"</code>. A different embedding model puts the query in a different vector space, and every result becomes noise.</li>
+<li><strong>BM25:</strong> run the same analyser the index was built with — lowercase, tokenise, strip punctuation, drop stopwords, stem — and keep the tokens that carry identity: numbers, error codes, product names, invoice ids. In LanceDB those settings live on <code>create_fts_index</code>, so the query must use the same language, stemming and stopword configuration; otherwise a term that <em>is</em> in the corpus is scored as absent.</li>
+</ul>
+<p>The mismatch is the point: BM25 has no idea that "charged twice" and "duplicate charge" are the same complaint, and the embedding has no idea that "E-204" must match character for character. Preparing the query differently for each retriever is what lets the two disagree usefully. Cheap query shaping also belongs here — expand an abbreviation, strip "please", or rewrite a follow-up into a standalone question in a production system — but do it before retrieval, never after.</p>
+<p><strong>Output</strong> one query vector plus one analysed term list. <strong>Breaks when</strong> the query is embedded with a different model than the index, or the BM25 analyser disagrees with the one used at index time.</p>
+
+<h3>6. Retrieve: hybrid, then fuse by rank</h3>
+<p>Send both representations to the same table, take a generous candidate pool from each side (tens, not the final six), and apply the same filter to both. In LanceDB that is one hybrid query: <code>query_type="hybrid"</code> with the query vector and the query text, fused by <strong>reciprocal rank fusion</strong> — each candidate scores 1/(60 + rank) in each list, summed. RRF needs no score calibration and no weight tuning to start, which is why it is the default in most 2026 systems.</p>
+<p>One naming trap: LanceDB calls the fusion step a reranker (<code>RRFReranker</code>). It fuses two ranked lists; it does not read the query and the chunk together. That is stage 7's job.</p>
+<p>Return 30–50 candidates, not 5. The reranker can only reorder what retrieval handed it; a recall miss at this stage is unrecoverable later.</p>
+<p><strong>Output</strong> a fused candidate list. <strong>Breaks when</strong> a filter is applied to one half only, or when a single retriever is blamed for a corpus that needed the other.</p>
+
+<h3>7. Rerank: read the pair, not the vectors</h3>
+<p>A <strong>cross-encoder</strong> reads the query and each candidate together and scores relevance directly — more accurate than comparing two independently produced vectors, and far more expensive per pair. That is exactly why it runs on 50–80 candidates rather than the whole corpus, and returns the 5–8 that go into the prompt. LanceDB ships this too, as <code>CrossEncoderReranker</code>.</p>
+<p>If answers are mediocre, check whether the right chunk was in the candidate set before touching the prompt. Rerank is the cheapest large quality gain in the pipeline — but skip it deliberately, not by accident.</p>
+<p><strong>Rerank is not an LLM feature.</strong> A cross-encoder is its own small model — Qwen3-Reranker, BGE-reranker-v2-m3, Cohere Rerank — deployed and billed separately from the chat model. DeepSeek offers neither embeddings nor reranking, so this course takes the reranker from DashScope with the same key as the embedder, or runs a local one. LanceDB's <code>RRFReranker</code> is <em>not</em> this: it is rank fusion with no model behind it, which is why hybrid search needs no extra provider at all.</p>
+<p><strong>If you skip it:</strong> keep the fused top 6–8 and accept that near-misses sit in the prompt. Cheaper substitutes are metadata boosts (recency, section priority), a score floor that drops weak candidates, or MMR when the top chunks are near-duplicates. Skipping is a reasonable first version — measure hit rate before and after (when you have an eval set), then decide whether 100–200 ms is worth paying for.</p>
+<p><strong>Output</strong> an ordered shortlist. <strong>Breaks when</strong> candidates are too few to matter, or rerank runs over hundreds of chunks and blows the latency budget.</p>
+
+<h3>8. Generate: evidence in, pydantic out</h3>
+<p>Compose the prompt from evidence: every chunk labelled with its id and source, an instruction to answer only from that evidence, cite ids, and say when the evidence is insufficient. Ask for a <strong>pydantic object</strong> — answer, citations, insufficient flag — through structured output, the same <code>with_structured_output</code> you used in lessons 2 and 5. In this course the generator is <code>ChatDeepSeek</code>, pinned at <code>temperature=0</code> so two runs are comparable.</p>
+<p>Then validate the object: every cited chunk id must exist in the retrieved set, and an answer that cites nothing while claiming enough context is reported rather than trusted. That check catches fabricated citations before a user does, and it is the difference between a demo and a product.</p>
+<p><strong>Output</strong> a typed answer with checkable citations. <strong>Breaks when</strong> the contract is prose-only, citations are free text, or "I don't know" is not an allowed answer.</p>
+
+<h2>Numbers to start with</h2>
+
+<table>
+  <thead><tr><th>knob</th><th>start here</th><th>why</th></tr></thead>
+  <tbody>
+    <tr><td>chunk size</td><td>400–600 tokens</td><td>one idea plus the context needed to interpret it</td></tr>
+    <tr><td>overlap</td><td>0 with HybridChunker; 10–15% with fixed windows</td><td>structure-aware chunks do not slide; windows do</td></tr>
+    <tr><td>embedding</td><td>Qwen <code>text-embedding-v4</code>, 1024 dims</td><td>dimension is fixed at index time; changing the model means re-indexing everything</td></tr>
+    <tr><td>dense candidates</td><td>40</td><td>recall before precision — rerank fixes order, not absence</td></tr>
+    <tr><td>lexical candidates</td><td>40</td><td>exact ids, product names, error codes</td></tr>
+    <tr><td>fusion</td><td>RRF, k = 60</td><td>no score normalisation, no weights to tune on day one</td></tr>
+    <tr><td>rerank depth</td><td>80 in, 6 out</td><td>precision where it matters: the prompt</td></tr>
+    <tr><td>context budget</td><td>4–8k tokens</td><td>evidence plus room to reason, not a stuffed window</td></tr>
+    <tr><td>temperature</td><td>0</td><td>comparability, for the same reason as lesson 5</td></tr>
+  </tbody>
+</table>
+
+<h2>Where the time goes</h2>
+
+<table>
+  <thead><tr><th>stage</th><th>typical cost</th><th>note</th></tr></thead>
+  <tbody>
+    <tr><td>parse + chunk</td><td>seconds per document</td><td>offline, one-off; batch it, do not block a request on it</td></tr>
+    <tr><td>prepare the query</td><td>1–50 ms</td><td>BM25 analysis is microseconds; the dense embedding dominates</td></tr>
+    <tr><td>dense search</td><td>5–20 ms</td><td>vector index over the same table, brute force while it is small</td></tr>
+    <tr><td>BM25 search</td><td>1–10 ms</td><td>FTS index on the text column, cheap enough to always run</td></tr>
+    <tr><td>rerank 80 candidates</td><td>50–200 ms</td><td>the biggest added latency and the best quality return</td></tr>
+    <tr><td>generate</td><td>1–3 s</td><td>dominates the budget; everything else is rounding error</td></tr>
+  </tbody>
+</table>
+
+<h2>The contract at the end</h2>
+
+<p>The pipeline is only as good as what it hands back. A typed answer is what makes the system checkable, loggable and safe to put behind a UI:</p>
+
+<table>
+  <thead><tr><th>field</th><th>type</th><th>why it exists</th></tr></thead>
+  <tbody>
+    <tr><td><code>answer</code></td><td>string</td><td>the prose the user reads</td></tr>
+    <tr><td><code>citations</code></td><td>list of chunk id + source</td><td>validated against the retrieved set; no free-text sources</td></tr>
+    <tr><td><code>insufficient_context</code></td><td>bool</td><td>makes "I don't know" a first-class answer instead of a failure</td></tr>
+    <tr><td><code>confidence</code></td><td>float, optional</td><td>routes low-confidence answers to a human queue</td></tr>
+  </tbody>
+</table>
+
+<h2>Where this goes next</h2>
+
+<p>This lesson is the map; <strong>lesson 7 is the build</strong> — the same eight stages on a real corpus, with the numbers measured rather than assumed. Lesson 8 is the appendix behind these choices, and lessons 9–16 take the result into tools, graphs, contracts, a local model, the coding workflow and delivery.</p>
+
+<table>
+  <thead><tr><th>stages</th><th>what the real build produces</th></tr></thead>
+  <tbody>
+    <tr><td>1–4 index</td><td>a real document set parsed, chunked, embedded and stored in LanceDB, re-runnable by document hash</td></tr>
+    <tr><td>5–6 prepare and retrieve</td><td>a query analysed against the index's own settings, then dense + BM25 fused by RRF</td></tr>
+    <tr><td>7 rerank</td><td>a cross-encoder on the shortlist, scored against a no-rerank baseline</td></tr>
+    <tr><td>8 generate</td><td>the pydantic answer contract, with citation ids validated against the retrieved set</td></tr>
+    <tr><td>all eight</td><td>a five-question smoke test and a symptom-by-stage table, so a wrong answer points at the stage that caused it</td></tr>
+  </tbody>
+</table>
+
+<h2>Check yourself</h2>
+
+<div class="quiz">
+<script type="application/json">
+{
+  "questions": [
+    {
+      "q": "Which stages run once per document, and which run once per question?",
+      "options": [
+        "1\u20134 while indexing; 5\u20138 on every question",
+        "5\u20138 while indexing; 1\u20134 on every question",
+        "All eight run on every question",
+        "Only stage 8 runs per question"
+      ],
+      "correct": 0,
+      "explain": "Parse, chunk, embed and store are offline work; prepare, retrieve, rerank and generate happen per query and own the latency budget."
+    },
+    {
+      "q": "Why parse a PDF with Docling instead of splitting its raw text?",
+      "options": [
+        "It makes the file smaller on disk",
+        "It recovers reading order, headings and tables",
+        "It translates the document into English",
+        "It removes the need for embeddings"
+      ],
+      "correct": 1,
+      "explain": "Two-column layouts, tables and scanned pages are where naive text extraction produces plausible but useless chunks."
+    },
+    {
+      "q": "What does HybridChunker add over fixed windows with overlap?",
+      "options": [
+        "Smaller vectors and cheaper storage",
+        "Faster embedding throughput",
+        "Structure- and token-aware chunk boundaries",
+        "It parses the PDF as well"
+      ],
+      "correct": 2,
+      "explain": "It follows the document hierarchy, merges to a token budget and avoids splitting tables; windows slide blindly and cut mid-sentence."
+    },
+    {
+      "q": "Why keep BM25 next to a dense index?",
+      "options": [
+        "BM25 is cheaper to host than a vector store",
+        "Dense search cannot store metadata",
+        "BM25 replaces the reranker",
+        "Exact tokens like error codes and product names"
+      ],
+      "correct": 3,
+      "explain": "Dense retrieval handles paraphrase; lexical retrieval handles identifiers and jargon that embeddings blur together. LanceDB indexes both on one table — Chroma would need the BM25 index built beside it."
+    },
+    {
+      "q": "What does reciprocal rank fusion do?",
+      "options": [
+        "Retrains the embedding model on both result lists",
+        "Combines two ranked lists using rank, not raw score",
+        "Compresses chunks before storage",
+        "Rewrites the user's question for retrieval"
+      ],
+      "correct": 1,
+      "explain": "RRF scores each candidate by 1/(k + rank) in each list and sums, so differently scaled scores never need normalising."
+    },
+    {
+      "q": "Why rerank instead of just retrieving six chunks?",
+      "options": [
+        "Reranking is free at any scale",
+        "Fewer chunks always score better",
+        "A cross-encoder reads query and chunk together",
+        "It removes the need for a system prompt"
+      ],
+      "correct": 2,
+      "explain": "Joint scoring is more accurate than comparing independent vectors, but too expensive for the whole corpus — so it runs on the shortlist."
+    },
+    {
+      "q": "What makes the final answer checkable?",
+      "options": [
+        "Citation ids validated against the retrieved set",
+        "A higher generation temperature",
+        "A longer system prompt",
+        "Storing the vectors in the prompt"
+      ],
+      "correct": 0,
+      "explain": "If every cited chunk id must exist in what retrieval returned, a fabricated source cannot survive the check."
+    },
+    {
+      "q": "Why must the BM25 analyser run the same way at index time and query time?",
+      "options": [
+        "So the index stays smaller on disk",
+        "Otherwise a term stored differently is scored as absent",
+        "It makes the embedding model unnecessary",
+        "It removes the need to rank results"
+      ],
+      "correct": 1,
+      "explain": "BM25 matches query terms to stored terms. Different case folding, stemming or stopword lists on either side turn a real match into a miss."
+    }
+  ]
+}
+</script>
+</div>
+
+<h2>Primary sources for this lesson</h2>
+<p><a href="https://docling.ai/">Docling</a> — document parsing and structure-aware chunking, with the HybridChunker and its tokenizer-aware hierarchy. Read the chunking section twice; it is the stage most teams hand-roll badly.</p>
+<p>Anthropic's <a href="https://www.anthropic.com/news/contextual-retrieval"><em>Introducing Contextual Retrieval</em></a> — the best engineering account of why chunk preparation drives answer quality, and where hybrid retrieval earns its keep.</p>
+<p><a href="https://www.alibabacloud.com/help/en/model-studio/embedding">Qwen <code>text-embedding-v4</code></a> — the embedder this course uses; note the dimension menu (64–2048), the 8K input, and the <code>query</code>/<code>document</code> split that stage 5 depends on.</p>
+<p><a href="https://docs.lancedb.com/">LanceDB docs</a> — the full-text index page for BM25 and its analyser settings, and hybrid search for <code>query_type="hybrid"</code> with RRF and cross-encoder rerankers. <a href="https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf">Cormack et al. on reciprocal rank fusion</a> for the two-page reason RRF works without calibration.</p>
+
+<h2>What's next</h2>
+<p><a href="0007-rag-service.html">Lesson 7</a> starts the build: the same pipeline, on real documents, ending with an index you can open and inspect. Lesson 8 is the appendix behind these choices; lessons 9–16 take the result into tools, graphs, contracts, a local model, the coding workflow and delivery.</p>
+
+<div class="footer-nav">
+  <div class="ask"><strong>Drew the pipeline and a stage still misbehaves?</strong> Send the stage, the artifact going in, and what came out. Finding which box is lying is the whole skill — the prompt is almost never the first suspect.</div>
+  <div class="links">
+    <a href="0005-your-first-evals.html">← Lesson 5</a>
+    <a href="../reference/skill-map.html">Skill Map &amp; Glossary</a>
+    <a href="https://docling.ai/">Docling</a>
+  </div>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</article>
+</body>
+</html>

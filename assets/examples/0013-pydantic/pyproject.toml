@@ -1,0 +1,13 @@
+[project]
+name = "0013-pydantic"
+version = "0.1.0"
+description = "Lesson 13 lab: Pydantic models, validation, settings, and structured LLM output"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.9,<3",
+    "pydantic-settings>=2.5,<3",
+    "email-validator>=2.2,<3",
+    "python-dotenv>=1.1,<2",
+    "langchain>=1.4,<2",
+    "langchain-deepseek>=1.1,<2",
+]

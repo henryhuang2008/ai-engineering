@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 4 — Streaming Chat: Python Backend, Next.js Shell</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<article class="page">
+
+<p class="meta">Lesson 4 of the AI Engineering course · ~40 min · Prereq: <a href="0003-function-calling.html">Lesson 3</a> · <a href="../reference/skill-map.html">Skill Map →</a></p>
+
+<h1>Streaming Chat: Python Backend, Next.js Shell</h1>
+
+<p class="lede">A good answer takes five seconds to generate. A good chat product shows the first word in half a second. Today you close that gap: <strong>DeepSeek and LangChain stream in Python</strong>, a thin Next.js route translates the protocol, and the page is a real prompt input — not a bare <code>&lt;input&gt;</code>.</p>
+
+<div class="callout win">
+  <span class="label">Your win this lesson</span>
+  A two-service chat product you can actually type into: a FastAPI endpoint that validates the conversation with pydantic and streams <code>ChatDeepSeek</code> deltas as SSE, a Next.js route handler that translates them into the AI SDK's message stream, and a shadcn prompt input wired to <code>useChat</code>. You built every seam yourself, so nothing in it is magic.
+</div>
+
+<h2>Why stream at all</h2>
+
+<p>LLMs generate tokens one at a time — a full answer takes seconds, which feels broken behind a spinner. <strong>Streaming</strong> sends each piece the moment it's generated, so the user reads while the model is still working. The metric the industry optimizes is <strong>TTFT — time to first token</strong>, because perceived speed is first-token speed, not total time. <a href="https://api-docs.deepseek.com/api/create-chat-completion">[DeepSeek]</a></p>
+
+<p>Two consequences shape the code. First, the provider call becomes an <em>iterator</em> instead of a return value. Second, every layer between the model and the pixels must pass bytes through without buffering them — one buffering proxy and your 300 ms first token arrives after five seconds, all at once.</p>
+
+<h2>The architecture</h2>
+
+<div class="stack">
+  <div class="layer"><strong>Browser</strong> Next.js page — shadcn prompt input, <code>useChat</code> renders deltas as they land</div>
+  <div class="layer"><strong>Next.js</strong> Route handler — a <em>thin BFF</em>: protocol translator, no model calls, no API key</div>
+  <div class="layer you"><strong>FastAPI</strong> Your Python AI service — pydantic contract, <code>ChatDeepSeek.astream()</code>, SSE framing</div>
+</div>
+
+<p>This is the seam the rest of the course uses: <strong>BFF (Backend-for-Frontend)</strong> at the edge, domain logic in a service you control. Everything that makes your projects special — retrieval, tool loops, evals — lives in Python; Next.js stays a replaceable shell. Lesson 4's translator is the prototype.</p>
+
+<h2>Step 1: the contract, the model, the stream</h2>
+
+<p>Start with the boundary. The request body is a type, not a comment: roles are a closed set, content can't be empty, and a chat with no messages is rejected before any model sees it.</p>
+
+<p class="snippet-label">main.py — pydantic at the edge</p>
+<pre><code>class Message(BaseModel):
+    role: Literal["system", "user", "assistant"]
+    content: str = Field(min_length=1)
+
+
+class ChatIn(BaseModel):
+    messages: list[Message] = Field(min_length=1)
+
+
+LC_MESSAGES = {"system": SystemMessage, "user": HumanMessage, "assistant": AIMessage}
+
+
+def to_lc(message: Message) -&gt; BaseMessage:
+    """Pydantic message -&gt; LangChain message. That is the whole adapter."""
+    return LC_MESSAGES[message.role](content=message.content)</code></pre>
+
+<p>One model handle, same wiring as lessons 2 and 3 — <code>deepseek-flash</code>, thinking off, a key that is checked before the first token instead of after.</p>
+
+<p class="snippet-label">main.py — the model</p>
+<pre><code>def build_model() -&gt; Any:
+    if not os.getenv("DEEPSEEK_API_KEY"):
+        raise RuntimeError(missing_key_message())
+
+    from langchain_deepseek import ChatDeepSeek
+
+    return ChatDeepSeek(
+        model=os.getenv("DEEPSEEK_MODEL", MODEL),
+        api_key=os.getenv("DEEPSEEK_API_KEY"),
+        api_base=os.getenv("DEEPSEEK_BASE_URL", BASE_URL),
+        temperature=0.3,
+        max_retries=2,
+        timeout=60,
+        extra_body={"thinking": {"type": "disabled"}},
+    )</code></pre>
+
+<p>Streaming is <code>astream()</code>: same messages in, an async iterator out. Each item is an <code>AIMessageChunk</code> whose <code>content</code> is either a string or a list of content blocks — hence the tiny <code>text_of()</code> helper in the file. Frame each delta, close with <code>done</code>, and never let an exception escape as a dangling stream.</p>
+
+<p class="snippet-label">main.py — one SSE event per delta</p>
+<pre><code>def sse(payload: dict) -&gt; str:
+    """One SSE event. JSON, so newlines and quotes inside a delta stay intact."""
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+async def stream_reply(payload: ChatIn) -&gt; AsyncIterator[str]:
+    model = build_model()
+    messages = [SystemMessage(content=SYSTEM), *(to_lc(m) for m in payload.messages)]
+
+    try:
+        async for chunk in model.astream(messages):
+            delta = text_of(chunk)
+            if delta:
+                yield sse({"delta": delta})
+    except Exception as error:
+        yield sse({"error": f"{type(error).__name__}: {error}"})
+    finally:
+        yield sse({"done": True})</code></pre>
+
+<div class="callout">
+  <span class="label">Why JSON inside <code>data:</code></span>
+  SSE ends an event at a blank line. If you write <code>data: {delta}</code> raw and the model emits a newline, the event breaks in half and the browser receives a truncated token followed by garbage. JSON escapes newlines and quotes, so one delta is always one event. It also gives you a place to put <code>done</code> and <code>error</code> frames instead of inventing sentinel strings.
+</div>
+
+<p class="snippet-label">main.py — the endpoint</p>
+<pre><code>@app.post("/chat-stream")
+async def chat_stream(payload: ChatIn) -&gt; StreamingResponse:
+    return StreamingResponse(
+        stream_reply(payload),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )</code></pre>
+
+<p>Two headers earn their place. <code>Cache-Control: no-cache</code> stops intermediary caches from replaying an old stream; <code>X-Accel-Buffering: no</code> tells nginx-style proxies to forward events as they arrive. Also note <code>lifespan</code> in the file: without a key the server refuses to start and prints the two commands, matching lessons 2 and 3.</p>
+
+<h2>Step 2: the translator</h2>
+
+<p><code>useChat</code> doesn't speak raw <code>data:</code> SSE — it speaks the AI SDK's UI message stream. Something must translate, and that something should own no AI logic at all. The route handler receives the UI messages, reduces them to <code>{role, content}</code>, POSTs to FastAPI, parses complete SSE events out of the byte stream, and re-emits them as <code>text-delta</code> chunks. <a href="../assets/examples/0004-streaming-chat/frontend/app/api/chat/route.ts"><code>frontend/app/api/chat/route.ts</code></a>:</p>
+
+<p class="snippet-label">app/api/chat/route.ts — BFF translator</p>
+<pre><code>const PY_BACKEND = process.env.PY_BACKEND ?? "http://127.0.0.1:8000";
+
+type Frame = { delta?: string; error?: string; done?: boolean };
+
+function textOf(message: UIMessage): string {
+  return message.parts.map((part) =&gt; (part.type === "text" ? part.text : "")).join("");
+}
+
+function plain(body: string, status: number): Response {
+  // Plain text on purpose: useChat renders error.message verbatim, so a thrown
+  // error here would print a stack-trace page into the chat area.
+  return new Response(body, {
+    status,
+    headers: { "Content-Type": "text/plain; charset=utf-8" },
+  });
+}
+
+export async function POST(req: Request) {
+  const { messages }: { messages: UIMessage[] } = await req.json();
+
+  const history = messages
+    .map((message) =&gt; ({ role: message.role, content: textOf(message) }))
+    .filter((message) =&gt; message.content.length &gt; 0);
+
+  let upstream: Response;
+  try {
+    upstream = await fetch(`${PY_BACKEND}/chat-stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: history }),
+      signal: req.signal,        // Stop in the UI aborts the Python call too
+    });
+  } catch (error) {
+    if (req.signal.aborted) throw error;      // Stop is not a failure
+    return plain(
+      `python backend unreachable at ${PY_BACKEND}\n` +
+        `  start it:  uv run uvicorn main:app --reload`,
+      502,
+    );
+  }
+
+  if (!upstream.ok || !upstream.body) {
+    return plain(`python backend answered ${upstream.status}`, 502);
+  }
+
+  const textId = crypto.randomUUID();
+
+  const stream = createUIMessageStream({
+    execute: async ({ writer }) =&gt; {
+      const reader = upstream.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      writer.write({ type: "text-start", id: textId });
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // SSE events end with a blank line; a chunk boundary can split one.
+        let split: number;
+        while ((split = buffer.indexOf("\n\n")) !== -1) {
+          const raw = buffer.slice(0, split);
+          buffer = buffer.slice(split + 2);
+          if (!raw.startsWith("data: ")) continue;
+
+          const frame = JSON.parse(raw.slice(6)) as Frame;
+          if (frame.error) throw new Error(frame.error);
+          if (frame.delta) {
+            writer.write({ type: "text-delta", id: textId, delta: frame.delta });
+          }
+        }
+      }
+      writer.write({ type: "text-end", id: textId });
+    },
+  });
+
+  return createUIMessageStreamResponse({ stream });
+}</code></pre>
+
+<p>Read it top to bottom: UI protocol → plain <code>{role, content}</code> history → Python → SSE events → UI protocol. Both sides are lesson-2 knowledge wearing different clothes. The <code>buffer</code> is the part people get wrong: a network read can end mid-event, so you only parse at <code>\n\n</code> and keep the remainder. The real file wraps this in <code>try/finally</code> plus an <code>onError</code>, so a provider failure still closes the text part and reaches the page as a normal <code>error</code> value.</p>
+
+<h2>Step 3: the prompt input</h2>
+
+<p>The page is <code>useChat</code> plus the shadcn <a href="https://ui.shadcn.com/docs/ai-elements/base/prompt-input">Prompt Input</a> composition: an <code>InputGroup</code> with a textarea, Enter to send, Shift+Enter for a newline, and a button that becomes Stop while a stream is running. <a href="../assets/examples/0004-streaming-chat/frontend/app/page.tsx"><code>frontend/app/page.tsx</code></a>:</p>
+
+<p class="snippet-label">app/page.tsx — the prompt field (message rendering omitted)</p>
+<pre><code>import { useChat } from "@ai-sdk/react";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupTextarea,
+} from "@/components/ui/input-group";
+
+const { messages, sendMessage, status, stop, error } = useChat();
+const busy = status === "submitted" || status === "streaming";
+
+&lt;form ref={formRef} onSubmit={submit}&gt;
+  &lt;InputGroup&gt;
+    &lt;InputGroupTextarea
+      value={text}
+      onChange={(event) =&gt; setText(event.target.value)}
+      onKeyDown={(event) =&gt; {
+        if (event.key === "Enter" &amp;&amp; !event.shiftKey) {
+          event.preventDefault();
+          formRef.current?.requestSubmit();
+        }
+      }}
+      placeholder="Ask about your ticket…"
+      className="p-3"
+    /&gt;
+    &lt;InputGroupAddon align="block-end"&gt;
+      {busy ? (
+        &lt;InputGroupButton type="button" size="icon-sm" variant="default"
+          className="ml-auto rounded-full" onClick={() =&gt; stop()}&gt;
+          &lt;SquareIcon /&gt;
+        &lt;/InputGroupButton&gt;
+      ) : (
+        &lt;InputGroupButton type="submit" size="icon-sm" variant="default"
+          className="ml-auto rounded-full" disabled={!text.trim()}&gt;
+          &lt;ArrowUpIcon /&gt;
+        &lt;/InputGroupButton&gt;
+      )}
+    &lt;/InputGroupAddon&gt;
+  &lt;/InputGroup&gt;
+&lt;/form&gt;</code></pre>
+
+<p>Three states matter: <code>ready</code> (send), <code>submitted</code> (waiting for the first token — a spinner in the header pill and three bouncing dots in the bubble), <code>streaming</code> (text plus a blinking caret, and Stop replaces Send). An empty assistant bubble while <code>submitted</code> is a bug, not a style choice: if nothing moves, a 3-second first token reads as a frozen page. <code>error</code> is a normal value here, not an exception: a dead backend becomes a sentence on screen instead of a blank page.</p>
+
+<h2>Run it</h2>
+
+<pre><code># terminal 1 — backend (this is the AI)
+cd assets\examples\0004-streaming-chat\backend
+uv sync
+$env:DEEPSEEK_API_KEY = "sk-..."
+uv run python evals.py                    # 69 offline checks; +3 live
+uv run uvicorn main:app --reload          # http://127.0.0.1:8000
+
+# terminal 2 — frontend (this is the screen)
+cd assets\examples\0004-streaming-chat\frontend
+npm install                               # first run only
+npm run dev                               # http://localhost:3000</code></pre>
+
+<p>Two folders, two jobs: <code>backend\</code> holds the key, the model call and the SSE endpoint; <code>frontend\</code> only translates and paints — it never sees <code>DEEPSEEK_API_KEY</code>. <code>frontend\.env.local</code> already contains <code>PY_BACKEND=http://127.0.0.1:8000</code>.</p>
+
+<p>Before involving Next.js, open <code>http://127.0.0.1:8000/</code>. The bundled <code>backend/test-client.html</code> calls the same endpoint and prints first-token time — if that page doesn't stream, nothing downstream will. Debug one layer at a time.</p>
+
+<p>Rebuilding the frontend from scratch? <code>create-next-app</code> + <code>shadcn init</code> and the one-line <code>globals.css</code> font fix are in the README; the committed app already has both.</p>
+
+<div class="callout">
+  <span class="label">When to keep the prompt input simple</span>
+  The shadcn Prompt Input docs include attachments and a model selector. Add them when the product needs them: attachments cost an upload endpoint (and a new pydantic model), and a model selector belongs to Python, not to the browser — it should send a mode, not an API model name. Text plus send/stop is the honest starting point.
+</div>
+
+<div class="callout">
+  <span class="label">Version caveat</span>
+  The AI SDK moves fast: the message shape gained <code>parts</code>, and chunk fields were renamed (<code>text-delta</code>/<code>delta</code>). shadcn's component APIs move too. This lab was built and type-checked against <strong>Next.js 16.4, <code>ai</code> 7, <code>@ai-sdk/react</code> 4</strong> and the current <code>input-group</code>; older tutorials show different prop names. If a snippet errors, <a href="https://ai-sdk.dev/docs">the AI SDK docs</a> and <a href="https://ui.shadcn.com/docs/ai-elements/base/prompt-input">the Prompt Input page</a> win — the concepts (contract, iterator, framing, translator) don't drift.
+</div>
+
+<div class="callout win">
+  <span class="label">Hands-on loop</span>
+  1. Stream from <code>test-client.html</code> first. Note first-token ms versus total ms — the gap is what streaming buys.<br>
+  2. Add a second sentence to the system prompt and watch the first token arrive later. System tokens are read before any answer token.<br>
+  3. Break the seam on purpose: point <code>PY_BACKEND</code> at port 9000, send a message, and watch the 502 surface as UI text.<br>
+  4. Start a long answer, press Stop, and confirm the uvicorn breakpoint or log shows the request cancelled — that's <code>req.signal</code> doing its job.<br>
+  5. Send a message containing a newline. If your framing were raw text, it would split; with JSON it doesn't. Try it.
+</div>
+
+<h2>Check yourself</h2>
+
+<div class="quiz">
+<script type="application/json">
+{
+  "questions": [
+    {
+      "q": "What does the Next.js route handler do in this architecture?",
+      "options": [
+        "Calls DeepSeek with the server's API key",
+        "Translates protocols; it makes no model calls",
+        "Stores the conversation in a database",
+        "Runs the agent loop on the edge runtime"
+      ],
+      "correct": 1,
+      "explain": "It converts UI messages to {role, content}, calls FastAPI, and re-emits SSE as text-delta chunks. The key and the model stay in Python."
+    },
+    {
+      "q": "Where does the DeepSeek API key live?",
+      "options": [
+        "In the browser, as a NEXT_PUBLIC_ variable",
+        "In the route handler's environment",
+        "In a cookie set by the prompt input",
+        "In the Python service's environment only"
+      ],
+      "correct": 3,
+      "explain": "The BFF has no key by design. FastAPI owns the model call, so the secret never reaches the edge or the browser."
+    },
+    {
+      "q": "Why does each SSE event carry JSON instead of raw text?",
+      "options": [
+        "Newlines and quotes can't split one token into two events",
+        "Browsers refuse to render non-JSON event data",
+        "JSON compresses better over the wire",
+        "The AI SDK only accepts JSON transport"
+      ],
+      "correct": 0,
+      "explain": "A blank line ends an event. JSON escapes newlines, so a delta that contains one still arrives as a single event — and done/error frames get a real shape."
+    },
+    {
+      "q": "What does ChatDeepSeek.astream() return?",
+      "options": [
+        "A list of finished AIMessage objects",
+        "A single string with the whole answer",
+        "An async iterator of AIMessageChunk items",
+        "A websocket connection to the provider"
+      ],
+      "correct": 2,
+      "explain": "Same messages in as invoke(), but you consume chunks as they arrive. Each chunk's content is a string or a list of content blocks."
+    },
+    {
+      "q": "Which metric does perceived chat speed follow?",
+      "options": [
+        "Total generation cost per query",
+        "Requests served per second peak",
+        "Model parameter count exactly",
+        "Time to first token, not total time"
+      ],
+      "correct": 3,
+      "explain": "TTFT is what users feel. A 10-second answer with a 300 ms first token feels fine; the reverse feels broken even if it finishes sooner."
+    },
+    {
+      "q": "What does pydantic enforce at this boundary?",
+      "options": [
+        "Allowed roles, non-empty content, non-empty history",
+        "That the model returns valid JSON every time",
+        "That the stream never exceeds a token budget",
+        "That the user is authenticated with a session"
+      ],
+      "correct": 0,
+      "explain": "Literal roles, Field(min_length=1), and a non-empty messages list. It rejects bad requests before a provider call — cheap failure instead of expensive failure."
+    },
+    {
+      "q": "What makes the Stop button actually stop the Python call?",
+      "options": [
+        "Deleting the message from the UI state",
+        "Setting status back to ready in React",
+        "Aborting the request and passing req.signal upstream",
+        "Closing the browser tab and reopening it"
+      ],
+      "correct": 2,
+      "explain": "UI stop aborts the route request; the route's fetch carries req.signal, so the FastAPI request is cancelled and the generator stops pulling chunks."
+    }
+  ]
+}
+</script>
+</div>
+
+<h2>Primary sources for this lesson</h2>
+<p><a href="https://docs.langchain.com/oss/python/langchain/streaming">LangChain streaming</a> for <code>astream</code> and chunk shapes; <a href="https://api-docs.deepseek.com/api/create-chat-completion">DeepSeek's chat completion API</a> for the <code>stream</code> parameter and wire format; <a href="https://ui.shadcn.com/docs/ai-elements/base/prompt-input">shadcn Prompt Input</a> for the field you copied; <a href="https://ai-sdk.dev/docs">the AI SDK docs</a> for <code>useChat</code> and UI message streams.</p>
+
+<h2>What's next</h2>
+<p><a href="0005-your-first-evals.html">Lesson 5</a>: <strong>your first evals</strong> — the skill that separates AI engineers from demo builders. You'll wrap a programmatic test harness around everything from lessons 2–4, because right now you have no way to know if tomorrow's change made things better or worse. Portfolio project 1 gets its quality layer — then it's truly done.</p>
+
+<div class="footer-nav">
+  <div class="ask"><strong>Seam misbehaving?</strong> Paste both terminals' output — protocol mismatches, port typos, and mid-stream failures are exactly what I debug with you. Also: anything unclear about the BFF pattern?</div>
+  <div class="links">
+    <a href="0003-function-calling.html">← Lesson 3</a>
+    <a href="../reference/skill-map.html">Skill Map &amp; Glossary</a>
+    <a href="../assets/examples/0004-streaming-chat/backend/main.py">Example code</a>
+    <a href="../assets/examples/0004-streaming-chat/index.html">Example page (browser)</a>
+  </div>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</article>
+</body>
+</html>

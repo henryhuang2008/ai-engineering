@@ -1,0 +1,13 @@
+[project]
+name = "0007-rag-service-llamaindex"
+version = "0.1.0"
+description = "Lesson 7 variant: the same RAG service with LlamaIndex (Docling + Qwen + LanceDB + DeepSeek)"
+requires-python = ">=3.11"
+dependencies = [
+    "dashscope>=2.0,<3",
+    "docling>=2.60,<4",
+    "llama-index-core>=0.12,<1",
+    "llama-index-llms-deepseek>=0.4,<1",
+    "llama-index-vector-stores-lancedb>=0.6,<1",
+    "pydantic>=2.9,<3",
+]

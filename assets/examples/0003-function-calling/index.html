@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Example 0003 - LangChain + DeepSeek</title>
+<link rel="stylesheet" href="../../course.css">
+</head>
+<body>
+<article class="page">
+
+<p class="meta">Example 0003 &middot; Companion to <a href="../../../lessons/0003-function-calling.html">Lesson 3</a> &middot; <a href="README.md">README</a></p>
+
+<h1>Function calling: the model asks, your code acts</h1>
+
+<p class="lede">One <code>ChatDeepSeek</code> handle, five stages, no fake model. Two <code>@tool</code> functions become the catalog the model reads; one round trip runs <code>get_ticket_status(&#x27;T-1001&#x27;)</code> and grows the thread <strong>3 &rarr; 5</strong>; the refund task needs <strong>2&ndash;3 loop iterations</strong> before plain text arrives; a non-refundable ticket returns <code>{"error": ...}</code> and the model must decline; <code>max_iterations=1</code> on the same task stops with <code>stopped: budget</code>. Self-tests: <strong>54 checks</strong> offline, plus a live smoke when <code>DEEPSEEK_API_KEY</code> is set.</p>
+
+<h2>Key and run (uv)</h2>
+<pre>$env:DEEPSEEK_API_KEY = "sk-..."     # PowerShell, this terminal
+setx DEEPSEEK_API_KEY "sk-..."       # persist, then reopen the terminal
+
+cd assets\examples\0003-function-calling
+uv sync                               # .venv from pyproject.toml + uv.lock
+uv run python function_calling_lab.py # five stages, live DeepSeek
+uv run python evals.py                # 54 checks (+3 live with a key)</pre>
+<p>Key page: <a href="https://platform.deepseek.com/api_keys">platform.deepseek.com/api_keys</a>. No key &rarr; the lab prints those commands and exits 1; there is no canned fallback. Optional overrides: <code>DEEPSEEK_MODEL</code> (default <code>deepseek-flash</code>), <code>DEEPSEEK_BASE_URL</code> (default <code>https://api.deepseek.com</code>), and <code>MAX_ITERATIONS</code> (default <code>10</code>). The lab disables DeepSeek thinking for speed and keeps the raw <code>AIMessage</code> in the thread because rebuilding it drops fields the provider expects. Wording varies between runs; the message shapes, call ids, and stop reasons do not. <code>uv.lock</code> pins the exact dependency graph, so <code>uv sync</code> is the whole install step.</p>
+
+<h2>README.md</h2>
+<pre># 0003 — Function calling: the model asks, your code acts
+
+One LangChain handle (`ChatDeepSeek`), five stages. The model never runs anything: it
+returns a **request** (`AIMessage.tool_calls`), your code decides whether to run it,
+executes the real function, and reports back with a `ToolMessage`. Repeat until the
+model answers in plain text — that loop is the atom of agency.
+
+| stage | what it shows | stable result |
+|---|---|---|
+| 1. catalog | two `@tool` functions → name, description, parameter schema. The model never sees the bodies | 2 tools; `required` is `[&#x27;ticket_id&#x27;]` and `[&#x27;ticket_id&#x27;, &#x27;amount_usd&#x27;]` |
+| 2. one call | `bind_tools()` → `AIMessage.tool_calls` → `execute()` → `ToolMessage` → one more call | thread **3 → 5** messages; the tool result carries the call id |
+| 3. the loop | a refund needs two rounds (look up, then refund); the loop ends when `tool_calls` is empty | iterations **2–3**, `stopped: answer` |
+| 4. the guard | `T-1002` is not refundable → the tool returns `{&quot;error&quot;: &quot;ticket not refundable&quot;}` and the model must read it | `stopped: answer`, no invented success |
+| 5. the cap | `max_iterations=1` on the same refund task | `stopped: budget`, 1 iteration, empty answer |
+
+Model *wording* varies between runs. Message counts, call ids, and the loop&#x27;s stop
+reason are structural — `evals.py` asserts those, not the sentences.
+
+## Run
+
+The lab calls the live DeepSeek API. There is no fake model and no offline mode.
+
+```powershell
+# key, this terminal only
+$env:DEEPSEEK_API_KEY = &quot;sk-...&quot;
+
+# or persist for future terminals, then reopen the terminal
+setx DEEPSEEK_API_KEY &quot;sk-...&quot;
+```
+
+```powershell
+cd assets\examples\0003-function-calling
+uv sync                              # create .venv from pyproject.toml + uv.lock
+uv run python function_calling_lab.py # five stages against DeepSeek
+uv run python evals.py                # 54 offline checks; +3 live with a key
+```
+
+`uv sync` is the install step: `pyproject.toml` declares the dependencies and
+`uv.lock` pins the exact graph, so no `venv` + `pip` dance and no drift between
+machines. No uv yet: `winget install --id=astral-sh.uv`, or `pip install uv`.
+
+Get a key at &lt;https://platform.deepseek.com/api_keys&gt;; the account needs a small
+prepaid balance. Without a key the lab prints the two key commands and exits 1 — no
+silent fallback.
+
+Optional overrides:
+
+| variable | default |
+|---|---|
+| `DEEPSEEK_MODEL` | `deepseek-flash` |
+| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` |
+| `MAX_ITERATIONS` | `10` |
+
+## What the self-tests cover
+
+Everything that does not need the network: the fixture, both tool contracts
+(required arguments, description text), the tool bodies (refund allowed / refused /
+unknown ticket), the catalog the model receives, `execute()` for good calls, unknown
+tools and invalid arguments, the loop&#x27;s control flow (answer vs budget, message
+shapes, call-id pairing) driven by a test double defined **in `evals.py`**, the
+missing-key instructions, the model wiring, and the uv project. With a key, three
+more checks fire: one live call must return an `AIMessage` that requests
+`get_ticket_status`.
+
+## DeepSeek notes
+
+- `deepseek-flash` supports tool calls; `deepseek-v4-pro` is the larger option. Same
+  key, same base URL.
+- The lab disables DeepSeek thinking for speed. If you turn thinking on
+  (`extra_body={&quot;thinking&quot;: {&quot;type&quot;: &quot;enabled&quot;}}`), tool turns require every earlier
+  `reasoning_content` to be echoed back or the API answers 400 — which is why the
+  loop keeps the raw `AIMessage` instead of rebuilding messages by hand.
+- `strict` mode (Beta) pins argument shapes to your JSON schema: use the
+  `https://api.deepseek.com/beta` base URL and set `strict: true` per function.
+- LangChain maps `AIMessage.tool_calls` and `ToolMessage` onto DeepSeek&#x27;s OpenAI-shaped
+  wire format, so the same loop runs unchanged on other providers.
+
+## Files
+
+| file | role |
+|---|---|
+| `function_calling_lab.py` | the five stages, the hand-written loop, and the live `ChatDeepSeek` wiring |
+| `evals.py` | 54 offline checks (fixture, tool contracts, catalog, execution, loop control flow, budget, model config, missing-key message, no fake model, uv project) plus a conditional live smoke |
+| `pyproject.toml` | dependencies and Python floor — the single source of truth |
+| `uv.lock` | the pinned dependency graph `uv sync` installs |
+| `index.html` | this lab rendered for the course |
+
+Versions pinned by `uv.lock`: `langchain 1.4.8`, `langchain-core 1.7.4`,
+`langchain-deepseek 1.1.1`, `pydantic 2.14.2` (Python 3.12).
+
+Lesson: [lessons/0003-function-calling.html](../../../lessons/0003-function-calling.html)</pre>
+
+<h2>pyproject.toml</h2>
+<pre>[project]
+name = &quot;0003-function-calling&quot;
+version = &quot;0.1.0&quot;
+description = &quot;Lesson 3 lab: the agent loop by hand with LangChain + DeepSeek&quot;
+requires-python = &quot;&gt;=3.11&quot;
+dependencies = [
+    &quot;langchain&gt;=1.4,&lt;2&quot;,
+    &quot;langchain-deepseek&gt;=1.1,&lt;2&quot;,
+    &quot;pydantic&gt;=2.9,&lt;3&quot;,
+]</pre>
+
+<h2>function_calling_lab.py</h2>
+<pre>&quot;&quot;&quot;0003-function-calling - the agent loop, by hand, with LangChain + DeepSeek.
+
+Five stages on one model handle:
+
+  1. catalog   two @tool functions -&gt; the JSON schema the model actually reads
+  2. one call  bind_tools -&gt; AIMessage.tool_calls -&gt; your code runs the tool -&gt;
+               ToolMessage -&gt; one more call. ONE round trip, not an agent.
+  3. the loop  a refund needs two rounds (look up, then refund). The loop keeps
+               calling until the model stops asking for tools: the agent loop.
+  4. the guard a non-refundable ticket returns an error; the model must read it
+               and recover instead of claiming success.
+  5. the cap   max_iterations on a task that needs two rounds: the production
+               guard fires instead of spinning forever.
+
+This lab talks to the live DeepSeek API. Set DEEPSEEK_API_KEY first:
+
+  PowerShell (this session):  $env:DEEPSEEK_API_KEY = &quot;sk-...&quot;
+  PowerShell (persist):       setx DEEPSEEK_API_KEY &quot;sk-...&quot;   # reopen the terminal
+
+Get a key at https://platform.deepseek.com/api_keys. No key -&gt; exit 1 with these
+instructions, never a guess.
+&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+from dataclasses import dataclass
+from typing import Any
+
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
+from langchain_core.tools import BaseTool, tool
+
+MODEL = os.getenv(&quot;DEEPSEEK_MODEL&quot;, &quot;deepseek-flash&quot;)
+BASE_URL = os.getenv(&quot;DEEPSEEK_BASE_URL&quot;, &quot;https://api.deepseek.com&quot;)
+MAX_ITERATIONS = int(os.getenv(&quot;MAX_ITERATIONS&quot;, &quot;10&quot;))
+
+SYSTEM = &quot;You are a support agent. Use tools when you need facts. Answer in one or two sentences.&quot;
+QUESTION_STATUS = &quot;What&#x27;s the status of ticket T-1001?&quot;
+QUESTION_REFUND = &quot;Ticket T-1001 says I was overcharged 20 dollars. Check it and issue the refund.&quot;
+QUESTION_REFUSED = &quot;Ticket T-1002 was charged 20 dollars. Refund it now.&quot;
+
+# --- the world the tools can touch (fixture) --------------------------------
+
+TICKETS = {
+    &quot;T-1001&quot;: {&quot;status&quot;: &quot;open&quot;, &quot;plan&quot;: &quot;pro&quot;, &quot;refundable&quot;: True},
+    &quot;T-1002&quot;: {&quot;status&quot;: &quot;closed&quot;, &quot;plan&quot;: &quot;free&quot;, &quot;refundable&quot;: False},
+}
+
+
+@tool
+def get_ticket_status(ticket_id: str) -&gt; dict:
+    &quot;&quot;&quot;Look up the status and plan of a support ticket by its id, for example T-1001.&quot;&quot;&quot;
+    return TICKETS.get(ticket_id, {&quot;error&quot;: &quot;unknown ticket&quot;})
+
+
+@tool
+def issue_refund(ticket_id: str, amount_usd: float) -&gt; dict:
+    &quot;&quot;&quot;Issue a refund for a refundable ticket. Check the status first and only refund amounts the customer was actually charged.&quot;&quot;&quot;
+    ticket = TICKETS.get(ticket_id)
+    if ticket is None:
+        return {&quot;error&quot;: &quot;unknown ticket&quot;}
+    if not ticket[&quot;refundable&quot;]:
+        return {&quot;error&quot;: &quot;ticket not refundable&quot;}
+    return {&quot;refunded_usd&quot;: amount_usd, &quot;ticket&quot;: ticket_id}
+
+
+TOOLS = [get_ticket_status, issue_refund]
+REGISTRY: dict[str, BaseTool] = {item.name: item for item in TOOLS}
+
+
+# --- model wiring -----------------------------------------------------------
+
+
+def missing_key_message() -&gt; str:
+    return (
+        &quot;DEEPSEEK_API_KEY is not set.\n&quot;
+        &#x27;  PowerShell (this session):  $env:DEEPSEEK_API_KEY = &quot;sk-...&quot;\n&#x27;
+        &#x27;  PowerShell (persist):       setx DEEPSEEK_API_KEY &quot;sk-...&quot;   # reopen terminal\n&#x27;
+        &quot;  Get a key:                  https://platform.deepseek.com/api_keys&quot;
+    )
+
+
+def build_model() -&gt; Any:
+    &quot;&quot;&quot;Return a live ChatDeepSeek handle, or explain exactly what is missing.&quot;&quot;&quot;
+    if not os.getenv(&quot;DEEPSEEK_API_KEY&quot;):
+        raise RuntimeError(missing_key_message())
+
+    from langchain_deepseek import ChatDeepSeek
+
+    return ChatDeepSeek(
+        model=os.getenv(&quot;DEEPSEEK_MODEL&quot;, MODEL),
+        api_key=os.getenv(&quot;DEEPSEEK_API_KEY&quot;),
+        api_base=os.getenv(&quot;DEEPSEEK_BASE_URL&quot;, BASE_URL),
+        temperature=0,
+        max_retries=2,
+        timeout=60,
+        # DeepSeek&#x27;s thinking mode requires every earlier reasoning block to be
+        # echoed back on tool turns; this lab is about the loop, so keep it off.
+        extra_body={&quot;thinking&quot;: {&quot;type&quot;: &quot;disabled&quot;}},
+    )
+
+
+# --- the mechanics the lesson is about --------------------------------------
+
+
+def catalog() -&gt; list[dict[str, Any]]:
+    &quot;&quot;&quot;What the model is allowed to know about each tool. Nothing else is sent.&quot;&quot;&quot;
+    rows: list[dict[str, Any]] = []
+    for item in TOOLS:
+        schema = item.args_schema.model_json_schema()
+        rows.append(
+            {
+                &quot;name&quot;: item.name,
+                &quot;description&quot;: item.description,
+                &quot;required&quot;: schema.get(&quot;required&quot;, []),
+                &quot;properties&quot;: sorted(schema.get(&quot;properties&quot;, {})),
+            }
+        )
+    return rows
+
+
+def execute(call: dict[str, Any]) -&gt; ToolMessage:
+    &quot;&quot;&quot;Run one requested tool call and wrap the result for the model.
+
+    Unknown tools and invalid arguments come back as data, not exceptions: the
+    model reads them and corrects itself on the next round.
+    &quot;&quot;&quot;
+    name = call[&quot;name&quot;]
+    arguments = call[&quot;args&quot;]
+    tool_obj = REGISTRY.get(name)
+    if tool_obj is None:
+        payload: Any = {&quot;error&quot;: f&quot;unknown tool {name}&quot;}
+    else:
+        try:
+            payload = tool_obj.invoke(arguments)
+        except Exception as exc:  # noqa: BLE001 - validation errors are data here
+            payload = {&quot;error&quot;: f&quot;invalid arguments for {name}: {type(exc).__name__}&quot;}
+    return ToolMessage(content=json.dumps(payload), tool_call_id=call[&quot;id&quot;])
+
+
+@dataclass
+class LoopResult:
+    answer: str
+    messages: list[BaseMessage]
+    iterations: int
+    stopped: str  # &quot;answer&quot; or &quot;budget&quot;
+
+
+def run_loop(model: Any, question: str, *, max_iterations: int = MAX_ITERATIONS) -&gt; LoopResult:
+    &quot;&quot;&quot;The agent loop: call, act, observe, repeat until plain text or the cap.&quot;&quot;&quot;
+    bound = model.bind_tools(TOOLS)
+    messages: list[BaseMessage] = [
+        SystemMessage(content=SYSTEM),
+        HumanMessage(content=question),
+    ]
+    for step in range(1, max_iterations + 1):
+        reply = bound.invoke(messages)
+        messages.append(reply)
+        if not reply.tool_calls:
+            return LoopResult(str(reply.content), messages, step, &quot;answer&quot;)
+        # Keep the raw AIMessage above: rebuilding it by hand loses fields the
+        # provider expects on the next request (ids, reasoning, provider extras).
+        for call in reply.tool_calls:
+            messages.append(execute(call))
+    return LoopResult(&quot;&quot;, messages, max_iterations, &quot;budget&quot;)
+
+
+# --- output helpers ---------------------------------------------------------
+
+
+def describe(message: BaseMessage) -&gt; str:
+    if message.type == &quot;ai&quot; and message.tool_calls:
+        calls = &quot;, &quot;.join(f&quot;{c[&#x27;name&#x27;]}({c[&#x27;args&#x27;]})&quot; for c in message.tool_calls)
+        return f&quot;{message.type:&lt;6} wants {calls}&quot;
+    text = message.content if isinstance(message.content, str) else str(message.content)
+    return f&quot;{message.type:&lt;6} {text}&quot;
+
+
+def print_trace(messages: list[BaseMessage], start: int = 1) -&gt; None:
+    for index, message in enumerate(messages, start=start):
+        print(f&quot;  {index} {describe(message)}&quot;)
+
+
+# --- stages -----------------------------------------------------------------
+
+
+def stage_catalog() -&gt; None:
+    print(&quot;== 1. catalog: the only thing the model knows about your code ==&quot;)
+    for row in catalog():
+        print(f&quot;{row[&#x27;name&#x27;]}{row[&#x27;required&#x27;]}&quot;)
+        print(f&#x27;  description: &quot;{row[&quot;description&quot;]}&quot;&#x27;)
+    print(&quot;  the model never sees the function bodies - only this catalog&quot;)
+    print()
+
+
+def stage_one_call(model: Any) -&gt; None:
+    print(&quot;== 2. one round trip: the model asks, your code acts =============&quot;)
+    bound = model.bind_tools(TOOLS)
+    messages = [SystemMessage(content=SYSTEM), HumanMessage(content=QUESTION_STATUS)]
+    reply = bound.invoke(messages)
+    call = reply.tool_calls[0]
+    print(f&quot;model requested: {call[&#x27;name&#x27;]}({call[&#x27;args&#x27;]})&quot;)
+    print(f&quot;tool_call_id:    {call[&#x27;id&#x27;]}&quot;)
+
+    result = execute(call)
+    print(f&quot;your code ran:   {result.content}&quot;)
+
+    thread = messages + [reply, result]
+    final = bound.invoke(thread)
+    print(f&quot;final answer:    {final.content}&quot;)
+    print(f&quot;thread length:   {len(thread) + 1} messages (system, human, ai, tool, ai)&quot;)
+    print()
+
+
+def stage_loop(model: Any) -&gt; None:
+    print(&quot;== 3. the loop: two rounds, one answer ===========================&quot;)
+    result = run_loop(model, QUESTION_REFUND)
+    print_trace(result.messages)
+    print(f&quot;iterations:      {result.iterations} (stopped: {result.stopped})&quot;)
+    print(f&quot;answer:          {result.answer}&quot;)
+    print()
+
+
+def stage_guard(model: Any) -&gt; None:
+    print(&quot;== 4. the guard: a refused action is data, not a crash ===========&quot;)
+    result = run_loop(model, QUESTION_REFUSED)
+    print_trace(result.messages)
+    print(f&quot;iterations:      {result.iterations} (stopped: {result.stopped})&quot;)
+    print(f&quot;answer:          {result.answer}&quot;)
+    print(&quot;  the tool said no; the model had to read that and stop pretending&quot;)
+    print()
+
+
+def stage_cap(model: Any) -&gt; None:
+    print(&quot;== 5. the cap: max_iterations stops a spinning loop ==============&quot;)
+    result = run_loop(model, QUESTION_REFUND, max_iterations=1)
+    print(f&quot;iterations:      {result.iterations} (stopped: {result.stopped})&quot;)
+    print(f&quot;messages kept:   {len(result.messages)} ({result.messages[-1].type} last)&quot;)
+    print(&quot;  in production this is your budget guard, not an error tax&quot;)
+    print()
+
+
+def run() -&gt; int:
+    try:
+        model = build_model()
+    except RuntimeError as error:
+        print(f&quot;error: {error}&quot;, file=sys.stderr)
+        return 1
+
+    print(f&quot;DeepSeek via LangChain -- live model ({MODEL})&quot;)
+    print()
+    stage_catalog()
+    stage_one_call(model)
+    stage_loop(model)
+    stage_guard(model)
+    stage_cap(model)
+    print(&quot;done: 5 stages, live DeepSeek calls&quot;)
+    return 0
+
+
+def main() -&gt; int:
+    try:
+        return run()
+    except Exception as error:  # noqa: BLE001 - surface the provider error, keep exit codes
+        print(f&quot;error: {type(error).__name__}: {error}&quot;, file=sys.stderr)
+        print(
+            &quot;check DEEPSEEK_API_KEY, account balance, and network access.&quot;,
+            file=sys.stderr,
+        )
+        return 1
+
+
+if __name__ == &quot;__main__&quot;:
+    raise SystemExit(main())</pre>
+
+<h2>evals.py</h2>
+<pre>&quot;&quot;&quot;Self-tests for 0003-function-calling.
+
+No fake model: the lab talks to live DeepSeek. Everything here runs offline -
+tool contracts, the catalog, tool execution and error handling, the loop&#x27;s
+control flow (driven by a test double defined below, not by the lab), the
+missing-key instructions, the uv project - plus one live smoke when a key is set.
+&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+import sys
+import tomllib
+from pathlib import Path
+
+import function_calling_lab as lab
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+
+HERE = Path(__file__).resolve().parent
+PY = sys.executable
+CHECKS: list[str] = []
+
+
+def check(name: str, condition: bool, detail: str = &quot;&quot;) -&gt; None:
+    if not condition:
+        raise AssertionError(f&quot;{name}: {detail}&quot; if detail else name)
+    CHECKS.append(name)
+
+
+def clean_env() -&gt; dict[str, str]:
+    env = {k: v for k, v in os.environ.items() if not k.startswith(&quot;DEEPSEEK_&quot;)}
+    env.pop(&quot;OPENAI_API_KEY&quot;, None)
+    return env
+
+
+def run_lab(env: dict[str, str], timeout: int = 90):
+    return subprocess.run(
+        [PY, &quot;function_calling_lab.py&quot;],
+        cwd=HERE,
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding=&quot;utf-8&quot;,
+        errors=&quot;replace&quot;,
+        timeout=timeout,
+    )
+
+
+def with_env(values: dict[str, str]):
+    &quot;&quot;&quot;Temporarily set env vars, then restore exactly.&quot;&quot;&quot;
+
+    class _Ctx:
+        def __enter__(self):
+            self.old = os.environ.copy()
+            os.environ.update(values)
+
+        def __exit__(self, *args):
+            os.environ.clear()
+            os.environ.update(self.old)
+
+    return _Ctx()
+
+
+class _StubBound:
+    &quot;&quot;&quot;Answers the loop with pre-built AIMessages; records what it was sent.&quot;&quot;&quot;
+
+    def __init__(self, replies: list[AIMessage]) -&gt; None:
+        self.replies = list(replies)
+        self.sent: list[list] = []
+
+    def invoke(self, messages):
+        self.sent.append(list(messages))
+        return self.replies.pop(0) if self.replies else AIMessage(content=&quot;done&quot;)
+
+
+class StubModel:
+    &quot;&quot;&quot;Test double for the loop&#x27;s control flow. The lab itself has no fake model.&quot;&quot;&quot;
+
+    def __init__(self, replies: list[AIMessage]) -&gt; None:
+        self.bound = _StubBound(replies)
+        self.tools: list = []
+
+    def bind_tools(self, tools):
+        self.tools = list(tools)
+        return self.bound
+
+
+def call_message(name: str, args: dict, call_id: str) -&gt; AIMessage:
+    return AIMessage(content=&quot;&quot;, tool_calls=[{&quot;name&quot;: name, &quot;args&quot;: args, &quot;id&quot;: call_id}])
+
+
+# --- tests -----------------------------------------------------------------
+
+
+def test_fixture() -&gt; None:
+    check(&quot;two tickets in the fixture&quot;, len(lab.TICKETS) == 2, str(sorted(lab.TICKETS)))
+    check(&quot;T-1001 refundable&quot;, lab.TICKETS[&quot;T-1001&quot;][&quot;refundable&quot;] is True)
+    check(&quot;T-1002 not refundable&quot;, lab.TICKETS[&quot;T-1002&quot;][&quot;refundable&quot;] is False)
+
+
+def test_tool_contracts() -&gt; None:
+    check(&quot;tool count&quot;, len(lab.TOOLS) == 2, str(len(lab.TOOLS)))
+    check(&quot;registry keys&quot;, sorted(lab.REGISTRY) == [&quot;get_ticket_status&quot;, &quot;issue_refund&quot;])
+
+    lookup = lab.get_ticket_status.args_schema.model_json_schema()
+    check(&quot;lookup name&quot;, lab.get_ticket_status.name == &quot;get_ticket_status&quot;)
+    check(&quot;lookup takes ticket_id&quot;, lookup.get(&quot;required&quot;) == [&quot;ticket_id&quot;])
+    check(&quot;lookup description names the id&quot;, &quot;id&quot; in lab.get_ticket_status.description.lower())
+
+    refund = lab.issue_refund.args_schema.model_json_schema()
+    check(&quot;refund takes two args&quot;, sorted(refund.get(&quot;required&quot;, [])) == [&quot;amount_usd&quot;, &quot;ticket_id&quot;])
+    check(
+        &quot;refund description carries policy&quot;,
+        &quot;check the status first&quot; in lab.issue_refund.description.lower(),
+    )
+
+
+def test_tool_behaviour() -&gt; None:
+    status = lab.get_ticket_status.invoke({&quot;ticket_id&quot;: &quot;T-1001&quot;})
+    check(&quot;lookup returns a dict&quot;, isinstance(status, dict), type(status).__name__)
+    check(&quot;lookup reports open&quot;, status[&quot;status&quot;] == &quot;open&quot;, str(status))
+    check(
+        &quot;lookup handles unknown ids&quot;,
+        &quot;error&quot; in lab.get_ticket_status.invoke({&quot;ticket_id&quot;: &quot;T-9999&quot;}),
+    )
+
+    ok = lab.issue_refund.invoke({&quot;ticket_id&quot;: &quot;T-1001&quot;, &quot;amount_usd&quot;: 20})
+    check(&quot;refund runs for T-1001&quot;, ok == {&quot;refunded_usd&quot;: 20, &quot;ticket&quot;: &quot;T-1001&quot;}, str(ok))
+    refused = lab.issue_refund.invoke({&quot;ticket_id&quot;: &quot;T-1002&quot;, &quot;amount_usd&quot;: 20})
+    check(&quot;refund refused for T-1002&quot;, refused == {&quot;error&quot;: &quot;ticket not refundable&quot;}, str(refused))
+    unknown = lab.issue_refund.invoke({&quot;ticket_id&quot;: &quot;T-9999&quot;, &quot;amount_usd&quot;: 20})
+    check(&quot;refund refuses unknown ticket&quot;, unknown == {&quot;error&quot;: &quot;unknown ticket&quot;}, str(unknown))
+
+
+def test_catalog() -&gt; None:
+    rows = lab.catalog()
+    check(&quot;catalog lists two tools&quot;, len(rows) == 2, str(len(rows)))
+    by_name = {row[&quot;name&quot;]: row for row in rows}
+    check(&quot;catalog has both names&quot;, set(by_name) == {&quot;get_ticket_status&quot;, &quot;issue_refund&quot;})
+    check(&quot;catalog exposes required args&quot;, by_name[&quot;issue_refund&quot;][&quot;required&quot;] == [&quot;ticket_id&quot;, &quot;amount_usd&quot;])
+    check(
+        &quot;catalog exposes properties&quot;,
+        by_name[&quot;get_ticket_status&quot;][&quot;properties&quot;] == [&quot;ticket_id&quot;],
+        str(by_name[&quot;get_ticket_status&quot;][&quot;properties&quot;]),
+    )
+    check(
+        &quot;catalog carries the descriptions&quot;,
+        all(row[&quot;description&quot;] for row in rows),
+        str([row[&quot;description&quot;] for row in rows]),
+    )
+
+
+def test_execute() -&gt; None:
+    good = lab.execute({&quot;name&quot;: &quot;get_ticket_status&quot;, &quot;args&quot;: {&quot;ticket_id&quot;: &quot;T-1001&quot;}, &quot;id&quot;: &quot;call_1&quot;})
+    check(&quot;execute returns a ToolMessage&quot;, isinstance(good, ToolMessage), type(good).__name__)
+    check(&quot;tool_call_id is preserved&quot;, good.tool_call_id == &quot;call_1&quot;, good.tool_call_id)
+    check(&quot;payload is JSON&quot;, json.loads(good.content)[&quot;status&quot;] == &quot;open&quot;, good.content)
+
+    unknown = lab.execute({&quot;name&quot;: &quot;delete_everything&quot;, &quot;args&quot;: {}, &quot;id&quot;: &quot;call_2&quot;})
+    check(&quot;unknown tool becomes an error payload&quot;, &quot;unknown tool&quot; in unknown.content, unknown.content)
+    check(&quot;unknown tool keeps the id&quot;, unknown.tool_call_id == &quot;call_2&quot;)
+
+    bad_args = lab.execute({&quot;name&quot;: &quot;issue_refund&quot;, &quot;args&quot;: {&quot;ticket_id&quot;: &quot;T-1001&quot;}, &quot;id&quot;: &quot;call_3&quot;})
+    check(&quot;invalid arguments become an error payload&quot;, &quot;invalid arguments&quot; in bad_args.content, bad_args.content)
+
+
+def test_loop_control_flow() -&gt; None:
+    stub = StubModel(
+        [
+            call_message(&quot;get_ticket_status&quot;, {&quot;ticket_id&quot;: &quot;T-1001&quot;}, &quot;call_a&quot;),
+            AIMessage(content=&quot;T-1001 is open on the pro plan.&quot;),
+        ]
+    )
+    result = lab.run_loop(stub, &quot;status of T-1001?&quot;)
+    check(&quot;loop stops on plain text&quot;, result.stopped == &quot;answer&quot;, result.stopped)
+    check(&quot;loop counts two iterations&quot;, result.iterations == 2, str(result.iterations))
+    check(&quot;answer comes from the model&quot;, &quot;open&quot; in result.answer, result.answer)
+    check(
+        &quot;message shapes are system/human/ai/tool/ai&quot;,
+        [m.type for m in result.messages] == [&quot;system&quot;, &quot;human&quot;, &quot;ai&quot;, &quot;tool&quot;, &quot;ai&quot;],
+        str([m.type for m in result.messages]),
+    )
+    check(&quot;tool result is attached to the call&quot;, result.messages[3].tool_call_id == &quot;call_a&quot;)
+    check(&quot;loop binds both tools&quot;, len(stub.tools) == 2, str(len(stub.tools)))
+    check(
+        &quot;second call re-sends the tool result&quot;,
+        any(m.type == &quot;tool&quot; for m in stub.bound.sent[1]),
+        str([m.type for m in stub.bound.sent[1]]),
+    )
+
+
+def test_loop_budget() -&gt; None:
+    stub = StubModel([call_message(&quot;get_ticket_status&quot;, {&quot;ticket_id&quot;: &quot;T-1001&quot;}, f&quot;call_{i}&quot;) for i in range(5)])
+    result = lab.run_loop(stub, &quot;loop forever&quot;, max_iterations=3)
+    check(&quot;budget stops the loop&quot;, result.stopped == &quot;budget&quot;, result.stopped)
+    check(&quot;budget honours max_iterations&quot;, result.iterations == 3, str(result.iterations))
+    check(&quot;budget returns no answer&quot;, result.answer == &quot;&quot;, result.answer)
+    check(&quot;budget keeps the transcript&quot;, len(result.messages) == 8, str(len(result.messages)))
+
+
+def test_model_config() -&gt; None:
+    with with_env({&quot;DEEPSEEK_API_KEY&quot;: &quot;test-key&quot;}):
+        model = lab.build_model()
+    check(&quot;live model class&quot;, type(model).__name__ == &quot;ChatDeepSeek&quot;, type(model).__name__)
+    check(&quot;default model name&quot;, model.model_name == &quot;deepseek-flash&quot;, model.model_name)
+    check(&quot;default base url&quot;, str(model.root_client.base_url).rstrip(&quot;/&quot;) == &quot;https://api.deepseek.com&quot;)
+    check(&quot;temperature zero&quot;, model.temperature == 0)
+    check(
+        &quot;thinking disabled for the lab&quot;,
+        model.extra_body == {&quot;thinking&quot;: {&quot;type&quot;: &quot;disabled&quot;}},
+        str(model.extra_body),
+    )
+
+
+def test_model_overrides() -&gt; None:
+    with with_env(
+        {
+            &quot;DEEPSEEK_API_KEY&quot;: &quot;test-key&quot;,
+            &quot;DEEPSEEK_MODEL&quot;: &quot;deepseek-v4-pro&quot;,
+            &quot;DEEPSEEK_BASE_URL&quot;: &quot;https://example.test&quot;,
+        }
+    ):
+        model = lab.build_model()
+    check(&quot;model override&quot;, model.model_name == &quot;deepseek-v4-pro&quot;, model.model_name)
+    check(&quot;base url override&quot;, str(model.root_client.base_url).rstrip(&quot;/&quot;) == &quot;https://example.test&quot;)
+
+
+def test_missing_key() -&gt; None:
+    result = run_lab(clean_env())
+    check(&quot;no key exits 1&quot;, result.returncode == 1, str(result.returncode))
+    check(&quot;shows session command&quot;, &#x27;$env:DEEPSEEK_API_KEY = &quot;sk-...&quot;&#x27; in result.stderr, result.stderr)
+    check(&quot;shows persist command&quot;, &quot;setx DEEPSEEK_API_KEY&quot; in result.stderr, result.stderr)
+    check(&quot;shows key page&quot;, &quot;platform.deepseek.com/api_keys&quot; in result.stderr, result.stderr)
+    check(&quot;no banner before failing&quot;, &quot;live model&quot; not in result.stdout, result.stdout)
+
+
+def test_no_fake_model() -&gt; None:
+    check(&quot;no FakeDeepSeek in the lab&quot;, not hasattr(lab, &quot;FakeDeepSeek&quot;))
+    source = (HERE / &quot;function_calling_lab.py&quot;).read_text(encoding=&quot;utf-8&quot;)
+    check(&quot;lab has no scripted branch&quot;, &quot;--real&quot; not in source and &quot;scripted&quot; not in source.lower())
+
+
+def test_uv_project() -&gt; None:
+    &quot;&quot;&quot;The uv project is the single source of dependencies; keep it honest.&quot;&quot;&quot;
+    pyproject = HERE / &quot;pyproject.toml&quot;
+    check(&quot;pyproject.toml exists&quot;, pyproject.exists())
+    data = tomllib.loads(pyproject.read_text(encoding=&quot;utf-8&quot;))
+    declared = {
+        re.split(r&quot;[&lt;&gt;=!~ ]&quot;, dep, maxsplit=1)[0] for dep in data[&quot;project&quot;][&quot;dependencies&quot;]
+    }
+    check(
+        &quot;declares langchain, langchain-deepseek, pydantic&quot;,
+        {&quot;langchain&quot;, &quot;langchain-deepseek&quot;, &quot;pydantic&quot;} &lt;= declared,
+        str(sorted(declared)),
+    )
+
+
+def test_live_smoke() -&gt; tuple[bool, str]:
+    if not os.getenv(&quot;DEEPSEEK_API_KEY&quot;):
+        return False, &quot;skipped (no DEEPSEEK_API_KEY)&quot;
+    model = lab.build_model()
+    reply = model.bind_tools(lab.TOOLS).invoke(
+        [
+            SystemMessage(content=lab.SYSTEM),
+            HumanMessage(content=lab.QUESTION_STATUS),
+        ]
+    )
+    check(&quot;live reply is an AIMessage&quot;, isinstance(reply, AIMessage), type(reply).__name__)
+    check(&quot;live reply requested the lookup&quot;, bool(reply.tool_calls), str(reply.tool_calls))
+    check(&quot;live call names a declared tool&quot;, reply.tool_calls[0][&quot;name&quot;] in lab.REGISTRY)
+    return True, &quot;ran one live tool-calling call&quot;
+
+
+TESTS = [
+    (&quot;fixture&quot;, test_fixture),
+    (&quot;tool contracts&quot;, test_tool_contracts),
+    (&quot;tool behaviour&quot;, test_tool_behaviour),
+    (&quot;catalog&quot;, test_catalog),
+    (&quot;execute&quot;, test_execute),
+    (&quot;loop control flow&quot;, test_loop_control_flow),
+    (&quot;loop budget&quot;, test_loop_budget),
+    (&quot;model config&quot;, test_model_config),
+    (&quot;model overrides&quot;, test_model_overrides),
+    (&quot;missing key instructions&quot;, test_missing_key),
+    (&quot;no fake model&quot;, test_no_fake_model),
+    (&quot;uv project&quot;, test_uv_project),
+]
+
+
+def main() -&gt; int:
+    failures = 0
+    for index, (name, test) in enumerate(TESTS, start=1):
+        try:
+            test()
+            print(f&quot;ok {index:02d} {name}&quot;)
+        except Exception as error:  # noqa: BLE001 - a test runner reports everything
+            failures += 1
+            print(f&quot;FAIL {index:02d} {name}: {error}&quot;)
+
+    try:
+        ran, note = test_live_smoke()
+    except Exception as error:  # noqa: BLE001
+        failures += 1
+        print(f&quot;FAIL 13 live smoke: {error}&quot;)
+    else:
+        print(f&quot;ok 13 live smoke: {note}&quot;)
+        if not ran:
+            print(&quot;     set DEEPSEEK_API_KEY to include the live call&quot;)
+
+    total = len(CHECKS)
+    print(f&quot;\n{total} checks passed, {failures} failed&quot;)
+    return 0 if failures == 0 else 1
+
+
+if __name__ == &quot;__main__&quot;:
+    raise SystemExit(main())</pre>
+
+<p>Lesson: <a href="../../../lessons/0003-function-calling.html">Lesson 3 &mdash; Function Calling</a> &middot; <a href="README.md">README</a></p>
+
+</article>
+</body>
+</html>

@@ -1,0 +1,166 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 620" role="img" aria-labelledby="title desc">
+  <title id="title">Supabase RAG architecture: an ingestion path and a grounded chat path</title>
+  <desc id="desc">Top lane: SEC EDGAR filings go through Docling conversion, hierarchical chunking, Qwen text-embedding-v4, and into Supabase document chunks with full-text vectors. Bottom lane: a React SPA sends a Supabase token to FastAPI, which runs hybrid retrieval, a PydanticAI DeepSeek agent with three bounded tools, a grounding validator, atomic persistence, and a validated SSE stream back to the browser.</desc>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#3d3d56"/>
+    </marker>
+    <marker id="arrow-gold" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#b08a2e"/>
+    </marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#c1666b"/>
+    </marker>
+    <style>
+      .card { fill: #ffffff; stroke: #0f4c5c; stroke-width: 1.5; }
+      .card-store { fill: #eef6f7; stroke: #0f4c5c; stroke-width: 1.5; }
+      .card-warn { fill: #fdf6e8; stroke: #c1666b; stroke-width: 1.5; }
+      .card-gate { fill: #fdf8ec; stroke: #d4a843; stroke-width: 1.5; }
+      .lane { fill: #f7f7f4; stroke: #d9d9d2; stroke-width: 1; }
+      .title { font: 600 18px "Segoe UI", Helvetica, Arial, sans-serif; fill: #1a1a2e; }
+      .subtitle { font: 12px "Segoe UI", Helvetica, Arial, sans-serif; fill: #3d3d56; }
+      .lane-title { font: 600 10px "Segoe UI", Helvetica, Arial, sans-serif; fill: #6b6b80; letter-spacing: 0.12em; }
+      .stage { font: 600 13px "Segoe UI", Helvetica, Arial, sans-serif; fill: #1a1a2e; }
+      .detail { font: 10.5px "Segoe UI", Helvetica, Arial, sans-serif; fill: #3d3d56; }
+      .small { font: 9.5px "Segoe UI", Helvetica, Arial, sans-serif; fill: #6b6b80; }
+      .num { font: 600 11px "Segoe UI", Helvetica, Arial, sans-serif; fill: #ffffff; }
+      .edge { stroke: #3d3d56; stroke-width: 1.5; fill: none; marker-end: url(#arrow); }
+      .edge-gold { stroke: #b08a2e; stroke-width: 1.5; fill: none; stroke-dasharray: 6 5; marker-end: url(#arrow-gold); }
+      .edge-red { stroke: #c1666b; stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; marker-end: url(#arrow-red); }
+      .label { font: 9.5px "Segoe UI", Helvetica, Arial, sans-serif; fill: #6b6b80; }
+    </style>
+  </defs>
+
+  <rect width="960" height="620" fill="#fdfdfc"/>
+  <text x="40" y="36" class="title">Two paths, one source of truth</text>
+  <text x="40" y="56" class="subtitle">Ingestion prepares citable evidence once. Chat retrieves it, generates claims, validates them, and only then streams.</text>
+
+  <!-- ingestion lane -->
+  <rect x="28" y="76" width="904" height="126" rx="10" class="lane"/>
+  <text x="44" y="94" class="lane-title">INGESTION PATH — REPEATABLE, COST-CAPPED, IDEMPOTENT</text>
+
+  <rect x="44" y="108" width="150" height="70" rx="8" class="card"/>
+  <circle cx="60" cy="124" r="9" fill="#0f4c5c"/>
+  <text x="56" y="128" class="num">1</text>
+  <text x="76" y="128" class="stage">SEC EDGAR</text>
+  <text x="56" y="148" class="detail">25 10-Ks</text>
+  <text x="56" y="162" class="detail">5 companies × 2021–2025</text>
+
+  <rect x="224" y="108" width="140" height="70" rx="8" class="card"/>
+  <circle cx="240" cy="124" r="9" fill="#0f4c5c"/>
+  <text x="236" y="128" class="num">2</text>
+  <text x="256" y="128" class="stage">Docling</text>
+  <text x="236" y="148" class="detail">HTML → Markdown</text>
+  <text x="236" y="162" class="detail">sections kept</text>
+
+  <rect x="394" y="108" width="150" height="70" rx="8" class="card"/>
+  <circle cx="410" cy="124" r="9" fill="#0f4c5c"/>
+  <text x="406" y="128" class="num">3</text>
+  <text x="426" y="128" class="stage">Hybrid chunker</text>
+  <text x="406" y="148" class="detail">≤ 7,000 tokens</text>
+  <text x="406" y="162" class="detail">provenance metadata</text>
+
+  <rect x="574" y="108" width="150" height="70" rx="8" class="card"/>
+  <circle cx="590" cy="124" r="9" fill="#0f4c5c"/>
+  <text x="586" y="128" class="num">4</text>
+  <text x="606" y="128" class="stage">Qwen</text>
+  <text x="586" y="148" class="detail">text-embedding-v4</text>
+  <text x="586" y="162" class="detail">1,536 dimensions</text>
+
+  <rect x="754" y="108" width="162" height="70" rx="8" class="card-store"/>
+  <circle cx="770" cy="124" r="9" fill="#0f4c5c"/>
+  <text x="766" y="128" class="num">5</text>
+  <text x="786" y="128" class="stage">Supabase</text>
+  <text x="766" y="148" class="detail">document_chunks</text>
+  <text x="766" y="162" class="detail">vector + generated tsvector</text>
+
+  <line x1="194" y1="143" x2="221" y2="143" class="edge"/>
+  <line x1="364" y1="143" x2="391" y2="143" class="edge"/>
+  <line x1="544" y1="143" x2="571" y2="143" class="edge"/>
+  <line x1="724" y1="143" x2="751" y2="143" class="edge"/>
+
+  <!-- chat lane -->
+  <rect x="28" y="226" width="904" height="330" rx="10" class="lane"/>
+  <text x="44" y="244" class="lane-title">CHAT PATH — AUTHORIZE, RETRIEVE, GENERATE, VALIDATE, PERSIST, STREAM</text>
+
+  <rect x="44" y="258" width="150" height="80" rx="8" class="card"/>
+  <circle cx="60" cy="274" r="9" fill="#0f4c5c"/>
+  <text x="56" y="278" class="num">1</text>
+  <text x="76" y="278" class="stage">React SPA</text>
+  <text x="56" y="298" class="detail">Supabase session</text>
+  <text x="56" y="312" class="detail">AI SDK useChat</text>
+
+  <rect x="224" y="258" width="140" height="80" rx="8" class="card"/>
+  <circle cx="240" cy="274" r="9" fill="#0f4c5c"/>
+  <text x="236" y="278" class="num">2</text>
+  <text x="256" y="278" class="stage">FastAPI</text>
+  <text x="236" y="298" class="detail">verify JWT</text>
+  <text x="236" y="312" class="detail">check thread owner</text>
+
+  <rect x="394" y="258" width="150" height="80" rx="8" class="card"/>
+  <circle cx="410" cy="274" r="9" fill="#0f4c5c"/>
+  <text x="406" y="278" class="num">3</text>
+  <text x="426" y="278" class="stage">Hybrid retriever</text>
+  <text x="406" y="298" class="detail">pgvector + GIN FTS</text>
+  <text x="406" y="312" class="detail">RRF k=60 → top 10</text>
+
+  <rect x="574" y="258" width="150" height="80" rx="8" class="card"/>
+  <circle cx="590" cy="274" r="9" fill="#0f4c5c"/>
+  <text x="586" y="278" class="num">4</text>
+  <text x="606" y="278" class="stage">PydanticAI</text>
+  <text x="586" y="298" class="detail">DeepSeek + 3 tools</text>
+  <text x="586" y="312" class="detail">typed claims</text>
+
+  <rect x="754" y="258" width="162" height="80" rx="8" class="card-warn"/>
+  <circle cx="770" cy="274" r="9" fill="#c1666b"/>
+  <text x="766" y="278" class="num">5</text>
+  <text x="786" y="278" class="stage">Validator</text>
+  <text x="766" y="298" class="detail">citation membership</text>
+  <text x="766" y="312" class="detail">fail closed</text>
+
+  <line x1="194" y1="298" x2="221" y2="298" class="edge"/>
+  <line x1="364" y1="298" x2="391" y2="298" class="edge"/>
+  <line x1="544" y1="298" x2="571" y2="298" class="edge"/>
+  <line x1="724" y1="298" x2="751" y2="298" class="edge"/>
+
+  <!-- retrieval detail -->
+  <rect x="394" y="366" width="150" height="58" rx="8" class="card-gate"/>
+  <text x="406" y="384" class="stage">Two ranked lists</text>
+  <text x="406" y="400" class="detail">50 semantic</text>
+  <text x="406" y="414" class="detail">50 lexical (shared filters)</text>
+  <line x1="469" y1="338" x2="469" y2="363" class="edge-gold"/>
+
+  <!-- tool detail -->
+  <rect x="574" y="366" width="150" height="58" rx="8" class="card-gate"/>
+  <text x="586" y="384" class="stage">Bounded tools</text>
+  <text x="586" y="400" class="detail">search_filings</text>
+  <text x="586" y="414" class="detail">read_chunk · neighbors</text>
+  <line x1="649" y1="338" x2="649" y2="363" class="edge-gold"/>
+
+  <!-- persist + stream -->
+  <rect x="394" y="458" width="230" height="62" rx="8" class="card-store"/>
+  <circle cx="410" cy="474" r="9" fill="#0f4c5c"/>
+  <text x="406" y="478" class="num">6</text>
+  <text x="426" y="478" class="stage">Persist atomically</text>
+  <text x="426" y="496" class="detail">save_chat_turn RPC: user + assistant</text>
+  <text x="426" y="510" class="detail">+ citations, under RLS</text>
+  <path d="M 835 338 L 835 442 L 509 442 L 509 455" class="edge"/>
+
+  <rect x="660" y="458" width="256" height="62" rx="8" class="card"/>
+  <circle cx="676" cy="474" r="9" fill="#0f4c5c"/>
+  <text x="672" y="478" class="num">7</text>
+  <text x="692" y="478" class="stage">Stream validated answer</text>
+  <text x="692" y="496" class="detail">text deltas + citation parts</text>
+  <text x="692" y="510" class="detail">AI SDK SSE protocol</text>
+  <line x1="624" y1="489" x2="657" y2="489" class="edge"/>
+
+  <!-- back to browser -->
+  <path d="M 788 520 L 788 552 L 119 552 L 119 341" class="edge-gold"/>
+  <text x="132" y="566" class="label">validated text and citations arrive only after persistence</text>
+
+  <!-- refusal path: the validator fails closed; no answer is persisted or streamed -->
+
+  <!-- footer note -->
+  <text x="40" y="596" class="small"><tspan font-weight="600" fill="#0f4c5c">The rule:</tspan> the browser never holds a service-role key, the agent never writes SQL, and the stream never carries an unvalidated claim.</text>
+</svg>

@@ -1,0 +1,160 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 856" role="img" aria-labelledby="title desc">
+  <title id="title">The nine-stage AI coding workflow, with a gate after every stage</title>
+  <desc id="desc">Nine stages: read the codebase, update settings, write TODO.md, start the first slice, check the plan and implement, verify and refactor, next stage, final refactor, deploy. Each stage has a pass/fail gate on the right. Stages four through seven loop until every TODO item is done.</desc>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#3d3d56"/>
+    </marker>
+    <marker id="arrow-gold" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#b08a2e"/>
+    </marker>
+    <style>
+      .card { fill: #ffffff; stroke: #0f4c5c; stroke-width: 1.5; }
+      .card-loop { fill: #f0f7f8; stroke: #0f4c5c; stroke-width: 1.5; }
+      .card-end { fill: #fdf6e8; stroke: #c1666b; stroke-width: 1.5; }
+      .gate { fill: #fdf8ec; stroke: #d4a843; stroke-width: 1.5; }
+      .title { font: 600 18px "Segoe UI", Helvetica, Arial, sans-serif; fill: #1a1a2e; }
+      .subtitle { font: 12px "Segoe UI", Helvetica, Arial, sans-serif; fill: #3d3d56; }
+      .stage { font: 600 14px "Segoe UI", Helvetica, Arial, sans-serif; fill: #1a1a2e; }
+      .detail { font: 11px "Segoe UI", Helvetica, Arial, sans-serif; fill: #3d3d56; }
+      .gate-title { font: 600 9px "Segoe UI", Helvetica, Arial, sans-serif; fill: #8a6d1a; letter-spacing: 0.08em; }
+      .gate-text { font: 11px "Segoe UI", Helvetica, Arial, sans-serif; fill: #3d3d56; }
+      .num { font: 600 13px "Segoe UI", Helvetica, Arial, sans-serif; fill: #ffffff; }
+      .edge { stroke: #3d3d56; stroke-width: 1.6; fill: none; marker-end: url(#arrow); }
+      .edge-gold { stroke: #b08a2e; stroke-width: 1.5; fill: none; stroke-dasharray: 6 5; marker-end: url(#arrow-gold); }
+      .edge-label { font: 10px "Segoe UI", Helvetica, Arial, sans-serif; fill: #6b6b80; }
+      .legend { font: 10px "Segoe UI", Helvetica, Arial, sans-serif; fill: #6b6b80; }
+    </style>
+  </defs>
+
+  <rect width="960" height="856" fill="#fdfdfc"/>
+  <text x="40" y="38" class="title">The nine-stage build loop</text>
+  <text x="40" y="58" class="subtitle">A stage is not done until its gate passes. No gate, no next stage.</text>
+
+  <!-- Stage 1 -->
+  <rect x="110" y="88" width="490" height="56" rx="8" class="card"/>
+  <circle cx="134" cy="116" r="11" fill="#0f4c5c"/>
+  <text x="129" y="120" class="num">1</text>
+  <text x="156" y="112" class="stage">Use the downloaded project</text>
+  <text x="156" y="130" class="detail">0015-document-copilot: docs, backend, frontend, data</text>
+  <rect x="640" y="94" width="280" height="44" rx="8" class="gate"/>
+  <text x="654" y="110" class="gate-title">GATE</text>
+  <text x="654" y="126" class="gate-text">you can name the folders, data flow and first slice</text>
+  <line x1="600" y1="116" x2="637" y2="116" class="edge"/>
+
+  <!-- Stage 2 -->
+  <rect x="110" y="166" width="490" height="56" rx="8" class="card"/>
+  <circle cx="134" cy="194" r="11" fill="#0f4c5c"/>
+  <text x="129" y="198" class="num">2</text>
+  <text x="156" y="190" class="stage">Update the project content</text>
+  <text x="156" y="208" class="detail">backend, frontend, data, docs + root rules/skills</text>
+  <rect x="640" y="172" width="280" height="44" rx="8" class="gate"/>
+  <text x="654" y="188" class="gate-title">GATE</text>
+  <text x="654" y="204" class="gate-text">brief, commands and no-touch list are current</text>
+  <line x1="600" y1="194" x2="637" y2="194" class="edge"/>
+
+  <!-- Stage 3 -->
+  <rect x="110" y="244" width="490" height="56" rx="8" class="card"/>
+  <circle cx="134" cy="272" r="11" fill="#0f4c5c"/>
+  <text x="129" y="276" class="num">3</text>
+  <text x="156" y="268" class="stage">Write TODO.md</text>
+  <text x="156" y="286" class="detail">ordered stages, each with an acceptance check</text>
+  <rect x="640" y="250" width="280" height="44" rx="8" class="gate"/>
+  <text x="654" y="266" class="gate-title">GATE</text>
+  <text x="654" y="282" class="gate-text">ordered list, every item testable and blocking-aware</text>
+  <line x1="600" y1="272" x2="637" y2="272" class="edge"/>
+
+  <!-- Stage 4 -->
+  <rect x="110" y="322" width="490" height="56" rx="8" class="card-loop"/>
+  <circle cx="134" cy="350" r="11" fill="#0f4c5c"/>
+  <text x="129" y="354" class="num">4</text>
+  <text x="156" y="346" class="stage">Start the first stage</text>
+  <text x="156" y="364" class="detail">the smallest vertical slice that runs</text>
+  <rect x="640" y="328" width="280" height="44" rx="8" class="gate"/>
+  <text x="654" y="344" class="gate-title">GATE</text>
+  <text x="654" y="360" class="gate-text">runs locally and has one test that proves the slice</text>
+  <line x1="600" y1="350" x2="637" y2="350" class="edge"/>
+
+  <!-- Stage 5 -->
+  <rect x="110" y="400" width="490" height="56" rx="8" class="card-loop"/>
+  <circle cx="134" cy="428" r="11" fill="#0f4c5c"/>
+  <text x="129" y="432" class="num">5</text>
+  <text x="156" y="424" class="stage">Check the plan, implement</text>
+  <text x="156" y="442" class="detail">restate files/interfaces/tests, then red-green-refactor</text>
+  <rect x="640" y="406" width="280" height="44" rx="8" class="gate"/>
+  <text x="654" y="422" class="gate-title">GATE</text>
+  <text x="654" y="438" class="gate-text">tests pass and the diff matches the restated plan</text>
+  <line x1="600" y1="428" x2="637" y2="428" class="edge"/>
+
+  <!-- Stage 6 -->
+  <rect x="110" y="478" width="490" height="56" rx="8" class="card-loop"/>
+  <circle cx="134" cy="506" r="11" fill="#0f4c5c"/>
+  <text x="129" y="510" class="num">6</text>
+  <text x="156" y="502" class="stage">Verify and refactor</text>
+  <text x="156" y="520" class="detail">tests, types, lint, run, code review, then refactor</text>
+  <rect x="640" y="484" width="280" height="44" rx="8" class="gate"/>
+  <text x="654" y="500" class="gate-title">GATE</text>
+  <text x="654" y="516" class="gate-text">tests, types, lint, run and review all pass</text>
+  <line x1="600" y1="506" x2="637" y2="506" class="edge"/>
+
+  <!-- Stage 7 -->
+  <rect x="110" y="556" width="490" height="56" rx="8" class="card-loop"/>
+  <circle cx="134" cy="584" r="11" fill="#0f4c5c"/>
+  <text x="129" y="588" class="num">7</text>
+  <text x="156" y="580" class="stage">Next stage</text>
+  <text x="156" y="598" class="detail">mark done, update TODO.md, repeat stages 4–6</text>
+  <rect x="640" y="562" width="280" height="44" rx="8" class="gate"/>
+  <text x="654" y="578" class="gate-title">GATE</text>
+  <text x="654" y="594" class="gate-text">every TODO item is done and verified</text>
+  <line x1="600" y1="584" x2="637" y2="584" class="edge"/>
+
+  <!-- Stage 8 -->
+  <rect x="110" y="634" width="490" height="56" rx="8" class="card-end"/>
+  <circle cx="134" cy="662" r="11" fill="#c1666b"/>
+  <text x="129" y="666" class="num">8</text>
+  <text x="156" y="658" class="stage">Final refactor</text>
+  <text x="156" y="676" class="detail">architecture pass, dead code, docs, ADRs</text>
+  <rect x="640" y="640" width="280" height="44" rx="8" class="gate"/>
+  <text x="654" y="656" class="gate-title">GATE</text>
+  <text x="654" y="672" class="gate-text">a new developer can run it from the README</text>
+  <line x1="600" y1="662" x2="637" y2="662" class="edge"/>
+
+  <!-- Stage 9 -->
+  <rect x="110" y="712" width="490" height="56" rx="8" class="card-end"/>
+  <circle cx="134" cy="740" r="11" fill="#c1666b"/>
+  <text x="129" y="744" class="num">9</text>
+  <text x="156" y="736" class="stage">Deploy</text>
+  <text x="156" y="754" class="detail">secrets, migrations, CI, smoke test, rollback plan</text>
+  <rect x="640" y="718" width="280" height="44" rx="8" class="gate"/>
+  <text x="654" y="734" class="gate-title">GATE</text>
+  <text x="654" y="750" class="gate-text">the deployed app answers the acceptance questions</text>
+  <line x1="600" y1="740" x2="637" y2="740" class="edge"/>
+
+  <!-- down arrows -->
+  <line x1="355" y1="144" x2="355" y2="163" class="edge"/>
+  <line x1="355" y1="222" x2="355" y2="241" class="edge"/>
+  <line x1="355" y1="300" x2="355" y2="319" class="edge"/>
+  <line x1="355" y1="378" x2="355" y2="397" class="edge"/>
+  <line x1="355" y1="456" x2="355" y2="475" class="edge"/>
+  <line x1="355" y1="534" x2="355" y2="553" class="edge"/>
+  <line x1="355" y1="612" x2="355" y2="631" class="edge"/>
+  <text x="365" y="627" class="edge-label">all items done</text>
+  <line x1="355" y1="690" x2="355" y2="709" class="edge"/>
+
+  <!-- loop 7 -> 4 -->
+  <path d="M 110 584 L 72 584 L 72 350 L 107 350" class="edge-gold"/>
+  <text x="62" y="570" class="edge-label" transform="rotate(-90 62 570)">repeat until TODO.md is empty</text>
+
+  <!-- legend -->
+  <line x1="40" y1="800" x2="78" y2="800" class="edge"/>
+  <text x="86" y="804" class="legend">proceed only when the gate passes</text>
+  <line x1="290" y1="800" x2="328" y2="800" class="edge-gold"/>
+  <text x="336" y="804" class="legend">loop while TODO has work</text>
+  <text x="640" y="804" class="legend">A gate is a check, not a vibe.</text>
+
+  <!-- model tiers -->
+  <text x="40" y="832" class="legend"><tspan font-weight="600" fill="#0f4c5c">Best model:</tspan> stages 1-3 + the stage 8 architecture pass</text>
+  <text x="420" y="832" class="legend"><tspan font-weight="600" fill="#b08a2e">Fast model:</tspan> stages 4-7 + deploy</text>
+  <text x="640" y="832" class="legend">Think with the best. Type with a cheap one.</text>
+</svg>

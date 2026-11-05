@@ -1,0 +1,13 @@
+[project]
+name = "0011-langgraph-advanced"
+version = "0.1.0"
+description = "Lesson 11 lab: parallel fan-out and fan-in with LangGraph + DeepSeek"
+requires-python = ">=3.11"
+dependencies = [
+    "langchain>=1.4,<2",
+    "langchain-deepseek>=1.1,<2",
+    "langgraph>=1.0,<2",
+    "pydantic>=2.9,<3",
+    "python-dotenv>=1.1,<2",
+    "requests>=2.32,<3",
+]

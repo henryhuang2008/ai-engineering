@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 14 — Ollama + LlamaIndex: A Local RAG Agent, No API Key</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<article class="page">
+
+<p class="meta">Lesson 14 of the AI Engineering course · ~45 min · Prereq: <a href="0007-rag-service.html">Lesson 7</a> + <a href="0012-python-libraries-for-ai.html">Lesson 12</a> · <a href="../reference/skill-map.html">Skill Map →</a></p>
+
+<h1>Ollama + LlamaIndex: A Local RAG Agent, No API Key</h1>
+
+<p class="lede">The cloud is a dependency: a key, a bill, a rate limit, and a network. A local model is a file and a process. This lesson installs Ollama, uses Qwen3 4B Instruct as a small non-thinking model, and builds the same RAG shape from lesson 7 with <strong>LlamaIndex</strong> — embeddings, vector store, chat, and sources all on your machine.</p>
+
+<div class="callout win">
+  <span class="label">Your win this lesson</span>
+  You'll install and verify Ollama, pull <code>qwen3:4b-instruct</code> plus a 274 MB embedding model, ingest 20 reviews into a local Chroma index with LlamaIndex, and ask grounded questions with source titles. You'll also know which model to pick for 8, 16 or 32 GB of RAM, and when local is the wrong trade.
+</div>
+
+<h2>Part 1 — What Ollama actually is</h2>
+
+<p>Ollama is not a model. It is a local server and model manager: it downloads quantized weights, loads them into RAM or VRAM, exposes an HTTP API on <code>127.0.0.1:11434</code>, and unloads a model after an idle period. The CLI is a client for that server.</p>
+
+<table>
+  <thead><tr><th>piece</th><th>what it does</th></tr></thead>
+  <tbody>
+    <tr><td><code>ollama pull</code></td><td>downloads a model tag into the local store</td></tr>
+    <tr><td><code>ollama run</code></td><td>pulls if missing, then starts a chat in the terminal</td></tr>
+    <tr><td><code>ollama list</code> / <code>ps</code></td><td>what is on disk / what is loaded in memory</td></tr>
+    <tr><td><code>ollama serve</code></td><td>starts the API server (the desktop app does this for you)</td></tr>
+    <tr><td><code>POST /api/chat</code>, <code>/api/embed</code></td><td>the endpoints LlamaIndex uses under the hood</td></tr>
+  </tbody>
+</table>
+
+<p>It is the easiest local runtime, not the fastest at scale. vLLM wins for batched GPU serving, llama.cpp is the engine underneath many tools, and a cloud API still wins on quality. For a laptop RAG prototype, Ollama is the shortest path from a model name to a working endpoint.</p>
+
+<h2>Part 2 — Install and verify</h2>
+
+<p><strong>Windows</strong> (PowerShell):</p>
+
+<pre><code>winget install Ollama.Ollama
+# or download the installer from https://ollama.com/download
+ollama --version
+ollama list</code></pre>
+
+<p><strong>macOS:</strong> download the app from ollama.com/download (or <code>brew install ollama</code>). The app runs the server in the background.</p>
+
+<p><strong>Linux:</strong></p>
+
+<pre><code>curl -fsSL https://ollama.com/install.sh | sh
+sudo systemctl status ollama</code></pre>
+
+<p>The server listens on <code>http://localhost:11434</code>. Check it directly:</p>
+
+<pre><code>curl http://localhost:11434/api/tags</code></pre>
+
+<p><strong>Do not expose that port.</strong> Ollama has no authentication; <code>OLLAMA_HOST=0.0.0.0</code> publishes an open model server to your network. Keep it on loopback, or put an authenticated proxy in front of it.</p>
+
+<h2>Part 3 — Pick a small model that fits your machine</h2>
+
+<p>The original lab used <code>llama3.2</code> (September 2024). It still runs, but the small-model class moved. For this RAG lab the default is <strong><code>qwen3:4b-instruct</code></strong>: the non-thinking Qwen3 4B Instruct variant (~2.5 GB, 256K context). It answers directly instead of emitting a reasoning trace first, which is what a grounded Q&amp;A pipeline wants.</p>
+
+<table>
+  <thead><tr><th>chat model</th><th>download</th><th>pick it when</th></tr></thead>
+  <tbody>
+    <tr><td><strong><code>qwen3:4b-instruct</code></strong></td><td>~2.5 GB</td><td>default here: non-thinking, fast, 256K context, fits an 8 GB machine</td></tr>
+    <tr><td><strong><code>qwen3.5:4b</code></strong></td><td>~3.3–4.0 GB</td><td>newer Qwen, vision + tools; the upgrade on a 16 GB machine</td></tr>
+    <tr><td><strong><code>qwen3.5:2b</code></strong></td><td>~2.7–3.1 GB</td><td>8 GB laptop; a little weaker than 4B</td></tr>
+    <tr><td><strong><code>qwen3.5:0.8b</code></strong></td><td>~1.2–1.3 GB</td><td>low RAM or a smoke test; shallow answers</td></tr>
+    <tr><td><code>qwen3:4b</code></td><td>~2.5 GB</td><td>Qwen3 4B with thinking mode; slower for RAG</td></tr>
+    <tr><td><code>phi4-mini</code></td><td>~2.5 GB</td><td>reasoning and maths over chat; text only</td></tr>
+    <tr><td><code>llama3.2:3b</code></td><td>~2.0 GB</td><td>the original lab's model; fast and familiar, older</td></tr>
+  </tbody>
+</table>
+
+<p>Embedding models are a separate pick, and size matters less because they are small:</p>
+
+<table>
+  <thead><tr><th>embedding model</th><th>download</th><th>dims</th><th>note</th></tr></thead>
+  <tbody>
+    <tr><td><strong><code>nomic-embed-text</code></strong></td><td>~274 MB</td><td>768</td><td>default; CPU-friendly, 8K native context</td></tr>
+    <tr><td><code>qwen3-embedding:0.6b</code></td><td>~639 MB</td><td>1024</td><td>newer, 32K context, multilingual — the upgrade</td></tr>
+    <tr><td><code>embeddinggemma</code></td><td>~622 MB</td><td>768</td><td>Google 300M; expects task prefixes</td></tr>
+    <tr><td><code>mxbai-embed-large</code></td><td>~670 MB</td><td>1024</td><td>the original lab's embedder; 512-token chunks</td></tr>
+    <tr><td><code>bge-m3</code></td><td>~1.2 GB</td><td>1024</td><td>multilingual, no prefix required</td></tr>
+  </tbody>
+</table>
+
+<pre><code>ollama pull qwen3:4b-instruct
+ollama pull nomic-embed-text
+ollama list
+ollama show qwen3:4b-instruct   # context, parameters, quantization</code></pre>
+
+<p><strong>How to choose by RAM:</strong> 8 GB → <code>qwen3:4b-instruct</code> (2.5 GB) or <code>qwen3.5:2b</code>; 16 GB → <code>qwen3.5:4b</code> for the newer model; 32 GB → 4b comfortably, 9b if you need more quality. Quantization (usually Q4) is why a 4B model fits in 2.5–4 GB; <code>ollama show</code> tells you what you actually downloaded.</p>
+
+<p><strong>Do not judge by the publisher's benchmark.</strong> Pull two candidates and run the same ten questions from your corpus. Latency and groundedness on <em>your</em> data decide, not a leaderboard.</p>
+
+<h2>Part 4 — The local RAG pipeline</h2>
+
+<p>This is lesson 7's shape with the cloud swapped out. Ollama serves both models; <strong>LlamaIndex</strong> owns the documents, the index, and the retrieve-then-synthesize query engine.</p>
+
+<pre><code>data/reviews.csv
+      │  ingest.py
+      ▼
+LlamaIndex Documents ── OllamaEmbedding(nomic-embed-text) ──▶ Chroma(chroma_db/)
+                                                                 │
+question ── VectorStoreIndex.as_query_engine(k=4) ───────────────┘
+      │
+      ▼
+Ollama(qwen3:4b-instruct) ──▶ answer + source_nodes</code></pre>
+
+<p>The ingestion side:</p>
+
+<pre><code>documents = [
+    Document(
+        text=f"{row['Title']}. {row['Review']}",
+        metadata={"title": row["Title"], "rating": int(row["Rating"]), "date": str(row["Date"])},
+    )
+    for _, row in frame.iterrows()
+]
+
+collection = chromadb.PersistentClient(path="chroma_db").get_or_create_collection("nimbus_reviews")
+vector_store = ChromaVectorStore(chroma_collection=collection)
+storage = StorageContext.from_defaults(vector_store=vector_store)
+VectorStoreIndex.from_documents(documents, storage_context=storage)</code></pre>
+
+<p>The query side:</p>
+
+<pre><code>Settings.embed_model = OllamaEmbedding(model_name="nomic-embed-text")
+Settings.llm = Ollama(model="qwen3:4b-instruct", temperature=0)
+
+index = VectorStoreIndex.from_vector_store(vector_store)
+engine = index.as_query_engine(similarity_top_k=4)
+response = engine.query(question)
+print(response.response)
+for node in response.source_nodes:
+    print(node.metadata["title"])</code></pre>
+
+<p><code>Settings.embed_model</code> and <code>Settings.llm</code> are process-wide: configure them once at startup. The query engine is LlamaIndex's retrieve-then-synthesize pipeline; <code>response.source_nodes</code> is the evidence list you print.</p>
+
+<p><strong>The one rule that bites everyone:</strong> use the same embedding model for indexing and querying. Vectors from different models do not share a space; changing <code>OLLAMA_EMBED_MODEL</code> means deleting the store and re-ingesting. The chat model can change freely.</p>
+
+<h2>Part 5 — Run it</h2>
+
+<pre><code>cd assets\examples\0014-ollama-local-rag
+uv sync
+Copy-Item .env.example .env         # first time only
+
+uv run python ingest.py
+uv run python ask.py "Is the gluten-free pizza good?"</code></pre>
+
+<p><code>ingest.py</code> embeds all 20 reviews once. <code>ask.py</code> builds a LlamaIndex query engine over the index, retrieves four reviews, and calls the local model. Both scripts preflight the server and print the exact <code>ollama pull</code> command if a model is missing, so the failure mode is a fix, not a traceback.</p>
+
+<p>Expected shape of the answer:</p>
+
+<pre><code>querying 4 local chunks with qwen3:4b-instruct ...
+
+Yes - one reviewer calls the gluten-free base "the best I have had locally"
+and notes that it does not fall apart and is cooked on a separate tray
+[Great gluten-free option].
+
+sources:
+  [Great gluten-free option] rating=5 2026-09-14
+  [Staff know the menu] rating=5 2026-10-14
+  [Great lunch special] rating=5 2026-10-23
+  [Best crust in town] rating=5 2026-09-02</code></pre>
+
+<p>The source list is the verification surface. A grounded answer cites reviews you can open; an ungrounded one is a fluent guess. If the reviews do not contain the answer, the prompt tells the model to name the gap instead of inventing one.</p>
+
+<h2>Part 6 — Local vs cloud is a trade, not a religion</h2>
+
+<table>
+  <thead><tr><th>constraint</th><th>local wins</th><th>cloud wins</th></tr></thead>
+  <tbody>
+    <tr><td>privacy</td><td>data never leaves the machine</td><td>only with a contract and a DPA</td></tr>
+    <tr><td>offline</td><td>works on a plane or an air-gapped box</td><td>needs a network</td></tr>
+    <tr><td>cost at low volume</td><td>one download, no per-token bill</td><td>pay only for what you use</td></tr>
+    <tr><td>quality</td><td>4B is not a frontier model</td><td>frontier quality per token</td></tr>
+    <tr><td>latency</td><td>no network hop, but CPU/GPU bound</td><td>fast, with a network hop</td></tr>
+    <tr><td>operations</td><td>you own the model files and the host</td><td>the provider owns uptime</td></tr>
+  </tbody>
+</table>
+
+<p>Hybrids are common and sensible: local embeddings plus a cloud chat model (documents stay local, answers get better), or a local model for classification/routing and a cloud model for the final draft. The interface is the same LangChain shape; only the model handle changes.</p>
+
+<h2>Part 7 — Operational details that save an afternoon</h2>
+
+<ul>
+  <li><strong>Model load is the first latency.</strong> The first call loads weights; later calls reuse them. <code>ollama ps</code> shows the loaded model; <code>OLLAMA_KEEP_ALIVE</code> controls how long it stays.</li>
+  <li><strong>Context costs memory.</strong> <code>qwen3:4b-instruct</code> advertises 262K, but asking for all of it allocates a KV cache of tens of GB; LlamaIndex defaults to the model's full context, and <code>llama-server</code> dies with <code>out-of-memory ... failed to allocate buffer for kv cache</code>. <code>common.py</code> sets <code>context_window=4096</code> (override with <code>OLLAMA_NUM_CTX</code>); 4096 is plenty for a handful of reviews.</li>
+  <li><strong>Disk adds up.</strong> Each tag is a full model; <code>ollama rm</code> is the cleanup. A 4B model plus an embedding model is roughly 3 GB.</li>
+  <li><strong>CPU is usable; GPU is better.</strong> 15–30 tokens/second on a modern CPU is fine for one user. Concurrency is not Ollama's strength — batch jobs belong on vLLM or a queue.</li>
+  <li><strong><code>Settings</code> is process-wide.</strong> LlamaIndex reads <code>Settings.llm</code> and <code>Settings.embed_model</code> at call time; configure them once at startup, not inside a request handler that changes them per call.</li>
+  <li><strong>Version the model, not just the name.</strong> A tag can move. Pin a digest from <code>ollama show</code> in production notes.</li>
+</ul>
+
+<h2>Check yourself</h2>
+
+<div class="quiz">
+<script type="application/json">
+{
+  "questions": [
+    {
+      "q": "What does ollama pull do?",
+      "options": [
+        "Starts a chat session in the terminal",
+        "Downloads a model tag into the local store",
+        "Compiles the model for your GPU",
+        "Publishes the model on port 11434"
+      ],
+      "correct": 1,
+      "explain": "pull only fetches the weights. ollama run pulls if needed and then chats; ollama serve exposes the API; quantization is chosen by the published tag."
+    },
+    {
+      "q": "Which endpoint does the local Ollama server expose by default?",
+      "options": [
+        "http://localhost:8000",
+        "http://localhost:11434",
+        "http://localhost:3000",
+        "http://localhost:5432"
+      ],
+      "correct": 1,
+      "explain": "The Ollama API listens on 11434. 8000 is a common FastAPI port, 3000 a frontend, 5432 Postgres."
+    },
+    {
+      "q": "You change the embedding model. What must you do to the vector store?",
+      "options": [
+        "Nothing - the vectors are compatible",
+        "Only change the chat model as well",
+        "Delete and re-ingest the documents",
+        "Increase k to compensate"
+      ],
+      "correct": 2,
+      "explain": "Different embedding models produce vectors in different spaces, so old and new vectors are not comparable. Rebuild the index with the new model."
+    },
+    {
+      "q": "Which chat model is the default for this lab on an 8 GB laptop?",
+      "options": [
+        "qwen3.5:9b",
+        "qwen3:4b-instruct",
+        "llama3.2:70b",
+        "qwen3.5:122b"
+      ],
+      "correct": 1,
+      "explain": "qwen3:4b-instruct is ~2.5 GB and non-thinking, so it leaves room for the OS and answers directly. The 9b/70b/122b tags need far more memory."
+    },
+    {
+      "q": "What is the main trade when moving from a cloud API to a local model?",
+      "options": [
+        "You lose the ability to use RAG",
+        "You exchange quality and speed for privacy and control",
+        "You must retrain the model on your data",
+        "You can no longer stream tokens"
+      ],
+      "correct": 1,
+      "explain": "A 4B model is weaker and often slower than a frontier API, but the data stays local and there is no per-token bill. RAG and streaming still work."
+    },
+    {
+      "q": "What does index.as_query_engine(similarity_top_k=4) return in LlamaIndex?",
+      "options": [
+        "A retrieve-then-synthesize pipeline with sources",
+        "A vector database with four collections",
+        "A prompt template for the chat model",
+        "A quantized model file for Ollama"
+      ],
+      "correct": 0,
+      "explain": "The query engine retrieves four nodes, sends them to the configured LLM, and returns a Response whose response text and source_nodes you can inspect."
+    },
+    {
+      "q": "How do you check whether a local RAG answer is grounded?",
+      "options": [
+        "Compare the token count to the prompt",
+        "Trust the model because it runs locally",
+        "Read the cited source titles and reviews",
+        "Run the same question twice"
+      ],
+      "correct": 2,
+      "explain": "The source list is the evidence. Local does not mean correct; a smaller model can still invent a claim that none of the retrieved reviews supports."
+    }
+  ]
+}
+</script>
+</div>
+
+<h2>Primary sources for this lesson</h2>
+<p><a href="https://ollama.com/">Ollama</a> and its <a href="https://github.com/ollama/ollama">GitHub repository</a> for installation, the API, and model management. The model pages carry the actual sizes and context windows: <a href="https://ollama.com/library/qwen3">Qwen3</a> (including <code>4b-instruct</code>), <a href="https://ollama.com/library/qwen3.5">Qwen3.5</a>, <a href="https://ollama.com/library/phi4-mini">Phi-4-mini</a>, <a href="https://ollama.com/library/llama3.2">Llama 3.2</a>. Embeddings: <a href="https://ollama.com/library/nomic-embed-text">nomic-embed-text</a>, <a href="https://ollama.com/library/qwen3-embedding">qwen3-embedding</a>, <a href="https://ollama.com/library/embeddinggemma">embeddinggemma</a>.</p>
+<p>On the framework side: <a href="https://docs.llamaindex.ai/">LlamaIndex documentation</a>, the <a href="https://docs.llamaindex.ai/en/stable/examples/llm/ollama/">Ollama LLM</a> and <a href="https://docs.llamaindex.ai/en/stable/examples/embeddings/ollama_embedding/">Ollama embeddings</a> examples, and the <a href="https://docs.llamaindex.ai/en/stable/examples/vector_stores/ChromaIndexDemo/">Chroma vector store</a> page. Lesson 7's <a href="0007-rag-service.html">LanceDB pipeline</a> is the upgrade when you want built-in BM25 and hybrid search.</p>
+
+<h2>What's next</h2>
+<p>You now have the same RAG contract at both ends of the cost curve: a cloud model with a key, and a local model with a file. <a href="0015-ai-coding.html">Lesson 15</a> changes layer: the coding agents, model families, skills and nine-stage workflow that take a codebase from brief to deploy. <a href="0016-kubernetes-gitops.html">Lesson 16</a> then takes that codebase to the cluster, and <a href="0017-project-supabase-rag-ai-coding.html">Lesson 17</a> builds the Supabase RAG capstone with that workflow.</p>
+
+<div class="footer-nav">
+  <div class="ask"><strong>Local answer feels worse than the cloud one?</strong> First check retrieval: print the four reviews that were sent. If they are the right ones, the model is the limit — try a larger tag or simplify the question. If they are wrong, no chat model can fix it; fix the embedding or the chunking.</div>
+  <div class="links">
+    <a href="0013-pydantic.html">← Lesson 13</a>
+    <a href="../reference/skill-map.html">Skill Map &amp; Glossary</a>
+    <a href="../assets/examples/0014-ollama-local-rag/index.html">Example page</a>
+  </div>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</article>
+</body>
+</html>

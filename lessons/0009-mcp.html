@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 9 — MCP: Write the Tool Once, Call It From Any Client</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<article class="page">
+
+<p class="meta">Lesson 9 of the AI Engineering course · ~45 min · Prereq: <a href="0003-function-calling.html">Lesson 3</a> + <a href="0008-rag-appendix.html">Lesson 8</a> · <a href="../reference/skill-map.html">Skill Map →</a></p>
+
+<h1>MCP: Write the Tool Once, Call It From Any Client</h1>
+
+<p class="lede">You already know function calling: describe a tool, let the model choose it, run it in your process. MCP does not add a new capability — it moves the tool out of your process and gives every client the same address. This lesson builds a server, calls it with no model at all, then lets DeepSeek drive it.</p>
+
+<div class="callout win">
+  <span class="label">Your win this lesson</span>
+  You'll ship an MCP server exposing a tool, a resource and a prompt; call it from a raw client in nine lines; and connect the same server to DeepSeek without writing a provider-specific adapter.
+</div>
+
+<h2>What MCP is, without the hype</h2>
+
+<p>MCP is a <strong>standard</strong>, not a model feature. It defines how a host (Claude Desktop, an IDE, your Python app) talks to servers that expose capabilities. The client owns the connection; the server owns the data and the code. One client session talks to one server, and a host can hold several sessions.</p>
+
+<table>
+  <thead><tr><th>primitive</th><th>who decides</th><th>example in this lab</th></tr></thead>
+  <tbody>
+    <tr><td><strong>tool</strong></td><td>the model</td><td><code>search_kb(query)</code>, <code>add(a, b)</code></td></tr>
+    <tr><td><strong>resource</strong></td><td>the application</td><td><code>kb://nimbusdesk/all</code> — the full knowledge base</td></tr>
+    <tr><td><strong>prompt</strong></td><td>the user</td><td><code>answer_from_kb(question)</code> — a reusable template</td></tr>
+  </tbody>
+</table>
+
+<p>That split matters. A tool is offered to the model and may be called without a human. A resource is addressed by the application, like a file. A prompt is chosen by a person, like a slash command. Most tutorials only show tools; the other two are how a server becomes a product surface instead of a function list.</p>
+
+<p>Three transports, one rule: <strong>stdio for local, HTTP for remote</strong>.</p>
+
+<table>
+  <thead><tr><th>transport</th><th>how it connects</th><th>when</th></tr></thead>
+  <tbody>
+    <tr><td><code>stdio</code></td><td>client launches the server as a subprocess; stdin/stdout carry the protocol</td><td>local tools, editors, this lab</td></tr>
+    <tr><td><code>SSE</code></td><td>HTTP POST up, Server-Sent Events down</td><td>older HTTP servers; compatibility</td></tr>
+    <tr><td><code>Streamable HTTP</code></td><td>one <code>/mcp</code> endpoint, bidirectional streaming</td><td>new remote integrations</td></tr>
+  </tbody>
+</table>
+
+<h2>Part 1 — the server</h2>
+
+<p>FastMCP turns type hints into the tool's JSON schema and the docstring into its description. There is no registration boilerplate: the decorator is the schema.</p>
+
+<pre><code>from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP(
+    "NimbusDesk",
+    host="127.0.0.1",
+    port=8050,
+    log_level="ERROR",     # stderr stays quiet while the client prints
+)
+
+@mcp.tool()
+def add(a: int, b: int) -&gt; int:
+    """Add two numbers together."""
+    return a + b
+
+@mcp.tool()
+def search_kb(query: str, limit: int = 3) -&gt; str:
+    """Search the NimbusDesk knowledge base and return matching entries."""
+    ...
+
+if __name__ == "__main__":
+    mcp.run(transport="stdio")</code></pre>
+
+<p><strong>Stdout is the protocol.</strong> A stray <code>print()</code> in a tool does not print a message — it corrupts the JSON-RPC stream and the client disconnects. Logs go to stderr. That is the single most common way a working server "mysteriously" fails once it is launched by a client instead of by hand.</p>
+
+<p>The same file exposes a resource and a prompt, which cost three lines each:</p>
+
+<pre><code>@mcp.resource("kb://nimbusdesk/all")
+def whole_kb() -&gt; str:
+    """The entire NimbusDesk knowledge base as JSON."""
+    return KB_PATH.read_text(encoding="utf-8")
+
+@mcp.prompt()
+def answer_from_kb(question: str) -&gt; str:
+    """Template for answering a product question from the knowledge base."""
+    return f"Answer using only the knowledge base.\n\nQuestion: {question}"</code></pre>
+
+<p><strong>Inspector, optional.</strong> <code>uv run mcp dev server.py</code> opens a browser UI for listing and calling the tools. It needs Node.js and downloads <code>@modelcontextprotocol/inspector</code> through npx on first run, which can take minutes; open the exact URL printed in the terminal, including <code>?MCP_INSPECTOR_API_TOKEN=…</code> — bare <code>http://127.0.0.1:6274</code> shows an empty page. <code>mcp dev</code> always wires the Inspector to a <strong>stdio</strong> server, so its UI has no transport picker; to inspect SSE, start <code>server.py sse</code> and run <code>npx --yes @modelcontextprotocol/inspector --web --transport sse --server-url http://127.0.0.1:8050/sse</code>. The Python clients in this lab do not need it.</p>
+
+<h2>Part 2 — the client with no LLM in the loop</h2>
+
+<p>Before adding a model, prove the protocol works. The client launches the server, initializes a session, lists capabilities and calls one tool:</p>
+
+<p><strong>No FastMCP import in this file.</strong> FastMCP is the <em>server</em> class — the client uses the SDK transport (<code>stdio_client</code>, <code>sse_client</code> or <code>streamablehttp_client</code>) and then a <code>ClientSession</code>. The standalone <code>fastmcp</code> package is a different, higher-level client; this lab keeps the protocol visible instead of hiding it.</p>
+
+<pre><code>params = StdioServerParameters(command=sys.executable, args=[str(SERVER)])
+
+async with stdio_client(params) as (read, write):
+    async with ClientSession(read, write) as session:
+        await session.initialize()
+
+        tools = await session.list_tools()
+        result = await session.call_tool("add", arguments={"a": 2, "b": 3})
+        print(result.content[0].text)</code></pre>
+
+<p>Real output from <code>uv run python client_stdio.py</code>:</p>
+
+<pre><code>tools (2):
+  add(a, b)
+  search_kb(query, limit)
+
+resources (1):
+  kb://nimbusdesk/all - whole_kb
+
+prompts (1):
+  answer_from_kb
+
+call add(a=2, b=3)
+5
+
+call search_kb(query='refund window')
+Q: How long is the refund window?
+A: A full refund is available within 14 days of the initial charge. After day
+14, annual plans are refunded pro rata minus the months already used.</code></pre>
+
+<p>Two things are worth noticing. The client did not start a server in another terminal — the subprocess is part of the connection. And <code>search_kb</code> returned the right entry without any embedding model: this server does keyword scoring over eight Q&amp;A pairs, which is enough to demonstrate the protocol before lesson 7's retrieval stack gets involved.</p>
+
+<h3>The same server, two HTTP doors</h3>
+
+<p>Stdio is one transport, not the protocol. The server already accepts a transport argument, and the client changes only the connection helper:</p>
+
+<pre><code># terminal 1 - pick one
+uv run python server.py sse
+uv run python server.py streamable-http
+
+# terminal 2
+uv run python client-sse.py               # http://127.0.0.1:8050/sse
+uv run python client-streamable-http.py   # http://127.0.0.1:8050/mcp</code></pre>
+
+<p>Terminal 1 confirms the bind before it waits — FastMCP runs on uvicorn, but the lab's <code>log_level="ERROR"</code> hides uvicorn's banner, so the server prints its own line:</p>
+
+<pre><code>serving over sse at http://127.0.0.1:8050/sse
+press Ctrl+C to stop</code></pre>
+
+<pre><code>from mcp.client.sse import sse_client
+from mcp.client.streamable_http import streamablehttp_client
+
+async with sse_client("http://127.0.0.1:8050/sse") as (read, write):
+    ...
+
+async with streamablehttp_client("http://127.0.0.1:8050/mcp") as (read, write, _):
+    ...   # the third value is a session-id getter</code></pre>
+
+<p>Both print the same tools and the same <code>2 + 3 = 5</code>; only the <code>connected to …</code> line differs. Keep SSE for servers that still speak it, and use Streamable HTTP for anything new. Both bind <code>127.0.0.1:8050</code>, so stop one server before starting the other.</p>
+
+<p>A <code>502</code> from <code>127.0.0.1</code> usually means a system proxy is intercepting loopback, or something else owns the port. The clients add <code>localhost</code> to <code>NO_PROXY</code> before connecting, so the proxy case is handled; a <code>ConnectError</code> instead means the server simply is not running.</p>
+
+<h2>Part 3 — DeepSeek drives the tools</h2>
+
+<p>This is where the protocol pays off. MCP already publishes a JSON schema for every tool (<code>inputSchema</code>), which is the exact shape a chat model expects for function calling. The bridge is a list comprehension, not an adapter library:</p>
+
+<pre><code>def as_function_tools(tools):
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.inputSchema,
+            },
+        }
+        for tool in tools
+    ]
+
+model_with_tools = model.bind_tools(as_function_tools(listed.tools))</code></pre>
+
+<p>Then it is the lesson-3 loop with one substitution: instead of calling a Python function, the client calls <code>session.call_tool</code> and returns the text as a <code>ToolMessage</code>.</p>
+
+<pre><code>reply = await model_with_tools.ainvoke(messages)
+messages.append(reply)
+
+for call in reply.tool_calls:
+    result = await session.call_tool(call["name"], arguments=call["args"])
+    messages.append(
+        ToolMessage(content=text_of(result), tool_call_id=call["id"])
+    )</code></pre>
+
+<p>Live output, <code>temperature=0</code>:</p>
+
+<pre><code>tools: add, search_kb
+question: What does E-311 mean?
+  tool search_kb({"query": "E-311 error code"})
+  -&gt; Q: What does error E-311 mean?
+answer: E-311 means the mailbox storage quota was exceeded. To fix it, archive
+conversations or raise the seat storage limit.</code></pre>
+
+<p>The model chose the tool and the query, but it never saw the knowledge base file and cannot call anything the server did not publish. That boundary — not the model — is the security surface. Ask something outside the corpus ("What is the SLA for the mobile app?") and it says it does not know, because the only evidence it received was an irrelevant entry.</p>
+
+<h2>MCP vs plain function calling</h2>
+
+<p>The honest comparison: at small scale, MCP is more machinery for the same result. It wins when the tool needs to exist outside one process.</p>
+
+<table>
+  <thead><tr><th></th><th>plain function calling</th><th>MCP</th></tr></thead>
+  <tbody>
+    <tr><td>tool lives</td><td>in your process</td><td>in a server process</td></tr>
+    <tr><td>reuse</td><td>copy the code</td><td>point another client at the server</td></tr>
+    <tr><td>language boundary</td><td>same runtime</td><td>any MCP client</td></tr>
+    <tr><td>latency</td><td>a direct call</td><td>a protocol round trip</td></tr>
+    <tr><td>setup</td><td>one decorator</td><td>server + client + transport</td></tr>
+  </tbody>
+</table>
+
+<p>Use MCP when the tool is shared across apps, remote, written by another team, or when you want the ecosystem's existing servers. Keep plain <code>@tool</code> for one app with three local functions — the ceremony is not free.</p>
+
+<h2>Lifecycle: initialize, operate, terminate</h2>
+
+<p>The context managers are the lifecycle, and <code>initialize()</code> is not optional — it negotiates the protocol version before any request:</p>
+
+<pre><code>async with stdio_client(params) as (read, write):     # connect
+    async with ClientSession(read, write) as session:
+        await session.initialize()                     # negotiate
+        ...                                            # list / call
+# session closed, subprocess terminated</code></pre>
+
+<p>For resources that should live as long as the server — a database pool, a loaded embedding model — FastMCP's <code>lifespan</code> opens them once at startup and closes them at shutdown, instead of reconnecting per tool call. Tools receive the lifespan context through <code>Context</code>.</p>
+
+<h2>The default you must not ship</h2>
+
+<p>This server binds HTTP transports to <code>127.0.0.1</code> and has no authentication. That is correct for a local lab and wrong for anything reachable. A remote MCP server needs TLS, explicit trusted hosts and origins, and an auth layer — publishing a port is not a security model. Stdio is different but not safer by default: the server inherits the client's permissions, so only launch servers you trust.</p>
+
+<h2>Check yourself</h2>
+
+<div class="quiz">
+<script type="application/json">
+{
+  "questions": [
+    {
+      "q": "What does MCP actually standardize?",
+      "options": [
+        "The model's reasoning process",
+        "The interface between clients and servers that expose tools, resources and prompts",
+        "The embedding model used for retrieval",
+        "The vector database schema"
+      ],
+      "correct": 1,
+      "explain": "MCP is a protocol, not a model feature. It standardizes discovery and invocation, so one server works with any compatible client."
+    },
+    {
+      "q": "Which primitive is model-controlled?",
+      "options": [
+        "Resources",
+        "Prompts",
+        "Tools",
+        "Transports"
+      ],
+      "correct": 2,
+      "explain": "Tools are offered to the model and may be called without a human. Resources are addressed by the application; prompts are chosen by the user."
+    },
+    {
+      "q": "With stdio, who starts the server process?",
+      "options": [
+        "The client, as a subprocess",
+        "The operating system at boot",
+        "The model provider",
+        "You, in a second terminal"
+      ],
+      "correct": 0,
+      "explain": "stdio_client launches the command it is given. That is why the lab never asks you to start server.py separately."
+    },
+    {
+      "q": "Why must a stdio server log to stderr?",
+      "options": [
+        "stderr is faster",
+        "stdout carries protocol messages and a stray print corrupts the stream",
+        "The model cannot read stdout",
+        "stderr is encrypted"
+      ],
+      "correct": 1,
+      "explain": "JSON-RPC frames travel over stdout. One print() in a tool breaks framing and the client disconnects."
+    },
+    {
+      "q": "Why is the LLM bridge in this lab so small?",
+      "options": [
+        "Because DeepSeek has a built-in MCP client",
+        "Because the server calls the model itself",
+        "Because the client skips tool descriptions",
+        "Because MCP's inputSchema is already the JSON schema a model expects for function calling"
+      ],
+      "correct": 3,
+      "explain": "The adapter problem is mostly schema translation. MCP publishes inputSchema, LangChain accepts a raw function dict, so the bridge is a list comprehension."
+    },
+    {
+      "q": "When is plain function calling the better choice?",
+      "options": [
+        "When the tool must be shared by several applications",
+        "When the server must run in another language",
+        "When a single app has a few local functions and latency matters",
+        "When you want to use an existing MCP server"
+      ],
+      "correct": 2,
+      "explain": "MCP buys reuse and distribution, and charges a process plus a protocol round trip for it. One app, three local tools: keep the decorator."
+    },
+    {
+      "q": "What does session.initialize() do?",
+      "options": [
+        "Negotiates the protocol version before any request",
+        "Loads the tool implementations",
+        "Starts the HTTP server",
+        "Downloads the model weights"
+      ],
+      "correct": 0,
+      "explain": "Initialization is the first lifecycle phase: client and server agree on a protocol version and capabilities before tools are listed or called."
+    }
+  ]
+}
+</script>
+</div>
+
+<h2>Primary sources for this lesson</h2>
+<p><a href="https://modelcontextprotocol.io/docs/learn/architecture">MCP — architecture</a> for the host/client/server split and the three primitives; <a href="https://py.sdk.modelcontextprotocol.io/v1/">Python SDK v1 docs</a> for <code>FastMCP</code>, <code>ClientSession</code> and the transports used here.</p>
+<p><a href="https://github.com/daveebbelaar/ai-cookbook/tree/main/mcp/crash-course">MCP crash course</a> — the seven-part walkthrough this lesson follows, with the OpenAI client replaced by DeepSeek and the Docker section left out. <a href="https://modelcontextprotocol.io/specification/2025-03-26/basic/transports">Transport specification</a> for why Streamable HTTP supersedes SSE.</p>
+
+<h2>What's next</h2>
+<p><a href="0010-langgraph.html">Lesson 10</a> changes layer again: <strong>LangGraph</strong> turns a decision into a graph — a classifier routes each message to a specialist, and the trace shows which path ran. The MCP server you just built is exactly the kind of tool one of those nodes can call.</p>
+
+<div class="footer-nav">
+  <div class="ask"><strong>Server works by hand, fails under a client?</strong> Check stdout first: one print, one library banner, one progress bar is enough to break framing. Then check that the client launches the same Python environment.</div>
+  <div class="links">
+    <a href="0008-rag-appendix.html">← Lesson 8</a>
+    <a href="../reference/skill-map.html">Skill Map &amp; Glossary</a>
+    <a href="../assets/examples/0009-mcp/index.html">Example page</a>
+  </div>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</article>
+</body>
+</html>

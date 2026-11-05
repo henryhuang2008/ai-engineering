@@ -1,0 +1,15 @@
+[project]
+name = "0014-ollama-local-rag"
+version = "0.1.0"
+description = "Lesson 14 lab: a fully local RAG agent with Ollama + LlamaIndex"
+requires-python = ">=3.11"
+dependencies = [
+    "llama-index-core>=0.12,<1",
+    "llama-index-llms-ollama>=0.5,<1",
+    "llama-index-embeddings-ollama>=0.5,<1",
+    "llama-index-vector-stores-chroma>=0.4,<1",
+    "chromadb>=1.0,<2",
+    "pandas>=2.2,<3",
+    "python-dotenv>=1.1,<2",
+    "requests>=2.32,<3",
+]

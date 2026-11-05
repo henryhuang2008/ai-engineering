@@ -1,0 +1,11 @@
+[project]
+name = "0009-mcp"
+version = "0.1.0"
+description = "Lesson 9 lab: an MCP server, a raw client, and DeepSeek using the tools over stdio"
+requires-python = ">=3.11"
+dependencies = [
+    "langchain>=1.4,<2",
+    "langchain-core>=1.7,<2",
+    "langchain-deepseek>=1.1,<2",
+    "mcp[cli]>=1.30,<2",
+]

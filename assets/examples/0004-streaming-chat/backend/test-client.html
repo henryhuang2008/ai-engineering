@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Streaming chat — lesson 4 test client</title>
+<style>
+  :root { color-scheme: light dark; --rule: #d8d5cd; --muted: #6b6b6b; }
+  body { font: 15px/1.55 system-ui, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 18px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  p.hint { color: var(--muted); margin: 0 0 18px; font-size: 13px; }
+  #log { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+  .turn { max-width: 88%; padding: 8px 12px; border-radius: 10px; white-space: pre-wrap; }
+  .turn.user { align-self: flex-end; background: #eef2ff; }
+  .turn.bot { align-self: flex-start; border: 1px solid var(--rule); }
+  .turn.error { border-color: #d9534f; color: #a33; }
+  form { display: flex; gap: 8px; }
+  textarea { flex: 1; resize: vertical; min-height: 46px; padding: 9px 10px; font: inherit; border: 1px solid var(--rule); border-radius: 8px; }
+  button { padding: 0 18px; border: 0; border-radius: 8px; background: #111; color: #fff; font: inherit; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  #stats { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; margin-top: 8px; min-height: 1.4em; }
+</style>
+</head>
+<body>
+<h1>Streaming chat — test the Python service alone</h1>
+<p class="hint">Same endpoint Next.js calls. Watch the first token land: that gap is TTFT.</p>
+
+<div id="log"></div>
+
+<form id="form">
+  <textarea id="text" rows="2" placeholder="Ask something…">Explain in three sentences why streaming feels faster than waiting.</textarea>
+  <button id="send" type="submit">Send</button>
+</form>
+<div id="stats"></div>
+
+<script>
+const log = document.getElementById("log");
+const form = document.getElementById("form");
+const text = document.getElementById("text");
+const send = document.getElementById("send");
+const stats = document.getElementById("stats");
+
+let history = [];
+
+function addTurn(kind, body = "") {
+  const el = document.createElement("div");
+  el.className = `turn ${kind}`;
+  el.textContent = body;
+  log.appendChild(el);
+  el.scrollIntoView({ block: "end", behavior: "smooth" });
+  return el;
+}
+
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const question = text.value.trim();
+  if (!question || send.disabled) return;
+
+  send.disabled = true;
+  stats.textContent = "";
+  addTurn("user", question);
+  history.push({ role: "user", content: question });
+  const answer = addTurn("bot");
+
+  const started = performance.now();
+  let firstTokenAt = 0;
+  let tokens = 0;
+  let failed = false;
+
+  try {
+    const response = await fetch("/chat-stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: history }),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // SSE events are separated by a blank line, not by "\n".
+      let split;
+      while ((split = buffer.indexOf("\n\n")) !== -1) {
+        const raw = buffer.slice(0, split);
+        buffer = buffer.slice(split + 2);
+        if (!raw.startsWith("data: ")) continue;
+
+        const frame = JSON.parse(raw.slice(6));
+        if (frame.error) throw new Error(frame.error);
+        if (frame.done) continue;
+        if (frame.delta) {
+          if (!firstTokenAt) {
+            firstTokenAt = performance.now() - started;
+            stats.textContent = `first token ${Math.round(firstTokenAt)} ms`;
+          }
+          tokens += 1;
+          answer.textContent += frame.delta;
+        }
+      }
+    }
+
+    history.push({ role: "assistant", content: answer.textContent });
+    const total = performance.now() - started;
+    stats.textContent =
+      `first token ${Math.round(firstTokenAt)} ms · ${tokens} deltas · ` +
+      `total ${Math.round(total)} ms (streaming saved ${Math.round(total - firstTokenAt)} ms of waiting)`;
+  } catch (error) {
+    failed = true;
+    answer.classList.add("error");
+    answer.textContent = String(error);
+    stats.textContent = "stream failed — check the uvicorn terminal";
+  } finally {
+    send.disabled = false;
+    if (failed) history.pop();
+  }
+});
+</script>
+</body>
+</html>

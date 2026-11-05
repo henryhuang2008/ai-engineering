@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 15 — AI Coding: The Tools, the Models, and the Loop That Ships</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<article class="page">
+
+<p class="meta">Lesson 15 of the AI Engineering course · ~55 min · Prereq: <a href="0001-ai-engineering-landscape-2026.html">Lesson 1</a> + one coding agent installed · <a href="../reference/skill-map.html">Skill Map →</a></p>
+
+<h1>AI Coding: The Tools, the Models, and the Loop That Ships</h1>
+
+<p class="lede">The leverage is not the model. It is the loop around it: a repository the agent can read, instructions it must follow, skills that encode your process, and a checklist that turns a client brief into small verified stages. Tools and models are interchangeable; the loop is what compounds.</p>
+
+<div class="callout win">
+  <span class="label">Your win this lesson</span>
+  You'll know which coding agent to reach for and why, how the main models differ, what an agent skill actually is, the six skills worth installing first, and a nine-stage workflow that takes <a href="../assets/examples/0015-document-copilot/index.html">document-copilot</a> from brief to deployed project without vibe-coding the architecture.
+</div>
+
+<h2>Part 1 — The tools, by the job they do</h2>
+
+<p>These are not competitors in one category. A multiplexer runs agents; an agent edits code; an IDE puts both in a window. Mixing them is normal.</p>
+
+<table>
+  <thead><tr><th>tool</th><th>what it is</th><th>reach for it when</th></tr></thead>
+  <tbody>
+    <tr><td><strong>herdr</strong></td><td>A terminal multiplexer built for coding agents: persistent panes, a sidebar with <code>working / blocked / idle</code> state, SSH, and a CLI agents can drive.</td><td>You run three or more agents and need to see which one is waiting on you.</td></tr>
+    <tr><td><strong>Pi</strong> (<code>pi</code>)</td><td>A deliberately minimal terminal agent: four default tools, a small prompt, TypeScript extensions, skills and MCP. It has no built-in permission prompts; run it in a container or trusted checkout.</td><td>You want a small harness you can extend and understand.</td></tr>
+    <tr><td><strong>Oh My Pi</strong> (<code>omp</code>)</td><td>A batteries-included fork of Pi: LSP, debugger (DAP), subagents, browser, 60+ providers, parallel worktrees. Its default approval mode is effectively <em>yolo</em>; configure it before client work.</td><td>You want IDE-class code intelligence in a terminal.</td></tr>
+    <tr><td><strong>Codex CLI</strong></td><td>OpenAI's Rust terminal agent. OS-level sandbox, network off by default, approval policy, <code>codex exec</code> for headless runs. Works with ChatGPT plans or an API key.</td><td>You want safe defaults and parallel, sandboxed tasks.</td></tr>
+    <tr><td><strong>OpenCode</strong></td><td>MIT-licensed, provider-agnostic agent (75+ providers, local models), TUI + desktop + IDE + server. It is a harness, not a model.</td><td>You want model freedom, local models, or a fixed harness to compare models.</td></tr>
+    <tr><td><strong>Claude Code</strong></td><td>Anthropic's agent: CLI, desktop, IDE, web, mobile. Deepest agent tooling — subagents, hooks, skills, plugins, checkpoints/rewind, permission modes.</td><td>Long, multi-file refactors and supervised autonomous work.</td></tr>
+    <tr><td><strong>Cursor</strong></td><td>An AI-native editor (VS Code fork): Tab completion, visual diffs, an Agents window, cloud agents.</td><td>You want to stay in an editor and review diffs visually.</td></tr>
+    <tr><td><strong>VS Code</strong></td><td>The general-purpose editor. Copilot and agent extensions bring chat, edits, and MCP; Codex and Claude Code both run inside it.</td><td>You want one editor with extensions and no vendor lock.</td></tr>
+  </tbody>
+</table>
+
+<p><strong>Install commands</strong> (check the current docs; these move):</p>
+
+<pre><code># herdr - multiplexer
+curl -fsSL https://herdr.dev/install.sh | sh
+# Windows: irm https://herdr.dev/install.ps1 | iex
+
+# Pi - minimal agent
+npm install -g @earendil-works/pi-coding-agent
+
+# Oh My Pi - batteries included
+curl -fsSL https://omp.sh/install | sh
+
+# Codex CLI
+npm install -g @openai/codex
+
+# OpenCode
+curl -fsSL https://opencode.ai/install | bash
+
+# Claude Code
+curl -fsSL https://claude.ai/install.sh | bash</code></pre>
+
+<p><strong>The honest split.</strong> Pi and Oh My Pi are the minimal-versus-batteries pair: Pi gives you four tools and expects you to add the rest; OMP ships LSP, debugger, subagents and a browser, and you should turn its approvals on. Codex and Claude Code are the vendor agents: Codex optimizes for sandboxed safety, Claude Code for long-horizon reasoning and tooling depth. OpenCode is the neutral harness. herdr is the operations layer above all of them — it does not edit code.</p>
+
+<h2>Part 2 — IDE: Cursor or VS Code?</h2>
+
+<table>
+  <thead><tr><th></th><th>Cursor</th><th>VS Code</th></tr></thead>
+  <tbody>
+    <tr><td>model</td><td>AI-native editor, VS Code fork</td><td>general editor + extensions</td></tr>
+    <tr><td>strength</td><td>Tab completion, inline diffs, Agents window, cloud agents</td><td>one editor for every language; Copilot, Codex, Claude Code, MCP</td></tr>
+    <tr><td>tradeoff</td><td>another subscription and a fork</td><td>agent experience is extension-dependent</td></tr>
+    <tr><td>pick it if</td><td>you review AI edits visually all day</td><td>you want portability and already live in VS Code</td></tr>
+  </tbody>
+</table>
+
+<p>They are not exclusive. Many teams run a terminal agent for the heavy work and an editor for the diff. If you use Cursor, you can still install Codex or Claude Code as an extension; if you use VS Code, the same agents plug in. The lesson is workflow, not allegiance.</p>
+
+<h2>Part 3 — Models: the families that matter</h2>
+
+<p><strong>First correction:</strong> OpenCode is a harness, not a model. It appears in the list because it is often paired with the models below. <strong>Second:</strong> “daobao” is ByteDance's <strong>Doubao</strong>; “Bailian” is Alibaba Cloud's Model Studio platform, home of Qwen.</p>
+
+<table>
+  <thead><tr><th>family</th><th>maker</th><th>what it is good at</th><th>typical route</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Codex / GPT-Codex</strong></td><td>OpenAI</td><td>deep coding, tool use, sandboxed parallel work</td><td>Codex CLI, ChatGPT plans, API</td></tr>
+    <tr><td><strong>Claude Opus / Sonnet</strong></td><td>Anthropic</td><td>long-horizon refactors, careful multi-file changes</td><td>Claude Code, Claude plans, API</td></tr>
+    <tr><td><strong>DeepSeek V4.x</strong></td><td>DeepSeek</td><td>strong code per dollar; Flash for volume, Pro for hard tasks</td><td>API, OpenAI-compatible</td></tr>
+    <tr><td><strong>Kimi K2.x / K3</strong></td><td>Moonshot</td><td>agentic coding, long context, coding plans</td><td>Kimi Code, Anthropic/OpenAI-compatible</td></tr>
+    <tr><td><strong>MiMo V2.x</strong></td><td>Xiaomi</td><td>reasoning, 1M context, low cost</td><td>API, coding tools</td></tr>
+    <tr><td><strong>MiniMax M2.x / M3</strong></td><td>MiniMax</td><td>agentic coding, 1M context, competitive pricing</td><td>API, coding plans</td></tr>
+    <tr><td><strong>Doubao Seed</strong></td><td>ByteDance</td><td>coding and general models on Volcengine; Seed-Code / Evolving</td><td>Volcengine Ark, coding plan</td></tr>
+    <tr><td><strong>Qwen / Bailian</strong></td><td>Alibaba</td><td>Qwen3-Coder, Qwen3.5/3.7/3.8; strong tool use, vision on Plus</td><td>Model Studio (Bailian), Qwen Code</td></tr>
+    <tr><td><strong>GLM</strong></td><td>Zhipu</td><td>popular coding-plan alternative; 1M context on recent models</td><td>Z.ai, compatible APIs</td></tr>
+  </tbody>
+</table>
+
+<p><strong>How to choose:</strong> start from the constraint, not the leaderboard.</p>
+
+<ul>
+  <li><strong>Hard refactor / architecture:</strong> Claude Opus or a top Codex model, with a plan and review step.</li>
+  <li><strong>High-volume edits and tests:</strong> DeepSeek Flash, Qwen Flash, Doubao Lite, MiMo Flash — cheap enough to run many loops.</li>
+  <li><strong>Long context / many files:</strong> Kimi, MiMo, MiniMax, Qwen Plus — check the actual context window, not the marketing name.</li>
+  <li><strong>Local / private:</strong> Qwen or DeepSeek weights via Ollama or vLLM (<a href="0014-ollama-local-rag.html">lesson 14</a>).</li>
+  <li><strong>Model freedom:</strong> OpenCode, Pi or OMP with your own key.</li>
+</ul>
+
+<p><strong>Coding plans are not API keys for your backend.</strong> Qwen/Bailian, Kimi, MiniMax, Doubao and GLM sell interactive coding subscriptions with dedicated keys, base URLs and quotas (5-hour, weekly, monthly). Alibaba explicitly restricts its plan to interactive coding tools and forbids automated scripts or application backends. Keep the plan key for the agent, and a normal pay-as-you-go key for production. Mixing the two is how a bill or a suspension happens.</p>
+
+<h3>Model features: check the capability, not just the logo</h3>
+
+<p>A model family is not a feature list. The same provider ships chat-only, vision, reasoning, and audio models under different tags, and a coding plan often exposes only a subset. Before you choose, write down the features the product actually needs and verify each one on the exact model tag you will call.</p>
+
+<table>
+  <thead><tr><th>feature</th><th>what it lets you build</th><th>where to look first</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Chat / instruction following</strong></td><td>the base loop: messages in, answer out</td><td>all nine families</td></tr>
+    <tr><td><strong>Reasoning / thinking budget</strong></td><td>hard refactors, multi-step planning; often slower and costlier</td><td>Claude extended thinking, OpenAI reasoning models, DeepSeek V4, Kimi K3, Qwen, GLM, MiniMax, MiMo</td></tr>
+    <tr><td><strong>Tool calling</strong></td><td>agents, MCP clients, API orchestration</td><td>most current chat models; verify function-calling support on the exact tag</td></tr>
+    <tr><td><strong>Structured output</strong></td><td>Pydantic-validated JSON, extraction, routing</td><td>OpenAI strict schema, Anthropic tool schema, Qwen, DeepSeek; others via function calling</td></tr>
+    <tr><td><strong>Vision / image input</strong></td><td>screenshots, charts, scanned documents</td><td>OpenAI, Claude, Qwen-VL/Plus, Kimi K2.5/K3, MiMo, MiniMax, Doubao, GLM multimodal</td></tr>
+    <tr><td><strong>Image generation</strong></td><td>illustrations, product shots, UI assets</td><td>OpenAI image models, Qwen-Image/Wan, Doubao Seedream, MiniMax image; usually a separate endpoint</td></tr>
+    <tr><td><strong>TTS / speech output</strong></td><td>voice assistants, narration, accessibility</td><td>OpenAI TTS, Qwen TTS/CosyVoice, MiniMax Speech, Doubao TTS, MiMo TTS</td></tr>
+    <tr><td><strong>ASR / transcription</strong></td><td>meeting notes, voice input, call analysis</td><td>OpenAI Whisper/transcribe, Qwen ASR, MiniMax, Doubao, MiMo ASR</td></tr>
+    <tr><td><strong>Embeddings</strong></td><td>RAG, semantic search, clustering</td><td>Qwen text-embedding-v4, OpenAI embeddings, Cohere/Voyage; <strong>DeepSeek has no embeddings endpoint</strong> (<a href="0007-rag-service.html">lesson 7</a>)</td></tr>
+    <tr><td><strong>Reranking</strong></td><td>a second retrieval pass that reads query + chunk together</td><td>Qwen gte-rerank, Cohere Rerank, Jina; or a local cross-encoder (<a href="0007-rag-service.html">lesson 7</a>)</td></tr>
+    <tr><td><strong>Long context</strong></td><td>whole repos, long transcripts, many documents</td><td>Claude, Kimi, MiMo, MiniMax, Qwen Plus/Max, Doubao: 1M-class on recent tags</td></tr>
+    <tr><td><strong>Streaming / realtime</strong></td><td>token streaming, live voice, low-latency chat</td><td>most chat APIs stream; realtime speech-to-speech is a separate product (OpenAI Realtime, Qwen-Omni)</td></tr>
+    <tr><td><strong>Batch / caching</strong></td><td>cheaper offline jobs; repeated system prompts</td><td>OpenAI Batch, Anthropic prompt caching, DeepSeek context caching, Qwen context cache</td></tr>
+  </tbody>
+</table>
+
+<p><strong>Read the feature matrix as a shopping list, not a scorecard.</strong> A support bot needs chat + tools + structured output + embeddings; a voice agent needs ASR + chat + TTS; a coding agent needs tool calling and long context but not image generation. One “omni” model rarely wins every row — and a coding plan may not expose the TTS or embedding endpoint at all.</p>
+
+<h2>Part 4 — Agent skills: process as a file</h2>
+
+<p>An <strong>agent skill</strong> is a folder with a <code>SKILL.md</code> plus optional scripts, references and assets. The file has a name and a trigger description; the agent loads it when the task matches, instead of carrying every instruction in every prompt. It is <em>procedural memory</em> — how your team does a thing — not a tool and not a model feature.</p>
+
+<table>
+  <thead><tr><th>mechanism</th><th>what it carries</th><th>when it loads</th></tr></thead>
+  <tbody>
+    <tr><td><strong>AGENTS.md / CLAUDE.md</strong></td><td>repo facts and standing rules</td><td>always, at session start</td></tr>
+    <tr><td><strong>agent skill</strong></td><td>a repeatable procedure, with checks and scripts</td><td>on demand, when the task matches</td></tr>
+    <tr><td><strong>MCP server</strong></td><td>a capability: tools, resources, prompts across a protocol</td><td>when the client connects and the model calls it</td></tr>
+  </tbody>
+</table>
+
+<p><strong>Why they matter:</strong> an agent has no memory of your last project. Without a skill, every session re-derives your process from scratch, and quality depends on how well you prompt that day. A skill makes the process explicit, reviewable, versioned, and portable across Claude Code, Codex, OpenCode, Cursor, Pi and OMP. It is the difference between “the model wrote code” and “the model followed our definition of done.”</p>
+
+<h3>Install Matt Pocock's skill set</h3>
+
+<p>The set this course borrows from is <a href="https://github.com/mattpocock/skills">mattpocock/skills</a>, documented at <a href="https://www.aihero.dev/skills">aihero.dev/skills</a>. It is small, composable, and model-agnostic. Install once per project:</p>
+
+<pre><code>npx skills@latest add mattpocock/skills
+# choose your agent when prompted, e.g.:
+npx skills@latest add mattpocock/skills -a claude-code
+
+# Claude Code plugin alternative
+claude plugin install mattpocock-skills@claude-plugins-official</code></pre>
+
+<p>Then run <code>/setup-matt-pocock-skills</code> once per repo: it asks which issue tracker you use, which triage labels, and where docs live. The main flow is:</p>
+
+<pre><code>/grill-with-docs → /to-spec → /to-tickets → /implement → /code-review → /retro</code></pre>
+
+<table>
+  <thead><tr><th>skill</th><th>job</th><th>when</th></tr></thead>
+  <tbody>
+    <tr><td><strong><code>grill-with-docs</code></strong></td><td>Interviews you about a change, resolves the design tree, writes terms to <code>GLOSSARY.md</code> and hard decisions to ADRs.</td><td>Start of a change; the plan is still fuzzy.</td></tr>
+    <tr><td><strong><code>to-spec</code></strong></td><td>Turns the settled conversation into a spec/PRD with user stories; no second interview.</td><td>After grilling, before tickets.</td></tr>
+    <tr><td><strong><code>to-tickets</code></strong></td><td>Breaks the spec into vertical-slice tickets with blocking edges.</td><td>When the spec is agreed and you need a journey.</td></tr>
+    <tr><td><strong><code>tdd</code></strong></td><td>Red-green-refactor: one failing test at a time, then the implementation.</td><td>Every code change; the quality loop.</td></tr>
+    <tr><td><strong><code>implement</code></strong></td><td>Builds a spec or ticket, driving TDD at the agreed seams, closing with code review.</td><td>Execution stage.</td></tr>
+    <tr><td><strong><code>code-review</code></strong></td><td>Two-axis review of the diff: repo standards and the originating spec.</td><td>Before every commit/PR.</td></tr>
+    <tr><td><strong><code>improve-codebase-architecture</code></strong></td><td>Scans for shallow modules and coupling; presents deepening candidates as a report.</td><td>Weekly, or after a feature burst.</td></tr>
+    <tr><td><strong><code>diagnosing-bugs</code></strong></td><td>A gated loop: reproduce, minimise, hypothesise, instrument, fix, regression-test.</td><td>Hard bugs and performance regressions.</td></tr>
+    <tr><td><strong><code>triage</code></strong></td><td>Moves issues through a state machine with labels; keeps the backlog honest.</td><td>When the ticket list outgrows the work.</td></tr>
+    <tr><td><strong><code>handoff</code></strong></td><td>Compacts a session into a document another agent can continue from.</td><td>Before context runs out or switching agents.</td></tr>
+    <tr><td><strong><code>prototype</code></strong></td><td>Builds a throwaway artifact to answer a design question.</td><td>Before committing to a UI or state model.</td></tr>
+    <tr><td><strong><code>wayfinder</code></strong></td><td>Charts a multi-session effort as a map of decision tickets.</td><td>Too big for one session.</td></tr>
+    <tr><td><strong><code>retro</code></strong></td><td>Suggests improvements to the agent's environment after a session.</td><td>End of a milestone.</td></tr>
+  </tbody>
+</table>
+
+<p><strong>The meta-skills you named:</strong></p>
+
+<ul>
+  <li><strong><code>teach</code></strong> — a stateful teaching workspace: it reads a mission, plans lessons, writes HTML, and records what you learned. This course is built with it.</li>
+  <li><strong><code>find-skills</code></strong> — discovers and installs skills for a task, so you do not have to know the name in advance.</li>
+  <li><strong><code>skill-creator</code></strong> — authors or updates a skill: trigger description, steps, scripts, examples, and a test pass.</li>
+</ul>
+
+<p><strong>What makes a skill good:</strong> a narrow trigger (“use when reviewing a diff against a spec”), a checklist with a stop condition, the exact commands, one worked example, and a verification step. Keep it short enough to load and specific enough to change behaviour. Store it in the repo so the team shares it; do not put secrets in it. A skill that says “write good code” is a slogan; a skill that says “run these five checks and paste the output” is a process.</p>
+
+<h2 id="part-5">Part 5 — The codebase you will practise on</h2>
+
+<p><a href="../assets/examples/0015-document-copilot/index.html"><code>document-copilot</code></a> is an internal AI chatbot for analysts: ask a corpus of documents in plain English, get sourced answers. It is copied into this course at <code>assets/examples/0015-document-copilot/</code>. The snapshot is a <strong>client brief and skeleton</strong>, not a finished app — there is no backend application code and no frontend package manifest yet, which is exactly what makes it a good workflow exercise.</p>
+
+<pre><code>0015-document-copilot/
+├─ AGENTS.md                 repo-wide agent rules
+├─ docs/client-brief.md      what the client wants
+├─ docs/architecture.md      how the proposed system fits
+├─ backend/AGENTS.md         FastAPI conventions
+├─ frontend/AGENTS.md        React/Vite conventions
+├─ data/download.py          SEC EDGAR sample downloader (stdlib)
+└─ docs/guides/              Supabase, backend, frontend setup</code></pre>
+
+<table>
+  <thead><tr><th>layer</th><th>choice</th></tr></thead>
+  <tbody>
+    <tr><td>backend</td><td>Python + FastAPI</td></tr>
+    <tr><td>frontend</td><td>Vite + React + TypeScript</td></tr>
+    <tr><td>database</td><td>Supabase Postgres; users, chats, documents, chunks</td></tr>
+    <tr><td>retrieval</td><td>pgvector + Postgres full-text search</td></tr>
+    <tr><td>auth</td><td>Supabase Auth (email)</td></tr>
+    <tr><td>LLM + embeddings</td><td>OpenAI in the original brief (swap freely)</td></tr>
+  </tbody>
+</table>
+
+<p><strong>Read in this order before writing code:</strong> <code>AGENTS.md</code> (agent rules) → <code>docs/client-brief.md</code> (what the client wants) → <code>docs/architecture.md</code> (how it fits) → <code>backend/AGENTS.md</code> and <code>frontend/AGENTS.md</code> (local conventions) → <code>README.md</code> (setup). All paths are inside the example folder. The repo already tells the agent how to behave; your first job is to update that, not to prompt from a blank page.</p>
+
+<h2>Part 6 — The workflow: nine stages, with gates</h2>
+
+<p>The loop is deliberately boring. Each stage has a deliverable and an exit gate; you do not start the next until the gate passes. The first two stages operate on the local snapshot: use what you downloaded, then update its content before asking for code.</p>
+
+<div class="callout win">
+  <span class="label">The rule for this part</span>
+  <strong>Think with the best model. Type with a cheap one.</strong> Research, reading and plan mode are one-shot, low-volume and high-leverage: a weak plan poisons every file that follows, so use the strongest model you have. Implementation is many small, test-gated edits: the loop catches mistakes in seconds, so use a fast, cheap model and keep the frontier model for the plan, the architecture pass and the risky review.
+</div>
+
+<figure>
+  <img src="../assets/images/ai-coding-workflow.svg" alt="Nine-stage workflow: use the downloaded project, update its project content, write TODO.md, start first stage, check plan and implement, verify and refactor, next stage, final refactor, deploy; each stage has a gate; stages four to seven repeat until TODO.md is empty; a legend marks the best model for stages one to three and the stage eight architecture pass, and a fast model for stages four to seven and deploy" width="900">
+  <figcaption>The nine stages and their gates. Stages 4–7 are the inner loop: one vertical slice at a time, repeated until <code>TODO.md</code> is empty.</figcaption>
+</figure>
+
+<table>
+  <thead><tr><th>stage</th><th>model</th><th>what you do</th><th>exit gate</th></tr></thead>
+  <tbody>
+    <tr><td><strong>1. Use the downloaded project</strong></td><td><strong>Best</strong><br>research</td><td>Open <code>assets/examples/0015-document-copilot/</code> (or your clone) and read <code>AGENTS.md</code>, <code>README.md</code>, <code>docs/client-brief.md</code>, <code>docs/architecture.md</code>, then inspect <code>backend/</code>, <code>frontend/</code> and <code>data/</code>. List what is missing.</td><td>You can name the folders, the data flow, and the first vertical slice with its acceptance check.</td></tr>
+    <tr><td><strong>2. Update the project content</strong></td><td><strong>Best</strong><br>plan</td><td>Update what you just inspected: <code>backend/</code> (AGENTS, <code>.env.example</code>, <code>pyproject.toml</code>), <code>frontend/</code> (AGENTS, package manifest, <code>.env.example</code>), <code>data/</code> (download parameters, corpus notes), <code>docs/</code> (brief, architecture, setup guides), plus root <code>AGENTS.md</code> / <code>README.md</code> / <code>GLOSSARY.md</code> / <code>TODO.md</code>; install skills, choose the model, set permissions.</td><td>The brief, commands, constraints and no-touch list are current — in the files the agent will actually read.</td></tr>
+    <tr><td><strong>3. Write <code>TODO.md</code></strong></td><td><strong>Best</strong><br>plan</td><td>Ask the agent for a build order and a checklist. Paste the prompt below.</td><td>The list is ordered, each item has an acceptance check.</td></tr>
+    <tr><td><strong>4. Start the first stage</strong></td><td><strong>Fast</strong><br>build</td><td>Take the smallest vertical slice: backend skeleton, health check, DB models, one endpoint.</td><td>It runs locally; one test proves it.</td></tr>
+    <tr><td><strong>5. Check the plan and implement</strong></td><td><strong>Fast</strong><br>build</td><td>Before coding, restate the stage's files, interfaces and tests. Then implement with <code>/tdd</code>.</td><td>Tests pass; the diff matches the plan; no drive-by edits.</td></tr>
+    <tr><td><strong>6. Verify and refactor</strong></td><td><strong>Fast</strong><br>build</td><td>Run tests, typecheck, lint, the app. Run <code>/code-review</code>. Refactor only what the review names.</td><td>All checks pass; the review has no blocking finding.</td></tr>
+    <tr><td><strong>7. Next stage</strong></td><td><strong>Fast</strong><br>build</td><td>Mark the item done, update <code>TODO.md</code>, repeat stages 4–6.</td><td>Every checklist item is done and verified.</td></tr>
+    <tr><td><strong>8. Final refactor</strong></td><td><strong>Best</strong> plan, <strong>Fast</strong> edits</td><td><code>/improve-codebase-architecture</code>; remove dead code; update README and ADRs; run the whole suite.</td><td>A new developer can run it from the README.</td></tr>
+    <tr><td><strong>9. Deploy</strong></td><td><strong>Fast</strong><br>ops</td><td>Secrets, migrations, CI, smoke test, logs/traces, rollback plan.</td><td>The deployed app answers the five acceptance questions.</td></tr>
+  </tbody>
+</table>
+
+<h3>Match the model to the mode</h3>
+
+<p>There are two kinds of work in this loop, and they want opposite things from a model.</p>
+
+<p><strong>Research and plan mode is low volume, one shot, high leverage.</strong> You read a repo, map the data flow, choose the slice order, name the interfaces. A few thousand tokens decide every file the agent will touch for the next two days. This is where the frontier model earns its price: better reading, better decomposition, fewer invented assumptions. Run it read-only — ask for the plan, not the code. Nothing should be edited in this mode, because a write is a decision and the decision is what you are buying.</p>
+
+<p><strong>Implementation is high volume, many small steps, cheap to verify.</strong> Write a test, make it pass, refactor, run the checks. Each step has a gate that catches a mistake in seconds, so the marginal value of a smarter model is small and its marginal cost is not. A fast model with a tight loop beats an expensive model with a loose one. Use DeepSeek Flash, Qwen Flash, Doubao Lite or MiMo Flash for stages 4–7; save the frontier model for the plan and the review.</p>
+
+<p><strong>The hand-off is the plan.</strong> A cheap model can execute a good plan; it cannot invent one. So before you switch models, write it down: the ordered <code>TODO.md</code> with acceptance checks, the files and interfaces for the current slice, the exact commands, and the no-touch list. Without that artifact the cheap model re-derives the architecture from scratch, and you pay for two planners — one expensive, one wrong.</p>
+
+<p><strong>Escalate on repeat failure, not on difficulty.</strong> If a slice fails its gate twice, do not run a third fast loop. Move that slice back to the planner model, in plan mode, and ask for a smaller step or a named fix; then hand the corrected plan down again. Two failed loops usually mean the plan was wrong, and a third cheap attempt will not discover that.</p>
+
+<p><strong>Never invert the split.</strong> A cheap model designing the architecture while a frontier model types the CRUD is the most expensive way to build software: you pay frontier prices to discover that the plan was wrong, and you throw away the reasoning that would have avoided it. Cheap thinking is not a saving; it is a rewrite.</p>
+
+<p>One exception worth the tokens: <strong>the reviewer should be at least as strong as the implementer</strong> when the change is subtle — concurrency, auth, migrations, money, anything with a data-loss path. A cheap model reviewing a cheap model's security change is agreement, not review.</p>
+
+<h3>The TODO prompt</h3>
+
+<p>Paste this after stage 2. It is the user's prompt, cleaned for grammar; keep the order of the questions.</p>
+
+<pre><code>Help me set up a checklist in TODO.md. What is the most logical way to set up
+this project? Do we start with the backend or the frontend? Give me a checklist
+I can work towards, in order, to implement the entire architecture and satisfy
+the client brief. For each item, name the files or modules it touches, the
+acceptance check, and what it blocks.</code></pre>
+
+<p>The extra sentence is the important one. A checklist without acceptance checks becomes a wish list; a checklist with them becomes the contract for every stage.</p>
+
+<h3>What “done” means per stage</h3>
+
+<ul>
+  <li><strong>Tests:</strong> at least one test that would fail if the feature were removed.</li>
+  <li><strong>Types and lint:</strong> the repo's commands, not a global installation.</li>
+  <li><strong>Run:</strong> the actual app or endpoint, not only unit tests.</li>
+  <li><strong>Review:</strong> standards + spec, with the diff in front of you.</li>
+  <li><strong>Docs:</strong> the README or an ADR explains any non-obvious decision.</li>
+</ul>
+
+<h3>Git worktrees: the unit of parallel agent work</h3>
+
+<p><strong>One checkout, one agent.</strong> Two agents in the same working tree will overwrite each other's files, race on <code>git status</code>, fight over the dev server and the test database, and produce a diff neither of them can explain. The fix is not a better prompt; it is filesystem isolation.</p>
+
+<p>A <strong>git worktree</strong> is a second working directory attached to the same repository. It shares the object database and history (no full clone), but has its own checkout, index, branch and <code>HEAD</code>. That is exactly the boundary an agent needs: a private filesystem and branch, with the team's real history underneath.</p>
+
+<pre><code>document-copilot/          main worktree, branch main
+├─ .git/                   shared object database
+├─ ../doc-copilot-api/      worktree, branch feat/api
+├─ ../doc-copilot-ui/       worktree, branch feat/ui
+└─ ../doc-copilot-tests/    worktree, branch feat/tests</code></pre>
+
+<pre><code># one task, one branch, one worktree
+git worktree add ../doc-copilot-api -b feat/backend-skeleton
+
+# run the agent there
+cd ../doc-copilot-api
+# ... agent edits, runs tests, commits ...
+
+# review from the main checkout
+cd ../document-copilot
+git diff main..feat/backend-skeleton
+git worktree list
+
+# merge after review, then clean up
+git merge feat/backend-skeleton
+git worktree remove ../doc-copilot-api
+git branch -d feat/backend-skeleton</code></pre>
+
+<p>Three rules make it work. <strong>One worktree per agent, per branch, per vertical slice</strong> — do not let two agents share one; they will still collide. <strong>Install dependencies per worktree</strong> (<code>uv sync</code>, <code>pnpm install</code>) and give each its own ports and database/schema; sharing a dev server or a local Postgres is the next race. <strong>Merge only after tests and review</strong> — a worktree isolates edits, not semantic conflicts.</p>
+
+<table>
+  <thead><tr><th>without worktrees</th><th>with worktrees</th></tr></thead>
+  <tbody>
+    <tr><td>agents overwrite each other's files</td><td>each agent owns a checkout</td></tr>
+    <tr><td>one dirty <code>git status</code></td><td>one branch and diff per task</td></tr>
+    <tr><td>tests and dev servers fight over ports/state</td><td>independent runs, separate ports/DBs</td></tr>
+    <tr><td>reviewing a mixed diff</td><td>reviewing one branch against <code>main</code></td></tr>
+    <tr><td>a failed experiment pollutes the main tree</td><td>delete the worktree; <code>main</code> is untouched</td></tr>
+  </tbody>
+</table>
+
+<p><strong>Where the tools fit:</strong> herdr shows which agent is blocked, but it does not isolate files — worktrees do. Some agents create worktrees for you (Claude Code's background sessions, Oh My Pi's parallel subagents, Cursor's cloud agents); verify before trusting the label. The workflow is the same: <code>main</code> stays clean, each ticket gets a worktree, and the reviewer sees one branch. A worktree is cheap; a corrupted checkout is not.</p>
+
+<p><strong>When not to bother:</strong> one agent on one task. Worktrees add setup (dependencies, ports, DB) and cleanup; use them when the tasks are genuinely independent, not to look busy.</p>
+
+<h2>Part 7 — The day-one checklist</h2>
+
+<table>
+  <thead><tr><th>decision</th><th>default</th></tr></thead>
+  <tbody>
+    <tr><td>Agent</td><td>Claude Code or Codex for depth/safety; OpenCode for model freedom; Pi/OMP if you want to own the harness</td></tr>
+    <tr><td>Editor</td><td>VS Code if you want portability; Cursor if you review AI diffs visually all day</td></tr>
+    <tr><td>Model</td><td>a frontier model for architecture; a cheap model (DeepSeek/Qwen/Doubao/MiMo) for volume</td></tr>
+    <tr><td>Skills</td><td><code>grill-with-docs</code>, <code>to-spec</code>, <code>to-tickets</code>, <code>tdd</code>, <code>implement</code>, <code>code-review</code>, <code>improve-codebase-architecture</code></td></tr>
+    <tr><td>Context</td><td><code>AGENTS.md</code> + <code>GLOSSARY.md</code> + <code>TODO.md</code> in the repo, not in a chat</td></tr>
+    <tr><td>Safety</td><td>sandbox on, approvals on, secrets out of the repo, worktree per parallel agent</td></tr>
+  </tbody>
+</table>
+
+<p><strong>Do not:</strong> let two agents share a checkout; let a coding-plan key power a backend; start a feature before the spec and the tests exist; trust a “done” without running the app; paste client secrets into a prompt.</p>
+
+<div class="callout">
+  <span class="label">Interview · “How do you use AI without lowering the bar?”</span>
+  “I treat the agent like a new engineer with no memory. The repo carries the standing rules, a skill carries the process, a spec carries the intent, and tickets make the work small enough to verify. I grill before I build, write the spec, slice vertically, and run the same tests, typecheck, review and smoke test I would demand from a human. The model is the least interesting choice in that sentence — I pick it by constraint: frontier for hard refactors, cheap for volume, local when the data cannot leave.”
+</div>
+
+<h2>Check yourself</h2>
+
+<div class="quiz">
+<script type="application/json">
+{
+  "questions": [
+    {
+      "q": "What is an agent skill, as distinct from MCP?",
+      "options": [
+        "A model file that runs locally",
+        "A protocol for connecting tools and resources",
+        "A procedure loaded on demand to guide the agent",
+        "A subscription plan for coding models"
+      ],
+      "correct": 2,
+      "explain": "A skill is a SKILL.md plus optional scripts/references that encodes how to do a task. MCP is a protocol for exposing capabilities; skills are procedural knowledge."
+    },
+    {
+      "q": "Which tool is a multiplexer for running several agents, not an agent itself?",
+      "options": [
+        "herdr",
+        "Claude Code",
+        "Codex CLI",
+        "Oh My Pi"
+      ],
+      "correct": 0,
+      "explain": "herdr owns terminals and shows agent state; it runs Claude Code, Codex, OpenCode, Pi and others without replacing them."
+    },
+    {
+      "q": "What is the difference between Pi and Oh My Pi?",
+      "options": [
+        "Pi is proprietary; OMP is open source",
+        "Pi is minimal; OMP is a batteries-included fork",
+        "Pi only runs local models; OMP only cloud models",
+        "They are the same binary with different names"
+      ],
+      "correct": 1,
+      "explain": "Pi is the small extensible harness; OMP is a hard fork that adds LSP, debugging, subagents, browser and many providers. OMP also defaults to loose approvals, so configure it."
+    },
+    {
+      "q": "Which agent is known for OS-level sandboxing with network off by default?",
+      "options": [
+        "OpenCode",
+        "Cursor",
+        "Codex CLI",
+        "Pi"
+      ],
+      "correct": 2,
+      "explain": "Codex separates sandbox mode from approval policy and enforces it at the OS level. OpenCode has rules but no OS sandbox; Pi deliberately has no permission layer."
+    },
+    {
+      "q": "Which item in the model list is actually a harness, not a model?",
+      "options": [
+        "Kimi",
+        "OpenCode",
+        "MiMo",
+        "Doubao"
+      ],
+      "correct": 1,
+      "explain": "OpenCode is the MIT-licensed agent that connects to 75+ providers. Kimi, MiMo and Doubao are model families."
+    },
+    {
+      "q": "Which skill interviews you and writes GLOSSARY.md / ADRs?",
+      "options": [
+        "to-tickets",
+        "code-review",
+        "grill-with-docs",
+        "handoff"
+      ],
+      "correct": 2,
+      "explain": "grill-with-docs runs the grilling interview and leaves the domain language and hard decisions on disk. to-tickets slices; code-review checks the diff; handoff compacts a session."
+    },
+    {
+      "q": "What is the first thing to do with the downloaded project?",
+      "options": [
+        "Ask the agent to build the frontend",
+        "Read AGENTS.md, the brief, docs and each folder, then update the project content",
+        "Generate a TODO list and start coding immediately",
+        "Install every model provider"
+      ],
+      "correct": 1,
+      "explain": "The local snapshot's rules, brief, architecture and folders decide the work. Read them, update the content the agent will actually read (backend, frontend, data, docs), then write TODO.md before the first feature."
+    },
+    {
+      "q": "Where is the most expensive model actually worth paying for?",
+      "options": [
+        "Every edit in the inner loop, so quality never drops",
+        "Research, planning and the architecture pass",
+        "Running the test suite",
+        "Deploying, because production is risky"
+      ],
+      "correct": 1,
+      "explain": "Reading, planning and architecture are one-shot, low-volume decisions that every later file depends on. The build loop is many small, test-gated edits where a fast cheap model with a tight loop wins on both cost and speed."
+    },
+    {
+      "q": "What does git worktree add give a parallel agent?",
+      "options": [
+        "A full clone with a separate history",
+        "A separate working tree sharing the same .git",
+        "A remote branch protected from merges",
+        "A new model context window"
+      ],
+      "correct": 1,
+      "explain": "A worktree has its own checkout, index, branch and HEAD but shares the repository's object database. That isolates files and branches without cloning the history; it does not merge semantic conflicts for you."
+    }
+  ]
+}
+</script>
+</div>
+
+<h2>Primary sources for this lesson</h2>
+<p><strong>Skills:</strong> <a href="https://www.aihero.dev/skills">AI Skills for Real Engineers</a> and the <a href="https://github.com/mattpocock/skills">mattpocock/skills repository</a> for the full set and install commands; <a href="https://docs.claude.com/en/docs/agents-and-tools/agent-skills">Anthropic's skills documentation</a> for the format, frontmatter and loading model.</p>
+<p><strong>Tools:</strong> <a href="https://herdr.dev/">herdr</a>, <a href="https://omp.sh/">Oh My Pi</a>, <a href="https://github.com/can1357/oh-my-pi">OMP repository</a>, <a href="https://pi.dev/">Pi</a>, <a href="https://opencode.ai/">OpenCode</a>, <a href="https://developers.openai.com/codex/">Codex</a>, <a href="https://www.anthropic.com/claude-code">Claude Code</a>, <a href="https://cursor.com/">Cursor</a>, <a href="https://code.visualstudio.com/">VS Code</a>.</p>
+<p><strong>Models:</strong> <a href="https://platform.deepseek.com/">DeepSeek</a>, <a href="https://platform.moonshot.ai/">Moonshot Kimi</a>, <a href="https://www.minimax.io/">MiniMax</a>, <a href="https://www.volcengine.com/product/ark">Volcengine Ark (Doubao)</a>, <a href="https://www.alibabacloud.com/en/product/modelstudio">Alibaba Model Studio (Bailian/Qwen)</a>, <a href="https://z.ai/">Z.AI GLM</a>.</p>
+<p><strong>Codebase:</strong> <a href="../assets/examples/0015-document-copilot/index.html">document-copilot</a> — read <code>AGENTS.md</code>, <code>docs/client-brief.md</code> and <code>docs/architecture.md</code> before the first prompt.</p>
+
+<h2>What's next</h2>
+<p><a href="0016-kubernetes-gitops.html">Lesson 16</a> takes the codebase to delivery: Jenkins builds and pushes, Git declares the desired state, and Argo CD reconciles the cluster. <a href="0017-project-supabase-rag-ai-coding.html">Lesson 17</a> then applies this workflow to the capstone — a Supabase RAG product built in gated phases, with the unresolved verification work left visible. The strategy choices continue in the <a href="../reference/skill-map.html">skill map</a>.</p>
+
+<div class="footer-nav">
+  <div class="ask"><strong>Not sure which agent to install?</strong> Start with the one your team already pays for, add a second only when a constraint demands it (sandboxing, model freedom, or parallel sessions), and put the process in skills before you add another tool.</div>
+  <div class="links">
+    <a href="0014-ollama-local-rag.html">← Lesson 14</a>
+    <a href="../reference/skill-map.html">Skill Map &amp; Glossary</a>
+    <a href="../assets/examples/0015-document-copilot/index.html">Document Copilot</a>
+  </div>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</article>
+</body>
+</html>

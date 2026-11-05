@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Example 0013 - Pydantic models, settings, structured output</title>
+<link rel="stylesheet" href="../../course.css">
+</head>
+<body>
+<article class="page">
+
+<p class="meta">Example 0013 · Companion to <a href="../../../lessons/0013-pydantic.html">Lesson 13</a> · <a href="README.md">README</a></p>
+
+<h1>Pydantic at the boundaries</h1>
+
+<p class="lede"><code>basics.py</code> is an offline tour: a dataclass accepts garbage, a <code>BaseModel</code> rejects it; then constraints, validators, nested models, JSON Schema, <code>TypeAdapter</code>, typed settings, and strict mode. <code>structured.py</code> makes one live <strong>DeepSeek</strong> call, hands the <code>Ticket</code> schema to the model, and validates the reply into a Python object before your code touches it.</p>
+
+<h2>Key and run (uv)</h2>
+<pre>cd assets\examples\0013-pydantic
+uv sync
+
+uv run python basics.py            # no key needed
+
+$env:DEEPSEEK_API_KEY = &quot;sk-...&quot;   # or put it in .env
+uv run python structured.py</pre>
+<p>Only <code>structured.py</code> needs <code>DEEPSEEK_API_KEY</code>; without it the script prints the exact lines and exits 1. <code>basics.py</code> runs with no key and no network.</p>
+
+<h2>What basics.py prints (offline)</h2>
+<pre>== 1. dataclass vs BaseModel =================================
+dataclass accepted age=&#x27;not a number&#x27; (str)
+pydantic rejected: Input should be a valid integer, unable to parse string as an integer
+pydantic coerced &quot;25&quot; -&gt; 25 (int)
+
+== 2. required, optional, defaults ===========================
+only required fields: {&#x27;name&#x27;: &#x27;Bob&#x27;, &#x27;age&#x27;: 41, &#x27;email&#x27;: None}
+empty name -&gt; loc=(&#x27;name&#x27;,) type=string_too_short
+bad email -&gt; value is not a valid email address: An email address must have an @-sign.
+
+== 3. constraints and a field validator ======================
+{&#x27;username&#x27;: &#x27;alicedev&#x27;, &#x27;plan&#x27;: &#x27;team&#x27;, &#x27;seats&#x27;: 5}
+custom validator -&gt; Value error, username cannot contain spaces
+
+== 4. nested models, lists, serialization ====================
+city:      Amsterdam
+first:     WIDGET x2
+dict:      {&#x27;sku&#x27;: &#x27;GADGET&#x27;, &#x27;quantity&#x27;: 1, &#x27;unit_price&#x27;: 49.99}
+pattern -&gt; string_pattern_mismatch
+
+== 5. JSON Schema ============================================
+required:   [&#x27;order_id&#x27;, &#x27;customer&#x27;, &#x27;items&#x27;]
+properties: [&#x27;customer&#x27;, &#x27;items&#x27;, &#x27;note&#x27;, &#x27;order_id&#x27;]
+nested:     [&#x27;Address&#x27;, &#x27;Customer&#x27;, &#x27;LineItem&#x27;]
+
+== 7. pydantic-settings ======================================
+api_key:     **********  (masked)
+max_retries: 2
+debug:       False</pre>
+<p>Two details are the whole argument: the dataclass stored <code>"not a number"</code> without complaint, and Pydantic coerced <code>"25"</code> to <code>25</code> only because that conversion is allowed by the field type.</p>
+
+<h2>What structured.py prints (live DeepSeek)</h2>
+<pre>type:    Ticket (validated instance)
+order:   A-1042
+route:   billing
+urgency: 5
+refund:  True
+summary: Order A-1042 was charged twice this month and the customer wants a refund today.
+
+as JSON:
+{
+  &quot;order_id&quot;: &quot;A-1042&quot;,
+  &quot;category&quot;: &quot;billing&quot;,
+  &quot;urgency&quot;: 5,
+  &quot;wants_refund&quot;: true,
+  &quot;summary&quot;: &quot;Order A-1042 was charged twice this month and the customer wants a refund today.&quot;
+}</pre>
+<p>The model did not return a string you have to parse. It called a tool whose arguments match <code>Ticket</code>, and Pydantic constructed the instance.</p>
+
+<h2>The schema is the contract</h2>
+<pre><code>class Ticket(BaseModel):
+    order_id: str = Field(description=&quot;Order id, for example A-1042&quot;)
+    category: Literal[&quot;billing&quot;, &quot;technical&quot;, &quot;other&quot;] = Field(
+        description=&quot;billing for money, technical for product failures&quot;
+    )
+    urgency: int = Field(ge=1, le=5, description=&quot;1 low, 5 urgent&quot;)
+    wants_refund: bool = Field(description=&quot;True only if a refund is requested&quot;)
+    summary: str = Field(description=&quot;One sentence, using only facts in the message&quot;)</code></pre>
+<p><code>with_structured_output</code> converts this model to a JSON Schema, sends it as the function schema, and validates the returned arguments. Descriptions are instructions to the model; <code>Literal</code> makes a route impossible to misspell; <code>ge</code>/<code>le</code> become minimum/maximum in the schema.</p>
+
+<h2>README.md</h2>
+<pre># 0013 — Pydantic: make bad data fail at the boundary
+
+Pydantic is the contract layer of an AI application. It validates the three places bad data enters:
+
+- **inbound** — HTTP bodies, webhook payloads, form fields
+- **outbound** — the JSON an LLM says it produced
+- **configuration** — environment variables and `.env`
+
+`basics.py` runs offline through models, constraints, validators, nested models, JSON Schema, `TypeAdapter`, and typed settings. `structured.py` makes one live **DeepSeek** call and parses the reply into a `Ticket` model.
+
+## Run
+
+```powershell
+cd assets\examples\0013-pydantic
+uv sync
+
+uv run python basics.py            # no key needed
+
+$env:DEEPSEEK_API_KEY = &quot;sk-...&quot;   # or put it in .env
+uv run python structured.py
+```
+
+## What `basics.py` prints (real run)
+
+```
+== 1. dataclass vs BaseModel =================================
+dataclass accepted age=&#x27;not a number&#x27; (str)
+pydantic rejected: Input should be a valid integer, unable to parse string as an integer
+pydantic coerced &quot;25&quot; -&gt; 25 (int)
+
+== 2. required, optional, defaults ===========================
+only required fields: {&#x27;name&#x27;: &#x27;Bob&#x27;, &#x27;age&#x27;: 41, &#x27;email&#x27;: None}
+empty name -&gt; loc=(&#x27;name&#x27;,) type=string_too_short
+bad email -&gt; value is not a valid email address: An email address must have an @-sign.
+
+== 3. constraints and a field validator ======================
+{&#x27;username&#x27;: &#x27;alicedev&#x27;, &#x27;plan&#x27;: &#x27;team&#x27;, &#x27;seats&#x27;: 5}
+custom validator -&gt; Value error, username cannot contain spaces
+
+== 4. nested models, lists, serialization ====================
+city:      Amsterdam
+first:     WIDGET x2
+dict:      {&#x27;sku&#x27;: &#x27;GADGET&#x27;, &#x27;quantity&#x27;: 1, &#x27;unit_price&#x27;: 49.99}
+pattern -&gt; string_pattern_mismatch
+
+== 5. JSON Schema ============================================
+required:   [&#x27;order_id&#x27;, &#x27;customer&#x27;, &#x27;items&#x27;]
+properties: [&#x27;customer&#x27;, &#x27;items&#x27;, &#x27;note&#x27;, &#x27;order_id&#x27;]
+nested:     [&#x27;Address&#x27;, &#x27;Customer&#x27;, &#x27;LineItem&#x27;]
+
+== 7. pydantic-settings ======================================
+api_key:     **********  (masked)
+max_retries: 2
+debug:       False
+```
+
+If you copy `.env.example` to `.env`, the settings section picks up `DEMO_MAX_RETRIES=3` and `DEMO_DEBUG=true` instead of the defaults.
+
+## What `structured.py` prints (live DeepSeek)
+
+```
+ticket schema:
+{
+  &quot;description&quot;: &quot;What we want out of a support message.&quot;,
+  &quot;properties&quot;: {
+    &quot;order_id&quot;: {&quot;description&quot;: &quot;Order id, for example A-1042&quot;, &quot;type&quot;: &quot;string&quot;},
+    &quot;category&quot;: {&quot;enum&quot;: [&quot;billing&quot;, &quot;technical&quot;, &quot;other&quot;], &quot;type&quot;: &quot;string&quot;},
+    &quot;urgency&quot;: {&quot;maximum&quot;: 5, &quot;minimum&quot;: 1, &quot;type&quot;: &quot;integer&quot;},
+    ...
+  },
+  &quot;required&quot;: [&quot;order_id&quot;, &quot;category&quot;, &quot;urgency&quot;, &quot;wants_refund&quot;, &quot;summary&quot;],
+  &quot;title&quot;: &quot;Ticket&quot;,
+  &quot;type&quot;: &quot;object&quot;
+}
+
+type:    Ticket (validated instance)
+order:   A-1042
+route:   billing
+urgency: 5
+refund:  True
+summary: Order A-1042 was charged twice this month and the customer wants a refund today.
+
+as JSON:
+{
+  &quot;order_id&quot;: &quot;A-1042&quot;,
+  &quot;category&quot;: &quot;billing&quot;,
+  &quot;urgency&quot;: 5,
+  &quot;wants_refund&quot;: true,
+  &quot;summary&quot;: &quot;Order A-1042 was charged twice this month and the customer wants a refund today.&quot;
+}
+```
+
+The schema is not decoration: `with_structured_output` hands it to DeepSeek as the function/tool schema, and the reply is validated into `Ticket` before your code sees it.
+
+## The five habits
+
+1. **Put a model at every boundary.** A dict flowing through five functions is untyped; a `Ticket` is checked once and trusted after that.
+2. **Use `Field` before a validator.** `ge`, `le`, `min_length`, `pattern` are declarative, appear in the JSON Schema, and are enforced by FastAPI and the model API. Write a validator only for business logic.
+3. **Validate cross-field rules with `model_validator`.** `start &lt;= end`, `discount &lt; total`, `refund &lt;= charge` — a single field cannot see the other.
+4. **Use `pydantic-settings` for config.** `os.getenv` returns `str | None`; `BaseSettings` returns typed fields and fails at startup, not at the first request. `SecretStr` keeps keys out of logs.
+5. **Let the schema be the contract with the model.** Descriptions on fields become instructions to the LLM. A `Literal` is how you make a route impossible to misspell.
+
+## `model_validate` vs `**data`
+
+Both construct a model; `model_validate` takes the dict as one value and supports options such as `strict=True`. Use `**data` in small scripts and `model_validate` at boundaries where the payload is already a dict from an API, queue, or file.
+
+`model_dump()` returns Python objects; `model_dump_json()` returns a JSON string. `model_copy(update={...})` returns a copy with the updates applied — note that Pydantic does not revalidate those updates, so call `model_validate` on the dumped dict if the edit must be checked.
+
+## Files
+
+| file | role |
+|---|---|
+| `basics.py` | offline tour: models, fields, validators, nesting, schema, settings, strict mode |
+| `structured.py` | live DeepSeek extraction into a `Ticket` |
+| `common.py` | one `ChatDeepSeek` builder and the missing-key message |
+| `.env.example` | copy to `.env` for the key and the settings demo |
+| `pyproject.toml` | uv project: pydantic, pydantic-settings, email-validator, langchain, langchain-deepseek |
+
+## If it fails
+
+- **`DEEPSEEK_API_KEY is not set`** — only `structured.py` needs it. Copy the three lines the script prints, or create `.env` from `.env.example`.
+- **`ValidationError` on a field you thought was valid** — read `error.errors()`: each item has `loc`, `msg`, and `type`. `loc` is the path, including list indexes and nested models.
+- **`EmailStr` import error** — `email-validator` is missing. It is in `pyproject.toml`; run `uv sync`.
+- **The model returns the wrong shape** — the provider chose a different tool. Check that `method=&quot;function_calling&quot;` is supported by the model, and keep the schema small. Descriptions are part of the prompt.
+- **`model_validate` rejects a dict that `Model(**dict)` accepted** — they should agree; if not, you are probably passing a non-dict or using `strict=True` somewhere. Print `type(payload)` first.
+</pre>
+
+<h2>basics.py</h2>
+<pre>&quot;&quot;&quot;Pydantic, from the first model to validated settings - all offline.
+
+Run from this folder:
+
+    uv sync
+    uv run python basics.py
+
+No API key is needed. `structured.py` is the live DeepSeek half.
+&quot;&quot;&quot;
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Literal
+
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    SecretStr,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def heading(text: str) -&gt; None:
+    print(f&quot;\n== {text} &quot; + &quot;=&quot; * max(0, 58 - len(text)))
+
+
+# --- 1. a dataclass stores, a model checks ---------------------------------
+
+
+@dataclass
+class DataUser:
+    name: str
+    age: int
+
+
+class User(BaseModel):
+    name: str = Field(min_length=1, max_length=50)
+    age: int = Field(ge=0, le=120)
+    email: EmailStr | None = None
+
+
+heading(&quot;1. dataclass vs BaseModel&quot;)
+raw = DataUser(name=&quot;Alice&quot;, age=&quot;not a number&quot;)  # type: ignore[arg-type]
+print(f&quot;dataclass accepted age={raw.age!r} ({type(raw.age).__name__})&quot;)
+
+try:
+    User(name=&quot;Alice&quot;, age=&quot;not a number&quot;)
+except ValidationError as error:
+    print(f&quot;pydantic rejected: {error.errors()[0][&#x27;msg&#x27;]}&quot;)
+
+coerced = User(name=&quot;Alice&quot;, age=&quot;25&quot;)
+print(f&#x27;pydantic coerced &quot;25&quot; -&gt; {coerced.age!r} ({type(coerced.age).__name__})&#x27;)
+
+
+# --- 2. required, optional, defaults ---------------------------------------
+
+
+heading(&quot;2. required, optional, defaults&quot;)
+print(f&quot;only required fields: {User(name=&#x27;Bob&#x27;, age=41).model_dump()}&quot;)
+print(f&quot;nullable field:       {User(name=&#x27;Bob&#x27;, age=41, email=None).email}&quot;)
+
+try:
+    User(name=&quot;&quot;, age=41)
+except ValidationError as error:
+    detail = error.errors()[0]
+    print(f&quot;empty name -&gt; loc={detail[&#x27;loc&#x27;]} type={detail[&#x27;type&#x27;]}&quot;)
+
+try:
+    User(name=&quot;Bob&quot;, age=41, email=&quot;not-an-email&quot;)
+except ValidationError as error:
+    print(f&quot;bad email -&gt; {error.errors()[0][&#x27;msg&#x27;]}&quot;)
+
+
+# --- 3. constraints are data, not prose ------------------------------------
+
+
+class Signup(BaseModel):
+    username: str = Field(min_length=3, max_length=20)
+    plan: Literal[&quot;free&quot;, &quot;team&quot;, &quot;enterprise&quot;]
+    seats: int = Field(default=1, ge=1, le=500)
+
+    @field_validator(&quot;username&quot;)
+    @classmethod
+    def no_spaces(cls, value: str) -&gt; str:
+        if &quot; &quot; in value:
+            raise ValueError(&quot;username cannot contain spaces&quot;)
+        return value.lower()
+
+
+heading(&quot;3. constraints and a field validator&quot;)
+print(Signup(username=&quot;AliceDev&quot;, plan=&quot;team&quot;, seats=5).model_dump())
+try:
+    Signup(username=&quot;Alice Dev&quot;, plan=&quot;team&quot;)
+except ValidationError as error:
+    print(f&quot;custom validator -&gt; {error.errors()[0][&#x27;msg&#x27;]}&quot;)
+
+
+class DateRange(BaseModel):
+    start: int
+    end: int
+
+    @model_validator(mode=&quot;after&quot;)
+    def ordered(self) -&gt; &quot;DateRange&quot;:
+        if self.start &gt; self.end:
+            raise ValueError(&quot;start must be &lt;= end&quot;)
+        return self
+
+
+heading(&quot;3b. a model validator sees both fields&quot;)
+print(DateRange(start=1, end=9).model_dump())
+try:
+    DateRange(start=9, end=1)
+except ValidationError as error:
+    print(f&quot;cross-field -&gt; {error.errors()[0][&#x27;msg&#x27;]}&quot;)
+
+
+# --- 4. nested models and lists --------------------------------------------
+
+
+class Address(BaseModel):
+    city: str
+    country: str
+
+
+class Customer(BaseModel):
+    name: str
+    address: Address
+
+
+class LineItem(BaseModel):
+    sku: str
+    quantity: int = Field(ge=1)
+    unit_price: float = Field(ge=0)
+
+
+class Order(BaseModel):
+    order_id: str = Field(pattern=r&quot;^ORD-\d+$&quot;)
+    customer: Customer
+    items: list[LineItem]
+    note: str | None = None
+
+
+heading(&quot;4. nested models, lists, serialization&quot;)
+payload = {
+    &quot;order_id&quot;: &quot;ORD-1042&quot;,
+    &quot;customer&quot;: {
+        &quot;name&quot;: &quot;Dana&quot;,
+        &quot;address&quot;: {&quot;city&quot;: &quot;Amsterdam&quot;, &quot;country&quot;: &quot;NL&quot;},
+    },
+    &quot;items&quot;: [
+        {&quot;sku&quot;: &quot;WIDGET&quot;, &quot;quantity&quot;: 2, &quot;unit_price&quot;: 29.99},
+        {&quot;sku&quot;: &quot;GADGET&quot;, &quot;quantity&quot;: 1, &quot;unit_price&quot;: 49.99},
+    ],
+}
+order = Order.model_validate(payload)
+print(f&quot;city:      {order.customer.address.city}&quot;)
+print(f&quot;first:     {order.items[0].sku} x{order.items[0].quantity}&quot;)
+print(f&quot;dict:      {order.model_dump()[&#x27;items&#x27;][1]}&quot;)
+print(f&quot;json head: {order.model_dump_json()[:80]}...&quot;)
+
+try:
+    Order.model_validate({**payload, &quot;order_id&quot;: &quot;1042&quot;})
+except ValidationError as error:
+    print(f&quot;pattern -&gt; {error.errors()[0][&#x27;type&#x27;]}&quot;)
+
+
+# --- 5. JSON Schema: the bridge to tools and LLMs --------------------------
+
+
+heading(&quot;5. JSON Schema&quot;)
+schema = Order.model_json_schema()
+print(f&quot;required:   {schema[&#x27;required&#x27;]}&quot;)
+print(f&quot;properties: {sorted(schema[&#x27;properties&#x27;])}&quot;)
+print(f&quot;nested:     {sorted(schema[&#x27;$defs&#x27;])}&quot;)
+
+
+# --- 6. TypeAdapter: validate a list without a wrapper model ---------------
+
+
+heading(&quot;6. TypeAdapter for a bare list&quot;)
+items = TypeAdapter(list[LineItem]).validate_python(
+    [{&quot;sku&quot;: &quot;WIDGET&quot;, &quot;quantity&quot;: 2, &quot;unit_price&quot;: 29.99}]
+)
+print(f&quot;{len(items)} item(s), first sku={items[0].sku}&quot;)
+
+
+# --- 7. typed settings: fail at boot, not at request ----------------------
+
+
+class DemoSettings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix=&quot;DEMO_&quot;, env_file=&quot;.env&quot;, extra=&quot;ignore&quot;
+    )
+
+    api_key: SecretStr = SecretStr(&quot;not-set&quot;)
+    max_retries: int = Field(default=2, ge=0, le=5)
+    debug: bool = False
+
+
+heading(&quot;7. pydantic-settings&quot;)
+settings = DemoSettings()
+print(f&quot;api_key:     {settings.api_key}  (masked)&quot;)
+print(f&quot;max_retries: {settings.max_retries}&quot;)
+print(f&quot;debug:       {settings.debug}&quot;)
+print(&quot;values come from DEMO_API_KEY / DEMO_MAX_RETRIES / DEMO_DEBUG or defaults&quot;)
+
+
+# --- 8. strict mode is available, but not the default ----------------------
+
+
+class StrictUser(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    name: str
+    age: int
+
+
+heading(&quot;8. strict mode&quot;)
+try:
+    StrictUser(name=&quot;Alice&quot;, age=&quot;25&quot;)  # type: ignore[arg-type]
+except ValidationError as error:
+    print(f&quot;strict rejects the string: {error.errors()[0][&#x27;msg&#x27;]}&quot;)
+
+print(&quot;\ndone: models, fields, validators, nesting, schema, settings.&quot;)
+</pre>
+
+<h2>structured.py</h2>
+<pre>&quot;&quot;&quot;Live DeepSeek extraction with a Pydantic schema.
+
+Run from this folder:
+
+    uv sync
+    $env:DEEPSEEK_API_KEY = &quot;sk-...&quot;
+    uv run python structured.py
+
+The model is asked for a `Ticket`; LangChain turns the Pydantic JSON Schema into
+a tool schema, DeepSeek calls it, and Pydantic validates the arguments before
+you ever touch the object.
+&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import json
+import sys
+from typing import Literal
+
+from langchain_core.messages import HumanMessage, SystemMessage
+from pydantic import BaseModel, Field, ValidationError
+
+from common import build_model
+
+TICKET_TEXT = (
+    &quot;Order A-1042 was charged twice this month. &quot;
+    &quot;I want a refund today, please. My email is dana@example.com.&quot;
+)
+
+
+class Ticket(BaseModel):
+    &quot;&quot;&quot;What we want out of a support message.&quot;&quot;&quot;
+
+    order_id: str = Field(description=&quot;Order id, for example A-1042&quot;)
+    category: Literal[&quot;billing&quot;, &quot;technical&quot;, &quot;other&quot;] = Field(
+        description=&quot;billing for money, technical for product failures&quot;
+    )
+    urgency: int = Field(ge=1, le=5, description=&quot;1 low, 5 urgent&quot;)
+    wants_refund: bool = Field(description=&quot;True only if a refund is requested&quot;)
+    summary: str = Field(description=&quot;One sentence, using only facts in the message&quot;)
+
+
+SYSTEM = &quot;Extract the support ticket. Use only facts present in the message.&quot;
+
+
+def main() -&gt; int:
+    try:
+        model = build_model()
+    except RuntimeError as error:
+        print(f&quot;error: {error}&quot;, file=sys.stderr)
+        return 1
+
+    schema = Ticket.model_json_schema()
+    print(&quot;ticket schema:&quot;)
+    print(json.dumps(schema, indent=2))
+    print(f&quot;\nrequired fields: {schema[&#x27;required&#x27;]}\n&quot;)
+
+    extractor = model.with_structured_output(Ticket, method=&quot;function_calling&quot;)
+    try:
+        ticket = extractor.invoke(
+            [SystemMessage(content=SYSTEM), HumanMessage(content=TICKET_TEXT)]
+        )
+    except Exception as error:  # noqa: BLE001 - show the provider error, keep exit 1
+        print(f&quot;error: {type(error).__name__}: {error}&quot;, file=sys.stderr)
+        print(&quot;check DEEPSEEK_API_KEY, balance, and network access.&quot;, file=sys.stderr)
+        return 1
+
+    print(f&quot;type:    {type(ticket).__name__} (validated instance)&quot;)
+    print(f&quot;order:   {ticket.order_id}&quot;)
+    print(f&quot;route:   {ticket.category}&quot;)
+    print(f&quot;urgency: {ticket.urgency}&quot;)
+    print(f&quot;refund:  {ticket.wants_refund}&quot;)
+    print(f&quot;summary: {ticket.summary}&quot;)
+    print(&quot;\nas JSON:&quot;)
+    print(ticket.model_dump_json(indent=2))
+    return 0
+
+
+if __name__ == &quot;__main__&quot;:
+    raise SystemExit(main())
+</pre>
+
+<h2>common.py</h2>
+<pre>&quot;&quot;&quot;One ChatDeepSeek builder for the live structured-output script.
+
+`basics.py` needs no key. Only `structured.py` does:
+
+  PowerShell (this session):  $env:DEEPSEEK_API_KEY = &quot;sk-...&quot;
+  .env (this folder):         DEEPSEEK_API_KEY=sk-...
+
+Get a key at https://platform.deepseek.com/api_keys. No key -&gt; a clear message
+and exit 1, never a guess.
+&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import os
+
+from dotenv import load_dotenv
+from langchain_deepseek import ChatDeepSeek
+
+load_dotenv()
+
+MODEL = os.getenv(&quot;DEEPSEEK_MODEL&quot;, &quot;deepseek-flash&quot;)
+BASE_URL = os.getenv(&quot;DEEPSEEK_BASE_URL&quot;, &quot;https://api.deepseek.com&quot;)
+
+
+def missing_key_message() -&gt; str:
+    return (
+        &quot;DEEPSEEK_API_KEY is not set.\n&quot;
+        &#x27;  PowerShell (this session):  $env:DEEPSEEK_API_KEY = &quot;sk-...&quot;\n&#x27;
+        &quot;  .env (this folder):         DEEPSEEK_API_KEY=sk-...\n&quot;
+        &quot;  Get a key:                  https://platform.deepseek.com/api_keys&quot;
+    )
+
+
+def build_model() -&gt; ChatDeepSeek:
+    key = os.getenv(&quot;DEEPSEEK_API_KEY&quot;)
+    if not key:
+        raise RuntimeError(missing_key_message())
+
+    return ChatDeepSeek(
+        model=MODEL,
+        api_key=key,
+        api_base=BASE_URL,
+        temperature=0,
+        max_retries=2,
+        timeout=60,
+        extra_body={&quot;thinking&quot;: {&quot;type&quot;: &quot;disabled&quot;}},
+    )
+</pre>
+
+
+<h2>Files</h2>
+<table>
+  <thead><tr><th>file</th><th>role</th></tr></thead>
+  <tbody>
+    <tr><td><code>basics.py</code></td><td>offline: models, fields, validators, nesting, schema, settings</td></tr>
+    <tr><td><code>structured.py</code></td><td>live DeepSeek extraction into a Ticket</td></tr>
+    <tr><td><code>common.py</code></td><td>one ChatDeepSeek builder and the missing-key message</td></tr>
+    <tr><td><code>.env.example</code></td><td>copy to .env for the key and the settings demo</td></tr>
+    <tr><td><code>pyproject.toml</code></td><td>uv project: pydantic, pydantic-settings, email-validator, langchain</td></tr>
+  </tbody>
+</table>
+
+<div class="footer-nav">
+  <div class="ask"><strong>Validation error you did not expect?</strong> Print <code>error.errors()</code>. Each item has <code>loc</code>, <code>msg</code>, and <code>type</code>; <code>loc</code> is the path through nested models and list indexes, which is usually enough to find the bad field.</div>
+  <div class="links">
+    <a href="../../../lessons/0013-pydantic.html">← Lesson 13</a>
+    <a href="README.md">README</a>
+    <a href="../../../lessons/0002-your-first-llm-api-call.html">Lesson 2</a>
+  </div>
+</div>
+
+</article>
+</body>
+</html>

@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 10 — LangGraph: One Node, Then a Branch</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<article class="page">
+
+<p class="meta">Lesson 10 of the AI Engineering course · ~40 min · Prereq: <a href="0002-your-first-llm-api-call.html">Lesson 2</a> (structured output) + <a href="0003-function-calling.html">Lesson 3</a> · <a href="../reference/skill-map.html">Skill Map →</a></p>
+
+<h1>LangGraph: One Node, Then a Branch</h1>
+
+<p class="lede">A one-node graph is a chatbot wearing a diagram. The moment an edge chooses between two nodes, you have something a prompt cannot be: <strong>a program with a visible decision.</strong> This lesson builds both, in that order, with DeepSeek behind every node.</p>
+
+<div class="callout win">
+  <span class="label">Your win this lesson</span>
+  You'll compile a one-node graph, then a classifier that routes NimbusDesk messages to a billing or technical specialist — and read the trace that proves which path ran. You'll also break the edge twice, because that is where the extra <code>router</code> node stops being a mystery.
+</div>
+
+<h2>Part 1 — The smallest graph in the world</h2>
+
+<p><code>simple.py</code> is one model call inside one node. It is deliberately underwhelming: the point is to see all four declarations before adding anything to them.</p>
+
+<pre><code>class State(TypedDict):
+    messages: Annotated[list, add_messages]
+
+
+def chatbot(state: State) -&gt; dict:
+    return {"messages": [model.invoke(state["messages"])]}
+
+
+graph = StateGraph(State)
+graph.add_node("chatbot", chatbot)
+graph.add_edge(START, "chatbot")
+graph.add_edge("chatbot", END)
+app = graph.compile()</code></pre>
+
+<table>
+  <thead><tr><th>declaration</th><th>what it is here</th><th>why it exists</th></tr></thead>
+  <tbody>
+    <tr><td><strong>State</strong></td><td>a <code>TypedDict</code> holding <code>messages</code></td><td>the one object every node reads and writes</td></tr>
+    <tr><td><strong>reducer</strong></td><td><code>Annotated[list, add_messages]</code></td><td>how a field merges an update instead of being replaced</td></tr>
+    <tr><td><strong>node</strong></td><td><code>chatbot</code>, a plain function</td><td>the work: call the model, run the tool, read the file</td></tr>
+    <tr><td><strong>edge</strong></td><td><code>START → chatbot → END</code></td><td>who runs next; a cycle is allowed here, unlike a chain</td></tr>
+    <tr><td><strong>compile</strong></td><td><code>graph.compile()</code></td><td>validates the declarations and returns a runnable app</td></tr>
+  </tbody>
+</table>
+
+<p><strong>A node returns a delta, never the new state.</strong> <code>{"messages": [reply]}</code> means "one more message"; <code>add_messages</code> merges it. If you wrote <code>messages: list</code> and dropped the annotation, the same line would <em>replace</em> the history — the graph would still run, which is what makes that bug dangerous. Try it: the run completes, and the final state holds one message instead of two.</p>
+
+<p>Real run of <code>simple.py</code>, live DeepSeek:</p>
+
+<pre><code>question: In one sentence, what does a router do in a LangGraph?
+reply:    A router in LangGraph directs the flow of execution by conditionally selecting which node(s) to run next based on the current state, enabling branching and dynamic control flow in the graph.
+
+state: 2 messages (human, ai)
+edges:
+  __start__ -&gt; chatbot
+  chatbot -&gt; __end__</code></pre>
+
+<figure>
+  <img src="../assets/examples/0010-langgraph/output1.png" alt="LangGraph diagram: START points to chatbot, chatbot points to END" width="220">
+  <figcaption>The compiled one-node graph. Two edges, no branch — the diagram is the declarations you just read.</figcaption>
+</figure>
+
+<p>Two details are worth remembering. The edges print <code>__start__</code> and <code>__end__</code> because those are real sentinel nodes, not comments. And <code>compile()</code> is not ceremony: it is where the graph checks that every edge points at a node that exists, then hands you an object with <code>invoke</code>, <code>stream</code> and <code>batch</code> — the same interface as any LangChain runnable from lesson 2.</p>
+
+<h2>Part 2 — Make it decide</h2>
+
+<p>A branch needs a <em>labeled</em> decision. Here the label is a NimbusDesk topic — <code>billing</code> or <code>technical</code> — so each route can carry its own facts and its own prompt. The label comes from a pydantic schema:</p>
+
+<pre><code>class Route(BaseModel):
+    route: Literal["billing", "technical"] = Field(
+        description="billing for money questions, technical for product failures"
+    )
+
+classifier = model.with_structured_output(Route, method="function_calling")</code></pre>
+
+<p>This is lesson 2's structured output doing the routing. It matters that the type is a <code>Literal</code>: the model cannot return "probably billing" or "refund question", because the schema has exactly two legal values. Compare that with the tempting alternative — <code>if "refund" in reply.content</code> — which fails on spelling, paraphrase, and a message that mentions both. The classifier is still a model call, so it can be <em>wrong</em>; it just cannot be <em>malformed</em>. Wrongness is an eval problem (lesson 5), not a graph problem.</p>
+
+<p>State gains one field for the label, and the graph gains one conditional edge:</p>
+
+<pre><code>class State(TypedDict):
+    messages: Annotated[list, add_messages]
+    route: str | None
+
+
+def classify(state: State) -&gt; dict:
+    decision = classifier.invoke(
+        [SystemMessage(content=CLASSIFY_PROMPT), state["messages"][-1]]
+    )
+    return {"route": decision.route}
+
+
+def pick_specialist(state: State) -&gt; str:
+    return state["route"] or "technical"
+
+
+graph.add_conditional_edges(
+    "classify",
+    pick_specialist,
+    {"billing": "billing", "technical": "technical"},
+)</code></pre>
+
+<p>The second argument is a function; the third is the map from its return value to a node. That map is the whole branch, visible as data — and as a picture:</p>
+
+<figure>
+  <img src="../assets/examples/0010-langgraph/output.png" alt="LangGraph diagram: START to classify, dashed conditional edges to billing and technical, both to END" width="345">
+  <figcaption>Dotted edges are conditional: <code>classify</code> runs, then exactly one specialist does. <code>main.py --mermaid</code> prints this same graph as source.</figcaption>
+</figure>
+
+<p>Real runs, one per route:</p>
+
+<pre><code>$ uv run python main.py "How long is the refund window on an annual plan?"
+route:  billing
+answer: A full refund is available within 14 days of the initial charge. After day
+14, annual plans are refunded pro rata minus the months used.</code></pre>
+
+<pre><code>$ uv run python main.py "Outlook sync keeps failing with error E-311. What do I do?" --trace
+question: Outlook sync keeps failing with error E-311. What do I do?
+step 1  classify   route=technical
+step 2  technical  replied (123 chars)
+
+answer: Error E-311 means the mailbox storage quota was exceeded. To fix it, archive
+conversations or raise the seat storage limit.</code></pre>
+
+<p><code>stream_mode="updates"</code> yields one dict per node — <code>{"classify": {"route": ...}}</code>, then <code>{"technical": {"messages": [...]}}</code>. That is lesson 4's "watch it happen" habit one level up: not tokens, <strong>transitions</strong>. The billing run never mentions E-311, and the technical run never mentions refunds, because only one specialist ran.</p>
+
+<h2>Part 3 — The node you can delete</h2>
+
+<p>A common first version puts a third node between the classifier and the specialists:</p>
+
+<pre><code>graph.add_node("router", router)              # returns {"next": "billing"}
+graph.add_edge("classifier", "router")
+graph.add_conditional_edges("router", lambda state: state.get("next"), {...})</code></pre>
+
+<p>It works. It is also a decision pretending to be work. The <code>router</code> function calls no model, reads no file, and changes nothing a user can see; it computes a string and stores it so an edge can read it back. Move that string to where it is used:</p>
+
+<pre><code>graph.add_conditional_edges("classify", pick_specialist, {...})</code></pre>
+
+<p>Three things improve. <strong>One fewer superstep per turn</strong> — the classifier's delta routes directly. <strong>No stale field</strong> — <code>next</code> is not persisted, so it cannot disagree with the route a later turn computed. And <strong>the contract is explicit</strong> — the edge's return value must be a key in the map. The rule underneath: <em>nodes do work; edges decide.</em></p>
+
+<p>This distinction is not style. The two roles accept different return types, and the errors are blunt about it. Both of these were run against this graph:</p>
+
+<table>
+  <thead><tr><th>the edge function returns…</th><th>result</th><th>what it means</th></tr></thead>
+  <tbody>
+    <tr><td><code>"refunds"</code> — not in the map</td><td><code>KeyError: 'refunds'</code></td><td>the map is a whitelist, not a suggestion</td></tr>
+    <tr><td><code>{"next": "billing"}</code> — a delta</td><td><code>TypeError: unhashable type: 'dict'</code></td><td>an edge returns a key; deltas belong in nodes</td></tr>
+  </tbody>
+</table>
+
+<p>The second error is the node/edge split-brain case in one line: a <em>node</em> may return <code>{"next": ...}</code>, because nodes return deltas. An <em>edge</em> must return a node name, <code>END</code>, or a list of names. If you copy the router's body into the edge and forget to drop the dict, LangGraph tries to hash it as a key. The traceback tells you which role you are actually in.</p>
+
+<h2>Part 4 — State is not memory</h2>
+
+<p>A plain chat loop keeps a dict and appends each user message before invoking the graph. That is correct, and it exposes the limit: <strong>without a checkpointer, the returned state is the only memory there is.</strong> Our REPL does the same thing with the state that <code>invoke</code> returns:</p>
+
+<pre><code>state = app.invoke(
+    {**state, "messages": state["messages"] + [HumanMessage(content=text)]}
+)</code></pre>
+
+<p>Exit the process and the conversation is gone. Notice also what our specialists receive: <em>all</em> messages in state, not just the last one. A two-message prompt per turn would quietly throw history away. Here the state carries it and the node decides what to send — the node is the only place that choice should live.</p>
+
+<p>A checkpointer plus a <code>thread_id</code> makes the graph read its own history back from a database, so a second process can continue the same conversation. That is the production step this lesson stops short of; the important part today is that the graph is already shaped to accept it.</p>
+
+<h2>Part 5 — When a branch beats an if</h2>
+
+<p>Honesty first: for <em>one</em> branch, an <code>if</code> statement is shorter and has no dependency. A graph earns its keep when the decision has to be visible, tested, or extended.</p>
+
+<table>
+  <thead><tr><th>situation</th><th>use</th></tr></thead>
+  <tbody>
+    <tr><td>one prompt, maybe one tool call</td><td>plain function — lesson 3</td></tr>
+    <tr><td>one branch chosen from a typed label</td><td>an <code>if</code> is fine; a graph is already reasonable</td></tr>
+    <tr><td>several routes, each with its own prompt and tools</td><td>LangGraph: the map is the documentation</td></tr>
+    <tr><td>need per-step traces, resume, or human approval</td><td>LangGraph: the checkpointer is the deciding feature</td></tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <span class="label">Interview · "Why not just if/else?"</span>
+  "For one branch I do use if/else. I move to a graph when the routing stops fitting in one head: multiple specialists, per-node prompts and tools, and a trace that shows which path ran. The graph also gives me reducers so state merges by rule, and a checkpointer so a run can resume — the branch itself is only the visible part. The classifier is structured output, so the route is a validated label rather than a string match, and I grade the classifier separately because a wrong route is an eval failure, not a graph failure."
+</div>
+
+<h2>Check yourself</h2>
+
+<div class="quiz">
+<script type="application/json">
+{
+  "questions": [
+    {
+      "q": "What does a LangGraph node return?",
+      "options": [
+        "The complete updated state object",
+        "A delta that the reducer merges",
+        "The name of the next node to run",
+        "Nothing, because it mutates state"
+      ],
+      "correct": 1,
+      "explain": "Nodes return partial updates such as {\"messages\": [reply]}; the reducer decides how to merge them. Returning the whole state would break merging and history."
+    },
+    {
+      "q": "What does Annotated[list, add_messages] declare?",
+      "options": [
+        "The maximum number of stored messages",
+        "The merge rule for the messages field",
+        "The model's context window budget",
+        "A schema for the message JSON payload"
+      ],
+      "correct": 1,
+      "explain": "The annotation attaches a reducer: append new messages, replace by id on updates. Without it, the field is last-write-wins and history collapses."
+    },
+    {
+      "q": "What must a conditional-edge function return?",
+      "options": [
+        "A state delta for the next node",
+        "A boolean that ends the graph",
+        "A key that names the next node",
+        "The full message history list"
+      ],
+      "correct": 2,
+      "explain": "The edge function returns a node name, END, or a list of names. Returning a dict produces TypeError: unhashable type: 'dict' because LangGraph looks it up as a key."
+    },
+    {
+      "q": "Why does this lab delete the extra router node?",
+      "options": [
+        "The decision belongs in the edge, not in a node",
+        "Router nodes are unsupported in LangGraph 1.x",
+        "The classifier cannot return a string label",
+        "Conditional edges require exactly two nodes"
+      ],
+      "correct": 0,
+      "explain": "A router node does no work; it stores a string for an edge to read back. Putting the decision in the edge removes a superstep and a stale state field."
+    },
+    {
+      "q": "Why classify with with_structured_output(Route)?",
+      "options": [
+        "It makes the model call faster and cheaper",
+        "It guarantees the route is factually correct",
+        "It lets the edge skip the mapping table",
+        "It returns a validated label, not free prose"
+      ],
+      "correct": 3,
+      "explain": "The pydantic Literal makes malformed routes impossible: the model can only return billing or technical. It can still choose the wrong one, which is an eval problem."
+    },
+    {
+      "q": "What happens without a checkpointer?",
+      "options": [
+        "The graph cannot compile or run at all",
+        "The state dies with the process, so no resume",
+        "Nodes stop returning deltas to the reducer",
+        "Conditional edges become plain edges"
+      ],
+      "correct": 1,
+      "explain": "The returned state is the only memory. A checkpointer plus thread_id persists snapshots so a new process can resume the same conversation."
+    },
+    {
+      "q": "Which task belongs in a node rather than an edge?",
+      "options": [
+        "Choosing between billing and technical",
+        "Deciding whether to stop the graph",
+        "Calling the model and returning its reply",
+        "Mapping a label to a node name"
+      ],
+      "correct": 2,
+      "explain": "Nodes do work: model calls, tools, file reads. Edges decide who runs next. The rule is short and it explains every error in Part 3."
+    }
+  ]
+}
+</script>
+</div>
+
+<h2>Primary sources for this lesson</h2>
+<p><a href="https://langchain-ai.github.io/langgraph/">LangGraph documentation</a> — the concepts pages for state, nodes, edges and conditional edges; read them after running the code, when the vocabulary has something to attach to.</p>
+<p>On the LangChain side: <a href="https://docs.langchain.com/oss/python/langchain/models">Models and structured output</a> for <code>with_structured_output</code>, and the <a href="https://docs.langchain.com/oss/python/integrations/chat/deepseek">ChatDeepSeek integration page</a> for the model handle used here.</p>
+
+<h2>What's next</h2>
+<p><a href="0011-langgraph-advanced.html">Lesson 11</a> scales the same graph up: three searches fan out, three analyses join, and one list edge is the difference between waiting for every branch and firing early. Lessons 12–16 widen the picture: the library map, the contract layer, a local model, the coding workflow and delivery.</p>
+
+<div class="footer-nav">
+  <div class="ask"><strong>Graph compiled but the wrong branch ran?</strong> Print the classifier's <code>route</code> first — if the label is wrong, the graph obeyed you correctly. If the label is right and the wrong node ran, compare the returned string with the keys in your conditional-edge map.</div>
+  <div class="links">
+    <a href="0009-mcp.html">← Lesson 9</a>
+    <a href="../reference/skill-map.html">Skill Map &amp; Glossary</a>
+    <a href="../assets/examples/0010-langgraph/index.html">Example page</a>
+  </div>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</article>
+</body>
+</html>

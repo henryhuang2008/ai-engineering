@@ -1,0 +1,10 @@
+[project]
+name = "0005-first-evals"
+version = "0.1.0"
+description = "Lesson 5 lab: dataset, scorer, runner, and gate with LangChain + DeepSeek"
+requires-python = ">=3.11"
+dependencies = [
+    "langchain>=1.4,<2",
+    "langchain-deepseek>=1.1,<2",
+    "pydantic>=2.9,<3",
+]

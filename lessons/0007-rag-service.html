@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 7 — The RAG Service: Two Lanes, One Table</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<article class="page">
+
+<p class="meta">Lesson 7 of the AI Engineering course · ~55 min · Prereq: <a href="0006-rag-foundation.html">Lesson 6</a> · <a href="../reference/skill-map.html">Skill Map →</a></p>
+
+<h1>The RAG Service: Two Lanes, One Table</h1>
+
+<p class="lede">Lesson 6 was the map. This is the build: a real corpus, a real index, and a real answer with citations. The pipeline becomes two commands — one that runs when documents change, one that runs on every question — and the seam between them is a single LanceDB table.</p>
+
+<div class="callout win">
+  <span class="label">Your win this lesson</span>
+  You'll index three documents end to end, ask five questions the corpus can answer, ask one it cannot, and explain every retrieved chunk by the stage that produced it.
+</div>
+
+<h2>What you are building</h2>
+
+<p>Two lanes, two entry points, one shared module for the store. The offline lane is allowed to take minutes; the online lane has a budget of seconds. Keeping them as separate commands is not tidiness — it is the difference between re-indexing on a deploy and re-indexing on a request.</p>
+
+<table>
+  <thead><tr><th>lane</th><th>command</th><th>stages</th><th>cost</th></tr></thead>
+  <tbody>
+    <tr><td>offline</td><td><code>uv run python ingest.py</code></td><td>1–4</td><td>seconds per document; embedding is the only network call</td></tr>
+    <tr><td>online</td><td><code>uv run python ask.py "…"</code></td><td>5–8</td><td>one embedding call, one hybrid query, one generation</td></tr>
+  </tbody>
+</table>
+
+<pre><code>0007-rag-service/
+├─ docs/                     the corpus: one PDF, one DOCX, one Markdown
+├─ common.py                 paths, model name, dimension, key checks
+├─ qwen.py                   text-embedding-v4: batching, query vs document
+├─ store.py                  LanceDB schema, BM25 index, hybrid query
+├─ ingest.py                 offline lane (and --preview)
+├─ ask.py                    online lane (and citation checks)
+└─ index/                    generated: the LanceDB database
+
+0007-rag-service-llamaindex/  same docs, LlamaIndex variant (see below)</code></pre>
+
+<p>Complete files: <a href="../assets/examples/0007-rag-service/ingest.py"><code>ingest.py</code></a>, <a href="../assets/examples/0007-rag-service/ask.py"><code>ask.py</code></a>, <a href="../assets/examples/0007-rag-service/README.md"><code>README.md</code></a>. LlamaIndex variant: <a href="../assets/examples/0007-rag-service-llamaindex/ingest.py"><code>ingest.py</code></a>, <a href="../assets/examples/0007-rag-service-llamaindex/ask.py"><code>ask.py</code></a>, <a href="../assets/examples/0007-rag-service-llamaindex/README.md"><code>README.md</code></a>.</p>
+
+<h2>Setup: two keys, because two vendors</h2>
+
+<p>DeepSeek has no embeddings endpoint. That is not a blocker — generation and embedding are independent — but it does mean this lab needs two keys. Qwen <code>text-embedding-v4</code> embeds; DeepSeek <code>deepseek-flash</code> answers.</p>
+
+<pre><code>$env:DASHSCOPE_API_KEY = "sk-..."     # Qwen embeddings
+$env:DEEPSEEK_API_KEY = "sk-..."      # DeepSeek generation
+
+cd assets\examples\0007-rag-service
+uv sync                               # first sync is large: Docling + PyTorch
+uv run python ingest.py --preview     # no key needed: parse and chunk only</code></pre>
+
+<p>The first run also downloads Docling's layout models once. If <code>huggingface.co</code> is unreachable from your network, set <code>$env:HF_ENDPOINT = "https://hf-mirror.com"</code> before retrying — the script prints that hint itself when the download fails.</p>
+
+<h2>Part 1 — the offline lane</h2>
+
+<p><strong>Preview first.</strong> Parsing and chunking cost no tokens, and they are where most retrieval failures are born. Run <code>--preview</code> before you embed anything:</p>
+
+<pre><code>corpus: 3 documents in ...\0007-rag-service\docs
+  load    Docling (first run imports PyTorch and downloads models; be patient)
+  load    converter
+  load    chunker (512-token budget)
+  parse   nimbusdesk-handbook.pdf
+          10 chunks
+  parse   nimbusdesk-plans.docx
+          1 chunks
+  parse   release-notes.md
+          4 chunks
+
+15 chunks from 3 documents in 34.7s
+characters per chunk: min 102  median 327  max 990</code></pre>
+
+<p>That first <strong>35 seconds is Docling</strong>, not a hang: importing PyTorch and running the layout model on CPU. If you press Ctrl+C mid-import the script prints <code>interrupted</code> and exits instead of dumping a traceback. OCR is off by default because these pages already carry text; <code>--ocr</code> is for scans, and roughly doubles the time.</p>
+
+<p>Read those numbers before moving on. Fifteen chunks is small enough to inspect by hand, and that is deliberate: at this size you can still tell whether a chunk is wrong. A single heading as a chunk, a table cut in half, or a paragraph with no heading path are all visible here and invisible after embedding.</p>
+
+<h3>Parse and chunk</h3>
+
+<p>Docling recovers reading order, headings, tables and page anchors. <code>HybridChunker</code> then follows the document structure — it starts a new chunk at a heading boundary, merges small neighbours, and keeps a table intact — and refuses to exceed the token budget.</p>
+
+<pre><code>converter = DocumentConverter()
+chunker = HybridChunker(max_tokens=512, merge_peers=True)
+
+result = converter.convert(str(path))
+for position, chunk in enumerate(chunker.chunk(dl_doc=result.document)):
+    text = chunker.contextualize(chunk)          # heading path + chunk text
+    headings = " &gt; ".join(chunk.meta.headings or [])
+    pages = sorted({
+        prov.page_no
+        for item in (chunk.meta.doc_items or [])
+        for prov in (item.prov or [])
+    })</code></pre>
+
+<p>The important line is <code>contextualize()</code>. It prepends the heading path, so the refund paragraph arrives at the embedder as <em>6. Refunds and billing corrections → A full refund is available within 14 days…</em>. Without it, a chunk that says "after day 14" has no idea what "day 14" is counting from.</p>
+
+<h3>Embed and store</h3>
+
+<p>Embedding uses <code>text_type="document"</code>, 1024 dimensions, and batches of 10 — the API's limit, handled inside <code>qwen.py</code>. Then every chunk becomes one row in one LanceDB table, and the BM25 index is built over the same <code>text</code> column:</p>
+
+<pre><code>table.create_index(
+    "text",
+    config=FTS(language="English", stem=True,
+               remove_stop_words=True, ascii_folding=True),
+    replace=True,
+)</code></pre>
+
+<p>Those analyser settings are frozen into the index. The query side must use the same ones, which is why stage 5 exists and why this configuration lives next to the store rather than inside a search helper.</p>
+
+<p><strong>Indexing is incremental.</strong> Every row carries the document's sha256. An unchanged file is skipped; a changed file has its old rows deleted before the new ones are added. The hash lives in the table, so there is no manifest file to drift out of sync.</p>
+
+<h2>Part 2 — the online lane</h2>
+
+<pre><code>uv run python ask.py "How many seats does the Team plan include?"</code></pre>
+
+<p>Four things happen, in order. They are worth separating in your head even though LanceDB does two of them in one call.</p>
+
+<h3>5. Prepare the query</h3>
+
+<p>The question is embedded with the <em>same model and dimension</em> as the documents, but with <code>text_type="query"</code>. That flag is the asymmetric half of the embedder: a question and a paragraph are not the same kind of text, and Qwen was trained to score them together rather than as near-duplicates.</p>
+
+<pre><code>vector = embed_query(question)     # text_type="query", 1024 dims</code></pre>
+
+<h3>6. Retrieve hybrid</h3>
+
+<p>One query carries both representations. LanceDB runs dense and BM25 over the same table and fuses the two rankings with reciprocal rank fusion, so a query that is half paraphrase and half error code does not have to pick a winner:</p>
+
+<pre><code>rows = (
+    table.search(query_type="hybrid")
+    .vector(vector)
+    .text(question)
+    .rerank(RRFReranker())          # fusion, not a model
+    .limit(6)
+    .to_list()
+)</code></pre>
+
+<p>Six chunks is a choice, not a law: <code>--k</code> changes it. With <code>--rerank</code>, the cross-encoder re-scores the fused candidates and the best six survive; without it, the RRF order stands. Nothing downstream trims the list — so this is the one place to measure before you tune anything else.</p>
+
+<h3>7. Rerank, optionally</h3>
+
+<p><code>--rerank</code> swaps the fusion reranker for a cross-encoder that reads the query and each candidate together. It is off by default so you can measure the difference instead of assuming it. The first use downloads a small model.</p>
+
+<h3>8. Generate and check</h3>
+
+<p>The prompt labels every chunk with a number and its source. The model is forced into a pydantic object, and the code then validates the citations — a number outside the retrieved set is dropped and reported, not printed as if it were real:</p>
+
+<pre><code>class Answer(BaseModel):
+    answer: str
+    citations: list[int]
+    insufficient_context: bool
+
+structured = model.with_structured_output(Answer, method="function_calling")
+result = structured.invoke([SystemMessage(content=SYSTEM), HumanMessage(content=prompt)])
+
+valid = [n for n in result.citations if 1 &lt;= n &lt;= len(rows)]</code></pre>
+
+<p>A good run looks like this — ids and scores vary, the fact does not:</p>
+
+<pre><code>question: How many seats does the Team plan include?
+retrieved 6 chunks (hybrid, RRF)
+  [1] 0.0xxx  nimbusdesk-plans.docx  NimbusDesk plans and limits
+  ...
+
+answer: The Team plan includes 25 seats [1].
+insufficient_context: False
+citations:
+  [1] nimbusdesk-plans.docx  chunk &lt;id&gt;</code></pre>
+
+<h2>The same service in LlamaIndex</h2>
+
+<p>The framework variant lives in <a href="../assets/examples/0007-rag-service-llamaindex/index.html"><code>0007-rag-service-llamaindex/</code></a>. It reuses the same three documents, the same Docling chunks, the same Qwen embeddings and the same DeepSeek generator; what changes is who owns the index and the query pipeline.</p>
+
+<table>
+  <thead><tr><th>piece</th><th>main lab</th><th>LlamaIndex variant</th></tr></thead>
+  <tbody>
+    <tr><td>parse / chunk</td><td>Docling <code>HybridChunker</code></td><td>same</td></tr>
+    <tr><td>embedding</td><td>explicit Qwen batching</td><td><code>QwenEmbedding(BaseEmbedding)</code> adapter</td></tr>
+    <tr><td>store</td><td>hand-written LanceDB table + FTS</td><td><code>LanceDBVectorStore</code></td></tr>
+    <tr><td>retrieval</td><td>dense + BM25, fused with RRF</td><td><code>as_query_engine(similarity_top_k=6)</code>, dense</td></tr>
+    <tr><td>answer</td><td>Pydantic <code>Answer</code> + validated citations</td><td>query engine text + <code>source_nodes</code></td></tr>
+    <tr><td>incremental</td><td>sha256 per document</td><td><code>--rebuild</code></td></tr>
+  </tbody>
+</table>
+
+<pre><code>Settings.embed_model = QwenEmbedding()
+Settings.llm = DeepSeek(model="deepseek-flash", temperature=0, is_chat_model=True)
+
+vector_store = LanceDBVectorStore(uri="index/lancedb", table_name="chunks_llamaindex")
+index = VectorStoreIndex.from_vector_store(vector_store)
+engine = index.as_query_engine(similarity_top_k=6, text_qa_template=TEXT_QA)
+
+response = engine.query(question)
+print(response.response)
+for node in response.source_nodes:
+    print(node.metadata["source"], node.score)</code></pre>
+
+<p><code>QwenEmbedding</code> is the only new adapter: it subclasses LlamaIndex's <code>BaseEmbedding</code> and calls the same <code>text_type="document"</code> / <code>"query"</code> paths as <code>qwen.py</code>. The index persists through <code>LanceDBVectorStore</code>, and <code>source_nodes</code> is the evidence list. What the variant gives up is the part the main lab teaches explicitly: hybrid BM25 + RRF and numbered citation validation. If you need those, keep the custom lane; if you want most of the service in a few lines, this is the framework shape.</p>
+
+<h2>Ask it things it cannot answer</h2>
+
+<p>The five questions below are answerable, and each one lands in a different document. Ask them in order and check the citation, not just the prose:</p>
+
+<table>
+  <thead><tr><th>question</th><th>must contain</th><th>best source</th></tr></thead>
+  <tbody>
+    <tr><td>How many seats does the Team plan include?</td><td>25</td><td>plans DOCX</td></tr>
+    <tr><td>What does E-311 mean?</td><td>mailbox storage quota</td><td>handbook §7</td></tr>
+    <tr><td>How long do I have to request a refund?</td><td>14 days</td><td>handbook §6</td></tr>
+    <tr><td>Is SAML SSO available on Team?</td><td>no — Business only</td><td>plans DOCX / handbook §3</td></tr>
+    <tr><td>What happens to deleted conversations?</td><td>recoverable 30 days, then purged</td><td>handbook §4</td></tr>
+  </tbody>
+</table>
+
+<p>Then ask something the corpus does not cover — <em>"What is the SLA for the mobile app?"</em> — and watch <code>insufficient_context</code>. That boolean is the difference between a system that knows what it does not know and one that fills the gap with fluent nonsense.</p>
+
+<h2>Where this build breaks</h2>
+
+<p>Every failure below belongs to a stage. Naming the stage is the skill; rewriting the prompt is the reflex to resist.</p>
+
+<table>
+  <thead><tr><th>symptom</th><th>stage to inspect</th><th>first check</th></tr></thead>
+  <tbody>
+    <tr><td>Answer cites a chunk that does not contain the fact</td><td>8 generate</td><td>the citation numbers and the evidence blocks actually shown to the model</td></tr>
+    <tr><td>Right fact exists but never appears</td><td>6 retrieve</td><td><code>--show</code>: is it in the retrieved six at all?</td></tr>
+    <tr><td>Error code query fails, paraphrase works</td><td>4 store</td><td>FTS index built? analyser settings match the query?</td></tr>
+    <tr><td>Chunk is half a sentence</td><td>2 chunk</td><td><code>--preview</code>, then the token budget and <code>merge_peers</code></td></tr>
+    <tr><td>Table values are scrambled</td><td>1 parse</td><td>the PDF/DOCX conversion, before any embedding</td></tr>
+    <tr><td>Two runs disagree on an answer</td><td>8 generate</td><td><code>temperature=0</code>, and whether retrieval returned the same six</td></tr>
+  </tbody>
+</table>
+
+<h2>Check yourself</h2>
+
+<div class="quiz">
+<script type="application/json">
+{
+  "questions": [
+    {
+      "q": "Why are there two commands instead of one?",
+      "options": [
+        "Indexing is offline and per-document; answering is online and per-question",
+        "Python cannot run both in one file",
+        "The embedding API only works at night",
+        "LanceDB needs a separate process for BM25"
+      ],
+      "correct": 0,
+      "explain": "The lanes have different triggers and different budgets. Mixing them means re-indexing on a request, which is how a RAG service becomes slow and expensive."
+    },
+    {
+      "q": "Why embed the question with text_type='query' rather than 'document'?",
+      "options": [
+        "It produces smaller vectors",
+        "Questions and passages are asymmetric; the model expects each side labelled",
+        "It skips the BM25 half of the query",
+        "It removes the need for a vector index"
+      ],
+      "correct": 1,
+      "explain": "Retrieval is asymmetric: a short question is matched against a passage. Qwen trains on that pairing, and the flag tells it which side it is embedding."
+    },
+    {
+      "q": "What does the document hash in each row buy you?",
+      "options": [
+        "It lets an unchanged document be skipped and a changed one be replaced",
+        "It encrypts the chunk text",
+        "It compresses the vector column",
+        "It replaces the BM25 index"
+      ],
+      "correct": 0,
+      "explain": "The hash is the incremental-index decision: same hash means skip, different hash means delete that source's rows and re-embed. No manifest file to drift."
+    },
+    {
+      "q": "What does RRFReranker actually do in this pipeline?",
+      "options": [
+        "It reads query and chunk together with a cross-encoder",
+        "It fuses two ranked lists by rank position, with no model",
+        "It reranks the final answer for readability",
+        "It rebuilds the FTS index on every query"
+      ],
+      "correct": 1,
+      "explain": "RRF sums 1/(k + rank) across the dense and BM25 lists. LanceDB calls it a reranker, but it is fusion — stage 7's cross-encoder is a different tool."
+    },
+    {
+      "q": "Why validate citation numbers after generation?",
+      "options": [
+        "To make the answer longer",
+        "To improve the embedding quality",
+        "To catch a citation that points outside the retrieved set",
+        "To avoid calling the model"
+      ],
+      "correct": 2,
+      "explain": "A citation is a claim about provenance. If the number is not in the evidence the model was given, the source is fabricated and must not reach the user."
+    },
+    {
+      "q": "What is --preview for?",
+      "options": [
+        "It embeds a small sample so you can compare models",
+        "It parses and chunks without calling any API, so you can inspect boundaries first",
+        "It previews the final answer before generation",
+        "It builds the BM25 index only"
+      ],
+      "correct": 1,
+      "explain": "Parsing and chunking are free and visible. Checking them before embedding catches the failures that no prompt can fix."
+    },
+    {
+      "q": "What does the LlamaIndex variant give up compared with the main lab?",
+      "options": [
+        "Docling chunking and Qwen embeddings",
+        "Explicit hybrid RRF and numbered citation validation",
+        "The ability to answer unanswerable questions",
+        "LanceDB as the vector store"
+      ],
+      "correct": 1,
+      "explain": "It keeps the same documents, Docling chunks, Qwen embeddings, LanceDB and DeepSeek. The query engine gives text + source_nodes; the main lab's explicit BM25/RRF and numbered citation validator are the custom parts you lose."
+    }
+  ]
+}
+</script>
+</div>
+
+<h2>Primary sources for this lesson</h2>
+<p><a href="https://docling-project.github.io/docling/concepts/chunking">Docling — chunking concepts</a> for HybridChunker, merge behaviour and table headers. <a href="https://docs.lancedb.com/search/hybrid-search">LanceDB — hybrid search</a> for the explicit <code>vector()</code> + <code>text()</code> query and the reranker contract.</p>
+<p><a href="https://docs.qwencloud.com/api-reference/text-embedding/dashscope-embedding">Qwen text-embedding-v4</a> for the dimension menu, the 8K input limit and the <code>query</code>/<code>document</code> split. <a href="https://platform.deepseek.com/api_keys">DeepSeek API keys</a> for the generator. The variant uses <a href="https://docs.llamaindex.ai/">LlamaIndex</a>, its <a href="https://docs.llamaindex.ai/en/stable/examples/vector_stores/LanceDBIndexDemo/">LanceDB vector store</a> and <a href="https://docs.llamaindex.ai/en/stable/examples/llm/deepseek/">DeepSeek LLM</a> integrations.</p>
+
+<h2>What's next</h2>
+<p>Lesson 8 is the <a href="0008-rag-appendix.html">RAG appendix</a>: the chunking framework, the four tools that parse and split documents, and how to choose a vector store without inheriting a default. It is reference material — read it when a choice stops being obvious. <a href="0009-mcp.html">Lesson 9</a> changes layer: MCP moves the tools out of your process so any client can call them. <a href="0010-langgraph.html">Lesson 10</a> changes layer again: LangGraph makes the decision explicit — state, nodes, and a branch that routes a message to the right specialist.</p>
+
+<div class="footer-nav">
+  <div class="ask"><strong>Retrieved the wrong chunk?</strong> Send the question, the chunk you expected and the six that came back. Nine times out of ten the answer is in the stage that produced the candidates, not in the prompt.</div>
+  <div class="links">
+    <a href="0006-rag-foundation.html">← Lesson 6</a>
+    <a href="../reference/skill-map.html">Skill Map &amp; Glossary</a>
+    <a href="../assets/examples/0007-rag-service/index.html">Example page</a>
+    <a href="../assets/examples/0007-rag-service-llamaindex/index.html">LlamaIndex example</a>
+  </div>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</article>
+</body>
+</html>

@@ -1,0 +1,24 @@
+question: Should a small support team build its agent on LangGraph or a plain tool loop?
+graph:    reference (fan-out, fan-in)
+source:   snapshot
+reddit:   off (REDDIT_ENABLED=false)
+
+[   0.0s] search_bing          5 results
+[   0.0s] search_google        5 results
+[   2.5s] analyze_bing         analyses += bing
+[   2.5s] analyze_google       analyses += google
+[   4.8s] synthesize           173 words
+
+answer: **Recommendation:** Start with a plain tool loop, and move to LangGraph only when you hit a concrete operational need—most likely human-in-the-loop approval or resumable runs.
+
+**Reasons:**
+1. A plain loop is faster to read, has no extra dependency, and covers most single-turn support flows; a graph adds nodes that each become another place to test.
+2. The graph pays off at the second operational requirement—typically checkpointing or an approval gate before a side effect like a refund—and teams reportedly migrate without changing prompts.
+3. LangGraph's checkpointer (PostgresSaver as the usual production default) stores approval decisions as data and lets a run pause and resume from another process, which a plain loop can't do cleanly.
+
+**Caveat:** Neither source quantifies team size, latency, cost, or a switch threshold; the "second operational requirement" claim is asserted without supporting detail. Measure your critical path rather than node count, since one avoidable LLM round trip per ticket may cost more than the infrastructure.
+
+**Missing/empty sources:** No source was empty, but both lack concrete cost, latency, and headcount figures.
+
+sources: google=5 bing=5 reddit=0 | urls=0 | threads=0
+graph: bing, google | nodes=5 | 4.8s

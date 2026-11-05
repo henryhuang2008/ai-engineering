@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Example 0010 - LangGraph: one node, one branch</title>
+<link rel="stylesheet" href="../../course.css">
+</head>
+<body>
+<article class="page">
+
+<p class="meta">Example 0010 · Companion to <a href="../../../lessons/0010-langgraph.html">Lesson 10</a> · <a href="README.md">README</a></p>
+
+<h1>One node, then one branch</h1>
+
+<p class="lede"><code>simple.py</code> is the smallest useful LangGraph: one <code>chatbot</code> node, <code>START → chatbot → END</code>, and an <code>add_messages</code> reducer. <code>main.py</code> adds the decision: a <strong>DeepSeek</strong> classifier returns a validated <code>billing</code> or <code>technical</code> label, and a conditional edge sends the message to the matching specialist. Both scripts are live DeepSeek calls; there is no fake-model mode.</p>
+
+<h2>Key and run (uv)</h2>
+<pre>cd assets\examples\0010-langgraph
+uv sync
+
+$env:DEEPSEEK_API_KEY = &quot;sk-...&quot;
+
+uv run python simple.py
+uv run python main.py &quot;How long is the refund window on an annual plan?&quot;
+uv run python main.py &quot;Outlook sync fails with E-311&quot; --trace
+uv run python main.py                  # interactive, keeps history
+uv run python main.py --mermaid        # print the diagram source</pre>
+<p>Without <code>DEEPSEEK_API_KEY</code>, both scripts print the exact PowerShell lines and exit 1. The key comes from <a href="https://platform.deepseek.com/api_keys">platform.deepseek.com/api_keys</a>.</p>
+
+<h2>What simple.py prints (live DeepSeek)</h2>
+<pre>question: In one sentence, what does a router do in a LangGraph?
+reply:    A router in LangGraph directs the flow of execution by conditionally selecting which node(s) to run next based on the current state, enabling branching and dynamic control flow in the graph.
+
+state: 2 messages (human, ai)
+edges:
+  __start__ -&gt; chatbot
+  chatbot -&gt; __end__</pre>
+
+<h2>What main.py prints (one route each)</h2>
+<pre>route:  billing
+answer: A full refund is available within 14 days of the initial charge. After day 14,
+annual plans are refunded pro rata minus the months used.</pre>
+<pre>question: Outlook sync keeps failing with error E-311. What do I do?
+step 1  classify   route=technical
+step 2  technical  replied (123 chars)
+
+answer: Error E-311 means the mailbox storage quota was exceeded. To fix it, archive
+conversations or raise the seat storage limit.</pre>
+<p><code>--trace</code> streams <code>stream_mode="updates"</code>: one dict per node, so the route and the specialist that ran are both visible. The billing run never mentions E-311 and the technical run never mentions refunds, because only one branch executes.</p>
+
+<h2>Graph diagrams</h2>
+<div class="diagrams">
+  <figure>
+    <img src="output1.png" alt="One-node LangGraph: START to chatbot to END" width="220">
+    <figcaption>simple.py &mdash; START &rarr; chatbot &rarr; END</figcaption>
+  </figure>
+  <figure>
+    <img src="output.png" alt="Branching LangGraph: START to classify, dashed edges to billing and technical, both to END" width="345">
+    <figcaption>main.py &mdash; one conditional edge, two specialists</figcaption>
+  </figure>
+</div>
+<p>Both were rendered from the compiled graph with <code>draw_mermaid_png()</code>. Dotted edges are conditional; there is no edge from a specialist back to <code>classify</code>, so the graph runs once per turn. Multi-turn memory is the caller's job until a checkpointer is added.</p>
+
+<h2>README.md</h2>
+<pre># 0010 — LangGraph: one node, then one branch
+
+Two scripts, one idea: **a node is a function that returns a delta; an edge decides who runs next.**
+
+- `simple.py` — the smallest useful graph: `START -&gt; chatbot -&gt; END`. Four nouns, no branch.
+- `main.py` — a classifier reads the message, a conditional edge picks one of two specialists, and the run ends. Same four nouns, now with a decision.
+
+The model is **DeepSeek** through `ChatDeepSeek`, and the two routes are NimbusDesk **billing** and **technical**, so the branch carries facts from lessons 7–9.
+
+## Run
+
+```powershell
+cd assets\examples\0010-langgraph
+uv sync
+
+$env:DEEPSEEK_API_KEY = &quot;sk-...&quot;
+
+uv run python simple.py
+uv run python main.py &quot;How long is the refund window on an annual plan?&quot;
+uv run python main.py &quot;Outlook sync fails with E-311&quot; --trace
+uv run python main.py                  # interactive, keeps history
+uv run python main.py --mermaid        # print the diagram source
+```
+
+The key comes from https://platform.deepseek.com. Without it, both scripts print the exact PowerShell lines and exit 1 — they never guess.
+
+## What you should see
+
+`uv run python simple.py`:
+
+```
+question: In one sentence, what does a router do in a LangGraph?
+reply:    A router in LangGraph directs the flow of execution by conditionally selecting which node(s) to run next based on the current state, enabling branching and dynamic control flow in the graph.
+
+state: 2 messages (human, ai)
+edges:
+  __start__ -&gt; chatbot
+  chatbot -&gt; __end__
+```
+
+`uv run python main.py &quot;How long is the refund window on an annual plan?&quot;`:
+
+```
+route:  billing
+answer: A full refund is available within 14 days of the initial charge. After day 14, annual plans are refunded pro rata minus the months used.
+```
+
+`uv run python main.py &quot;Outlook sync keeps failing with error E-311. What do I do?&quot; --trace`:
+
+```
+question: Outlook sync keeps failing with error E-311. What do I do?
+step 1  classify   route=technical
+step 2  technical  replied (123 chars)
+
+answer: Error E-311 means the mailbox storage quota was exceeded. To fix it, archive conversations or raise the seat storage limit.
+```
+
+`main.py --mermaid` prints the branch as data:
+
+```
+graph TD;
+	__start__ --&gt; classify;
+	classify -.-&gt; billing;
+	classify -.-&gt; technical;
+	billing --&gt; __end__;
+	technical --&gt; __end__;
+```
+
+Dotted arrows are conditional edges. There is no line from `billing` back to `classify`: this graph runs once per turn.
+
+Rendered as images: `output1.png` is the one-node graph, `output.png` is the branch.
+
+## The graph, in four nouns
+
+| declaration | in `simple.py` | in `main.py` |
+|---|---|---|
+| **State** | `TypedDict` with `messages` | adds `route: str \| None` |
+| **reducer** | `Annotated[list, add_messages]` — nodes append | same |
+| **node** | `chatbot` calls the model | `classify`, `billing`, `technical` |
+| **edge** | `START -&gt; chatbot -&gt; END` | `START -&gt; classify`, then a conditional edge |
+| **compile** | `graph.compile()` | same |
+
+A node never returns the new state. It returns only its change:
+
+```python
+def billing(state: State) -&gt; dict:
+    reply = model.invoke([SystemMessage(content=BILLING_PROMPT), *state[&quot;messages&quot;]])
+    return {&quot;messages&quot;: [reply]}          # a delta, merged by add_messages
+```
+
+`add_messages` is the reducer. Without it, `messages: list` means last-write-wins: each node replaces the list, and history collapses. Try it: the graph still runs, and the final state holds one message instead of two.
+
+## Why there is no `router` node
+
+A common first version has three graph nodes before the specialists: `classifier -&gt; router -&gt; billing/technical`. The extra `router` node writes `{&quot;next&quot;: ...}` into state, and the conditional edge is a lambda that reads `state[&quot;next&quot;]`.
+
+That works, but the decision is not work. It does not call a model, read a file, or mutate anything a user would see. It is the edge function wearing a node&#x27;s clothes. This lab puts it where it belongs:
+
+```python
+def pick_specialist(state: State) -&gt; str:
+    return state[&quot;route&quot;] or &quot;technical&quot;
+
+graph.add_conditional_edges(
+    &quot;classify&quot;,
+    pick_specialist,
+    {&quot;billing&quot;: &quot;billing&quot;, &quot;technical&quot;: &quot;technical&quot;},
+)
+```
+
+Three consequences:
+
+1. **One fewer superstep per turn.** The classifier&#x27;s delta is routed directly.
+2. **No stale field.** `next` is not persisted in state, so it cannot disagree with the route a later turn computed.
+3. **The contract is explicit.** The returned string must be a key in that map.
+
+`classify` still writes `route` to state — that is *data* the run can be inspected for, not a control signal the edge has to look up.
+
+## Break it: an edge returns a key, not a delta
+
+Two failures worth causing once. Both were run against this graph with the conditional edge changed:
+
+**Return a name that is not in the map** (`return &quot;refunds&quot;`):
+
+```
+KeyError: &#x27;refunds&#x27;
+During task with name &#x27;classify&#x27;
+```
+
+**Return a dict from the edge function** (`return {&quot;next&quot;: &quot;billing&quot;}`):
+
+```
+TypeError: unhashable type: &#x27;dict&#x27;
+```
+
+The second one is the node/edge split-brain case: a *node* may return `{&quot;next&quot;: ...}`, because nodes return deltas. An *edge function* must return a node name (or `END`, or a list of names). If you move the router&#x27;s body into the edge without dropping the dict, LangGraph tries to hash it as a key. Reading the error tells you which of the two roles you are in.
+
+## Multi-turn: state is not memory
+
+`chat_loop()` keeps the returned state and feeds it into the next turn:
+
+```python
+state = app.invoke(
+    {**state, &quot;messages&quot;: state[&quot;messages&quot;] + [HumanMessage(content=text)]}
+)
+```
+
+Without a checkpointer, that is the only memory there is: exit the process and the conversation is gone. A checkpointer plus a `thread_id` makes the graph read its own history back — the next step in the LangGraph arc, and the reason production agents can resume after a crash.
+
+## Files
+
+| file | role |
+|---|---|
+| `simple.py` | one node, two edges, `add_messages`; prints the compiled edges |
+| `main.py` | classifier + conditional edge + two specialists; `--trace`, `--mermaid`, REPL |
+| `common.py` | one `ChatDeepSeek` builder and the missing-key message |
+| `output1.png` | rendered one-node graph (`START -&gt; chatbot -&gt; END`) |
+| `output.png` | rendered branch (`classify` -&gt; `billing` / `technical`) |
+| `pyproject.toml` | uv project: `langgraph`, `langchain`, `langchain-deepseek`, `pydantic` |
+
+## If it fails
+
+- **`DEEPSEEK_API_KEY is not set`** — the script prints the three PowerShell lines. Copy them, then run again in the same terminal.
+- **401 / 402 / timeout** — the wrapper prints the exception type and reminds you to check the key, balance, and network. The graph itself never sees the error.
+- **Wrong route** — the classifier is a model call, so this is an eval problem, not a graph problem. Grow a small set of messages with expected routes and score it the way lesson 5 scores answers; the graph only obeys the label it was given.
+- **`KeyError: &#x27;&lt;name&gt;&#x27;`** — a conditional edge returned a node name that is not a key in its map. Add the node and the map entry, or return an existing one.
+- **`TypeError: unhashable type: &#x27;dict&#x27;`** — you returned a state delta from an edge function. Return a node name; deltas belong in nodes.
+</pre>
+
+<h2>simple.py</h2>
+<pre>&quot;&quot;&quot;The smallest useful LangGraph: one node, two edges, one reducer.
+
+A graph is four declarations:
+
+  State   -- the data the nodes share (here: a message list)
+  Node    -- a function that reads state and returns a delta
+  Edge    -- who runs next (START -&gt; chatbot -&gt; END)
+  compile -- turn the declarations into an app you can invoke
+
+Run from this folder:
+
+    uv sync
+    uv run python simple.py
+    uv run python simple.py --mermaid     # print the diagram source
+&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import sys
+from typing import Annotated, TypedDict
+
+from langchain_core.messages import HumanMessage
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
+
+from common import build_model
+
+QUESTION = &quot;In one sentence, what does a router do in a LangGraph?&quot;
+
+
+class State(TypedDict):
+    # add_messages is the reducer: a node appends, it never replaces the list.
+    messages: Annotated[list, add_messages]
+
+
+def build_graph(model):
+    def chatbot(state: State) -&gt; dict:
+        # Return a delta, not the new state. The reducer merges it.
+        return {&quot;messages&quot;: [model.invoke(state[&quot;messages&quot;])]}
+
+    graph = StateGraph(State)
+    graph.add_node(&quot;chatbot&quot;, chatbot)
+    graph.add_edge(START, &quot;chatbot&quot;)
+    graph.add_edge(&quot;chatbot&quot;, END)
+    return graph.compile()
+
+
+def main() -&gt; int:
+    try:
+        model = build_model()
+    except RuntimeError as error:
+        print(f&quot;error: {error}&quot;, file=sys.stderr)
+        return 1
+
+    app = build_graph(model)
+
+    if &quot;--mermaid&quot; in sys.argv[1:]:
+        print(app.get_graph().draw_mermaid())
+        return 0
+
+    result = app.invoke({&quot;messages&quot;: [HumanMessage(content=QUESTION)]})
+    reply = result[&quot;messages&quot;][-1].content
+
+    print(f&quot;question: {QUESTION}&quot;)
+    print(f&quot;reply:    {reply}&quot;)
+    print()
+    print(
+        &quot;state: &quot;
+        f&quot;{len(result[&#x27;messages&#x27;])} messages &quot;
+        f&quot;({&#x27;, &#x27;.join(message.type for message in result[&#x27;messages&#x27;])})&quot;
+    )
+    print(&quot;edges:&quot;)
+    for edge in app.get_graph().edges:
+        print(f&quot;  {edge.source} -&gt; {edge.target}&quot;)
+    return 0
+
+
+if __name__ == &quot;__main__&quot;:
+    try:
+        raise SystemExit(main())
+    except Exception as error:  # noqa: BLE001 - show the provider error, keep exit 1
+        print(f&quot;error: {type(error).__name__}: {error}&quot;, file=sys.stderr)
+        print(&quot;check DEEPSEEK_API_KEY, account balance, and network access.&quot;, file=sys.stderr)
+        raise SystemExit(1) from error
+</pre>
+
+<h2>main.py</h2>
+<pre>&quot;&quot;&quot;One branch: classify the message, then run the matching specialist.
+
+The classifier is a structured-output call, so the route is a validated
+Literal -- not a string match on prose. The conditional edge reads that field
+and returns a node name. Everything else is the same four nouns as simple.py.
+
+Run from this folder:
+
+    uv sync
+    uv run python main.py &quot;I was charged twice for the Team plan&quot;
+    uv run python main.py &quot;Outlook sync fails with E-311&quot; --trace
+    uv run python main.py                  # interactive
+    uv run python main.py --mermaid        # print the diagram source
+&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import sys
+from typing import Annotated, Literal, TypedDict
+
+from langchain_core.messages import HumanMessage, SystemMessage
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
+from pydantic import BaseModel, Field
+
+from common import build_model
+
+CLASSIFY_PROMPT = &quot;&quot;&quot;You classify NimbusDesk customer messages.
+
+- billing: charges, invoices, refunds, plans, seats, cancellation
+- technical: errors, logins, integrations, outages, how-to steps
+
+Pick the single best route. If the message mentions both, pick the one that
+blocks the customer right now.&quot;&quot;&quot;
+
+BILLING_PROMPT = &quot;&quot;&quot;You are NimbusDesk&#x27;s billing specialist.
+Facts you may use:
+- A full refund is available within 14 days of the initial charge.
+- After day 14, annual plans are refunded pro rata minus the months used.
+- The Team plan includes 25 seats; extra seats are billed monthly.
+Answer in at most three sentences. If a fact is not in this list, say so.&quot;&quot;&quot;
+
+TECHNICAL_PROMPT = &quot;&quot;&quot;You are NimbusDesk&#x27;s technical specialist.
+Facts you may use:
+- E-311 means the mailbox storage quota was exceeded.
+- Fix: archive conversations or raise the seat storage limit.
+- SSO uses SAML 2.0; the metadata URL is under Settings &gt; Security.
+Answer in at most three sentences. If a fact is not in this list, say so.&quot;&quot;&quot;
+
+
+class Route(BaseModel):
+    &quot;&quot;&quot;The classifier&#x27;s output schema: one of two node names.&quot;&quot;&quot;
+
+    route: Literal[&quot;billing&quot;, &quot;technical&quot;] = Field(
+        description=&quot;billing for money questions, technical for product failures&quot;
+    )
+
+
+class State(TypedDict):
+    messages: Annotated[list, add_messages]
+    route: str | None
+
+
+def build_graph(model):
+    classifier = model.with_structured_output(Route, method=&quot;function_calling&quot;)
+
+    def classify(state: State) -&gt; dict:
+        decision = classifier.invoke(
+            [
+                SystemMessage(content=CLASSIFY_PROMPT),
+                state[&quot;messages&quot;][-1],
+            ]
+        )
+        return {&quot;route&quot;: decision.route}
+
+    def pick_specialist(state: State) -&gt; str:
+        # This is the conditional edge: a pure function -&gt; a node name.
+        return state[&quot;route&quot;] or &quot;technical&quot;
+
+    def billing(state: State) -&gt; dict:
+        reply = model.invoke([SystemMessage(content=BILLING_PROMPT), *state[&quot;messages&quot;]])
+        return {&quot;messages&quot;: [reply]}
+
+    def technical(state: State) -&gt; dict:
+        reply = model.invoke(
+            [SystemMessage(content=TECHNICAL_PROMPT), *state[&quot;messages&quot;]]
+        )
+        return {&quot;messages&quot;: [reply]}
+
+    graph = StateGraph(State)
+    graph.add_node(&quot;classify&quot;, classify)
+    graph.add_node(&quot;billing&quot;, billing)
+    graph.add_node(&quot;technical&quot;, technical)
+
+    graph.add_edge(START, &quot;classify&quot;)
+    graph.add_conditional_edges(
+        &quot;classify&quot;,
+        pick_specialist,
+        {&quot;billing&quot;: &quot;billing&quot;, &quot;technical&quot;: &quot;technical&quot;},
+    )
+    graph.add_edge(&quot;billing&quot;, END)
+    graph.add_edge(&quot;technical&quot;, END)
+    return graph.compile()
+
+
+def ask_once(app, question: str) -&gt; None:
+    &quot;&quot;&quot;Stream one turn so each node&#x27;s delta is visible.&quot;&quot;&quot;
+    inputs = {&quot;messages&quot;: [HumanMessage(content=question)], &quot;route&quot;: None}
+    answer = &quot;&quot;
+
+    print(f&quot;question: {question}&quot;)
+    for step, update in enumerate(app.stream(inputs, stream_mode=&quot;updates&quot;), start=1):
+        for node, delta in update.items():
+            if node == &quot;classify&quot;:
+                print(f&quot;step {step}  classify   route={delta[&#x27;route&#x27;]}&quot;)
+            else:
+                answer = delta[&quot;messages&quot;][-1].content
+                print(f&quot;step {step}  {node:&lt;10} replied ({len(answer)} chars)&quot;)
+    print()
+    print(f&quot;answer: {answer}&quot;)
+
+
+def chat_loop(app) -&gt; None:
+    &quot;&quot;&quot;Keep the state between turns, like a small chat session.&quot;&quot;&quot;
+    state = {&quot;messages&quot;: [], &quot;route&quot;: None}
+    print(&quot;type a message, or &#x27;exit&#x27;.&quot;)
+    while True:
+        try:
+            text = input(&quot;\nyou: &quot;).strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
+        if text.lower() in {&quot;exit&quot;, &quot;quit&quot;}:
+            return
+
+        state = app.invoke(
+            {**state, &quot;messages&quot;: state[&quot;messages&quot;] + [HumanMessage(content=text)]}
+        )
+        print(f&quot;route: {state[&#x27;route&#x27;]}&quot;)
+        print(f&quot;bot:   {state[&#x27;messages&#x27;][-1].content}&quot;)
+
+
+def main() -&gt; int:
+    try:
+        model = build_model()
+    except RuntimeError as error:
+        print(f&quot;error: {error}&quot;, file=sys.stderr)
+        return 1
+
+    app = build_graph(model)
+    args = sys.argv[1:]
+
+    if &quot;--mermaid&quot; in args:
+        print(app.get_graph().draw_mermaid())
+        return 0
+
+    trace = &quot;--trace&quot; in args
+    args = [arg for arg in args if arg != &quot;--trace&quot;]
+
+    if not args:
+        chat_loop(app)
+    elif trace:
+        ask_once(app, &quot; &quot;.join(args))
+    else:
+        state = app.invoke(
+            {&quot;messages&quot;: [HumanMessage(content=&quot; &quot;.join(args))], &quot;route&quot;: None}
+        )
+        print(f&quot;route:  {state[&#x27;route&#x27;]}&quot;)
+        print(f&quot;answer: {state[&#x27;messages&#x27;][-1].content}&quot;)
+    return 0
+
+
+if __name__ == &quot;__main__&quot;:
+    try:
+        raise SystemExit(main())
+    except Exception as error:  # noqa: BLE001 - show the provider error, keep exit 1
+        print(f&quot;error: {type(error).__name__}: {error}&quot;, file=sys.stderr)
+        print(&quot;check DEEPSEEK_API_KEY, account balance, and network access.&quot;, file=sys.stderr)
+        raise SystemExit(1) from error
+</pre>
+
+<h2>common.py</h2>
+<pre>&quot;&quot;&quot;Shared model wiring for the two scripts in this lab.
+
+Both scripts talk to the live DeepSeek API. Set DEEPSEEK_API_KEY first:
+
+  PowerShell (this session):  $env:DEEPSEEK_API_KEY = &quot;sk-...&quot;
+  PowerShell (persist):       setx DEEPSEEK_API_KEY &quot;sk-...&quot;   # reopen the terminal
+
+Get a key at https://platform.deepseek.com/api_keys. No key -&gt; the scripts print
+these instructions and exit 1, never a guess.
+&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import os
+
+from langchain_deepseek import ChatDeepSeek
+
+MODEL = os.getenv(&quot;DEEPSEEK_MODEL&quot;, &quot;deepseek-flash&quot;)
+BASE_URL = os.getenv(&quot;DEEPSEEK_BASE_URL&quot;, &quot;https://api.deepseek.com&quot;)
+
+
+def missing_key_message() -&gt; str:
+    return (
+        &quot;DEEPSEEK_API_KEY is not set.\n&quot;
+        &#x27;  PowerShell (this session):  $env:DEEPSEEK_API_KEY = &quot;sk-...&quot;\n&#x27;
+        &#x27;  PowerShell (persist):       setx DEEPSEEK_API_KEY &quot;sk-...&quot;   # reopen terminal\n&#x27;
+        &quot;  Get a key:                  https://platform.deepseek.com/api_keys&quot;
+    )
+
+
+def build_model() -&gt; ChatDeepSeek:
+    &quot;&quot;&quot;Return a live ChatDeepSeek handle, or explain exactly what is missing.&quot;&quot;&quot;
+    key = os.getenv(&quot;DEEPSEEK_API_KEY&quot;)
+    if not key:
+        raise RuntimeError(missing_key_message())
+
+    return ChatDeepSeek(
+        model=MODEL,
+        api_key=key,
+        api_base=BASE_URL,
+        temperature=0,
+        max_retries=2,
+        timeout=60,
+        # This lab is about graph wiring, not reasoning traces: keep calls short.
+        # Delete this line to watch the model think before it answers.
+        extra_body={&quot;thinking&quot;: {&quot;type&quot;: &quot;disabled&quot;}},
+    )
+</pre>
+
+
+<h2>Files</h2>
+<table>
+  <thead><tr><th>file</th><th>role</th></tr></thead>
+  <tbody>
+    <tr><td><code>simple.py</code></td><td>one node, two edges, add_messages; prints the compiled edges</td></tr>
+    <tr><td><code>main.py</code></td><td>classifier + conditional edge + two specialists; --trace, --mermaid, REPL</td></tr>
+    <tr><td><code>common.py</code></td><td>one ChatDeepSeek builder and the missing-key message</td></tr>
+    <tr><td><code>output1.png</code></td><td>rendered one-node graph (START -&gt; chatbot -&gt; END)</td></tr>
+    <tr><td><code>output.png</code></td><td>rendered branch (classify -&gt; billing / technical)</td></tr>
+    <tr><td><code>pyproject.toml</code></td><td>uv project: langgraph, langchain, langchain-deepseek, pydantic</td></tr>
+  </tbody>
+</table>
+
+<div class="footer-nav">
+  <div class="ask"><strong>Wrong branch?</strong> Print <code>route</code> before blaming the graph: a wrong label means the classifier needs evals; a right label with the wrong node means the conditional-edge map and the returned name disagree.</div>
+  <div class="links">
+    <a href="../../../lessons/0010-langgraph.html">← Lesson 10</a>
+    <a href="README.md">README</a>
+    <a href="../../../lessons/0003-function-calling.html">Lesson 3</a>
+  </div>
+</div>
+
+</article>
+</body>
+</html>

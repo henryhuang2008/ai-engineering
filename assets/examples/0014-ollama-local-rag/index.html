@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Example 0014 - A local RAG agent with Ollama + LlamaIndex</title>
+<link rel="stylesheet" href="../../course.css">
+</head>
+<body>
+<article class="page">
+
+<p class="meta">Example 0014 · Companion to <a href="../../../lessons/0014-ollama-local-rag.html">Lesson 14</a> · <a href="README.md">README</a></p>
+
+<h1>Local RAG, no API key</h1>
+
+<p class="lede">Twenty restaurant reviews become LlamaIndex documents, a local embedding model turns them into vectors in Chroma, and a local chat model answers questions from the retrieved reviews. Nothing leaves the machine: <strong>Ollama</strong> serves both models on <code>127.0.0.1:11434</code>, and <code>ingest.py</code> / <code>ask.py</code> are ordinary <strong>LlamaIndex</strong> code.</p>
+
+<h2>Install, pull, run</h2>
+<pre># 1. install (Windows)
+winget install Ollama.Ollama
+
+# 2. pull a small chat model and an embedding model
+ollama pull qwen3:4b-instruct
+ollama pull nomic-embed-text
+
+# 3. run the lab
+cd assets\examples\0014-ollama-local-rag
+uv sync
+Copy-Item .env.example .env
+
+uv run python ingest.py
+uv run python ask.py &quot;Is the gluten-free pizza good?&quot; </pre>
+<p>The scripts preflight Ollama and print the exact <code>ollama pull</code> command if a model is missing. No API key is involved.</p>
+
+<h2>What ingest.py prints</h2>
+<pre>read 20 rows from reviews.csv
+embedded 20 documents with nomic-embed-text
+stored in ...\chroma_db</pre>
+
+<h2>What ask.py prints</h2>
+<pre>querying 4 local chunks with qwen3:4b-instruct ...
+
+Yes, the gluten-free pizza is good. It is described as the best gluten-free
+option locally, with a base that does not fall apart and is cooked on a
+separate tray.
+
+sources:
+  [Great gluten-free option] rating=5 2026-09-14
+  [Staff know the menu] rating=5 2026-10-14
+  [Great lunch special] rating=5 2026-10-23
+  [Best crust in town] rating=5 2026-09-02</pre>
+<p>The answer wording is illustrative; the source list comes from a real retrieval run with <code>nomic-embed-text</code>. It is the check: every claim should be supported by one of the four retrieved reviews. If the corpus does not contain the answer, the prompt asks the model to say what is missing.</p>
+
+<h2>The pipeline</h2>
+<pre><code>CSV -> Document(text, metadata) -> OllamaEmbedding -> Chroma
+                                                         |
+question -> VectorStoreIndex.as_query_engine(k=4) -------+
+       |
+       v
+Ollama(qwen3:4b-instruct) -> grounded answer + source_nodes</code></pre>
+<p>The embedding model must be the same at index time and query time; vectors from different models do not share a space. Changing <code>OLLAMA_EMBED_MODEL</code> means deleting <code>chroma_db/</code> and re-ingesting.</p>
+
+<h2>README.md</h2>
+<pre># 0014 — A fully local RAG agent with Ollama + LlamaIndex
+
+A small RAG pipeline that runs entirely on your machine:
+
+```
+data/reviews.csv
+      │  ingest.py
+      ▼
+LlamaIndex Documents ── OllamaEmbedding(nomic-embed-text) ──▶ Chroma
+                                                               │
+question ── VectorStoreIndex.as_query_engine(k=4) ─────────────┘
+      │
+      ▼
+Ollama(qwen3:4b-instruct) ──▶ answer + source_nodes
+```
+
+No API key, no cloud call, no per-token bill. The tradeoff is model quality and speed: a 4B model is useful for grounded Q&amp;A over a small corpus, not a replacement for a frontier API.
+
+## 1. Install Ollama
+
+**Windows**
+
+```powershell
+winget install Ollama.Ollama
+# or download the installer: https://ollama.com/download
+```
+
+The desktop app starts the server for you. If you use the CLI only, run `ollama serve` in a terminal and leave it open. Verify:
+
+```powershell
+ollama --version
+ollama list
+```
+
+**macOS**
+
+Download the app from https://ollama.com/download (or `brew install ollama`). The app runs the server; `ollama serve` works from a terminal too.
+
+**Linux**
+
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+sudo systemctl status ollama     # the installer registers a service
+```
+
+The API listens on `http://localhost:11434`. Do not expose that port: Ollama has no authentication.
+
+## 2. Pull a chat model and an embedding model
+
+The original lab used `llama3.2` (3B, 2024) and `mxbai-embed-large`. A better small default in 2026 is Qwen3 4B Instruct: non-thinking, 2.5 GB, 256K context, and fast enough for RAG.
+
+```powershell
+ollama pull qwen3:4b-instruct   # ~2.5 GB, non-thinking instruct, 256K context
+ollama pull nomic-embed-text    # ~274 MB, 768 dims
+```
+
+| chat model | size | use it when |
+|---|---|---|
+| **`qwen3:4b-instruct`** | ~2.5 GB | default here: non-thinking, fast, 256K context, fits an 8 GB machine |
+| `qwen3.5:4b` | ~3.3-4.0 GB | newer Qwen, vision + tools; the upgrade if you have 16 GB |
+| `qwen3.5:2b` | ~2.7-3.1 GB | 8 GB laptop, a little weaker than 4B |
+| `qwen3.5:0.8b` | ~1.2-1.3 GB | smoke test or very low RAM; shallow answers |
+| `qwen3:4b` | ~2.5 GB | Qwen3 4B with thinking mode; slower for RAG |
+| `phi4-mini` | ~2.5 GB | reasoning/maths over chat; text only |
+| `llama3.2:3b` | ~2.0 GB | the original lab&#x27;s model; fast, older |
+
+`qwen3:4b-instruct` is Qwen3-4B-Instruct-2507: the non-thinking variant, so it answers directly instead of emitting a reasoning trace first. That is what you want for retrieval-augmented answers.
+
+Embedding alternatives:
+
+| embedding model | size | dims | note |
+|---|---|---|---|
+| **`nomic-embed-text`** | ~274 MB | 768 | default; CPU-friendly, 8K native context |
+| `qwen3-embedding:0.6b` | ~639 MB | 1024 | newer, 32K context, multilingual |
+| `embeddinggemma` | ~622 MB | 768 | Google 300M; needs task prefixes |
+| `mxbai-embed-large` | ~670 MB | 1024 | the original; 512-token chunks |
+| `bge-m3` | ~1.2 GB | 1024 | multilingual, no prefix required |
+
+`ollama list` shows what is installed; `ollama ps` shows what is loaded; `ollama rm &lt;model&gt;` frees disk.
+
+## 3. Run the lab
+
+```powershell
+cd assets\examples\0014-ollama-local-rag
+uv sync
+
+Copy-Item .env.example .env      # first time only
+
+uv run python ingest.py
+uv run python ask.py &quot;Is the gluten-free pizza good?&quot;
+uv run python ask.py             # interactive
+```
+
+`ingest.py` embeds the 20 reviews once and persists Chroma under `chroma_db/`. `ask.py` builds a LlamaIndex query engine over that index, retrieves four reviews, and calls the local chat model. Both scripts preflight Ollama and print the exact `ollama pull` command if a model is missing.
+
+## What you should see
+
+```
+$ uv run python ingest.py
+Generating embeddings: 100%|...| 20/20
+read 20 rows from reviews.csv
+embedded 20 documents with nomic-embed-text
+stored in ...\chroma_db
+```
+
+```
+$ uv run python ask.py &quot;Is the gluten-free pizza good?&quot;
+querying 4 local chunks with qwen3:4b-instruct ...
+
+Yes, the gluten-free pizza is good. It is described as the best gluten-free
+option locally, with a base that does not fall apart and is cooked on a
+separate tray.
+
+sources:
+  [Great gluten-free option] rating=5 2026-09-14
+  [Staff know the menu] rating=5 2026-10-14
+  [Great lunch special] rating=5 2026-10-23
+  [Best crust in town] rating=5 2026-09-02
+```
+
+The source list above is from a real retrieval run with `nomic-embed-text`; the generated wording will vary by model. The sources are the check: every claim should be supported by one of the four retrieved reviews.
+
+**Expected speed:** the first call loads the model into RAM/VRAM. A 4B model on a modern CPU produces roughly 15-30 tokens/second; a GPU is faster. Embedding 20 short reviews takes a few seconds.
+
+## Change the models
+
+Edit `.env`:
+
+```
+OLLAMA_MODEL=qwen3.5:4b
+OLLAMA_EMBED_MODEL=qwen3-embedding:0.6b
+```
+
+**Changing the embedding model requires rebuilding the store**: vectors from different models do not share a space. Delete `chroma_db/` and rerun `ingest.py`. The chat model can change freely.
+
+## The LlamaIndex pieces
+
+- `OllamaEmbedding` is set as `Settings.embed_model`; `Ollama` as `Settings.llm`. These are process-wide, so configure them once at startup.
+- `ChromaVectorStore(chroma_collection=...)` wraps the same persisted Chroma collection that `ingest.py` writes.
+- `VectorStoreIndex.from_documents(...)` embeds and stores; `VectorStoreIndex.from_vector_store(...)` reads it back.
+- `index.as_query_engine(similarity_top_k=4)` builds the retrieve-then-synthesize pipeline. `response.source_nodes` is the evidence list.
+
+## Files
+
+| file | role |
+|---|---|
+| `common.py` | config, Ollama preflight, LlamaIndex `Settings` wiring |
+| `ingest.py` | CSV → `Document`s → embeddings → Chroma |
+| `ask.py` | `VectorStoreIndex` → query engine → answer + sources |
+| `data/reviews.csv` | 20 synthetic Nimbus Pizza reviews |
+| `.env.example` | model names and base URL |
+| `pyproject.toml` | uv project: llama-index-core, Ollama + Chroma integrations, pandas |
+
+## If it fails
+
+- **`Ollama is not reachable at http://localhost:11434`** — install it, then run `ollama serve` (or open the desktop app). The script prints the install commands.
+- **`these models are missing`** — run the printed `ollama pull ...` lines. Tags matter: `qwen3:4b-instruct` is not `qwen3:latest`.
+- **Very slow first answer** — the model is loading. Watch `ollama ps`; keep it warm by asking two questions in one session.
+- **`llama-server process has terminated ... out-of-memory ... failed to allocate buffer for kv cache`** — the client asked for the model&#x27;s full 262K context. Keep `OLLAMA_NUM_CTX=4096` (the default in `common.py`) or lower it to 2048, and close other model-heavy apps. The model&#x27;s advertised maximum is not the working context you should request.
+- **Out of memory** — use `qwen3.5:2b` or `qwen3.5:0.8b`, lower `OLLAMA_NUM_CTX`, and close other model-heavy apps.
+- **`the vector store is empty`** — run `uv run python ingest.py`.
+- **`Collection expecting embedding with dimension of X, got Y`** — the collection was built with a different embedding model. Delete `chroma_db/` and re-ingest.
+- **Changed the embedding model and answers got worse** — old and new vectors are not comparable; rebuild the store.
+- **Port 11434 already in use** — another Ollama instance is serving; use it instead of starting a second one.
+- **Privacy** — this pipeline sends nothing to a provider. The model files and the vector store are local.
+</pre>
+
+<h2>common.py</h2>
+<pre>&quot;&quot;&quot;Shared configuration, LlamaIndex wiring, and a loud Ollama preflight.
+
+Everything here is local: no API key, no cloud call. If Ollama is not running
+or a model is missing, the scripts stop with the exact commands to fix it.
+&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+import requests
+from dotenv import load_dotenv
+from llama_index.core import Settings
+from llama_index.embeddings.ollama import OllamaEmbedding
+from llama_index.llms.ollama import Ollama
+
+load_dotenv()
+
+BASE_URL = os.getenv(&quot;OLLAMA_BASE_URL&quot;, &quot;http://localhost:11434&quot;).rstrip(&quot;/&quot;)
+CHAT_MODEL = os.getenv(&quot;OLLAMA_MODEL&quot;, &quot;qwen3:4b-instruct&quot;)
+EMBED_MODEL = os.getenv(&quot;OLLAMA_EMBED_MODEL&quot;, &quot;nomic-embed-text&quot;)
+# Models advertise huge context windows (qwen3:4b-instruct says 262144).
+# Asking Ollama for all of it allocates a KV cache of tens of GB and can kill
+# llama-server with an out-of-memory error. 4096 is plenty for six reviews.
+NUM_CTX = int(os.getenv(&quot;OLLAMA_NUM_CTX&quot;, &quot;4096&quot;))
+
+ROOT = Path(__file__).resolve().parent
+CSV_PATH = ROOT / &quot;data&quot; / &quot;reviews.csv&quot;
+DB_DIR = ROOT / &quot;chroma_db&quot;
+COLLECTION = &quot;nimbus_reviews&quot;
+
+
+def not_reachable_message(error: object | None = None) -&gt; str:
+    detail = f&quot;\n  detail: {error}&quot; if error else &quot;&quot;
+    return (
+        f&quot;Ollama is not reachable at {BASE_URL}.{detail}\n&quot;
+        &quot;  1. Install (Windows):  winget install Ollama.Ollama\n&quot;
+        &quot;     or download:        https://ollama.com/download\n&quot;
+        &quot;  2. Start the server:   ollama serve\n&quot;
+        &quot;  3. Pull the models:    ollama pull qwen3:4b-instruct\n&quot;
+        &quot;                         ollama pull nomic-embed-text\n&quot;
+        &quot;  Then run this script again.&quot;
+    )
+
+
+def pull_message(models: list[str]) -&gt; str:
+    lines = &quot;\n&quot;.join(f&quot;  ollama pull {model}&quot; for model in models)
+    return (
+        f&quot;Ollama is running, but these models are missing:\n{lines}\n&quot;
+        &quot;Pull them once; they stay in the local model store.&quot;
+    )
+
+
+def _matches(model: str, installed: list[str]) -&gt; bool:
+    if &quot;:&quot; in model:
+        return model in installed
+    return any(name == model or name.startswith(f&quot;{model}:&quot;) for name in installed)
+
+
+def installed_models() -&gt; list[str]:
+    &quot;&quot;&quot;Model names from Ollama, or a RuntimeError with install instructions.&quot;&quot;&quot;
+    try:
+        response = requests.get(f&quot;{BASE_URL}/api/tags&quot;, timeout=3)
+        response.raise_for_status()
+        payload = response.json()
+    except requests.RequestException as error:
+        raise RuntimeError(not_reachable_message(error)) from error
+
+    return [item.get(&quot;name&quot;, &quot;&quot;) for item in payload.get(&quot;models&quot;, [])]
+
+
+def require_models(*, need_chat: bool = True) -&gt; list[str]:
+    &quot;&quot;&quot;Check the models this script needs; ingest only needs embeddings.&quot;&quot;&quot;
+    models = installed_models()
+    required = [EMBED_MODEL] + ([CHAT_MODEL] if need_chat else [])
+    missing = [model for model in required if not _matches(model, models)]
+    if missing:
+        raise RuntimeError(pull_message(missing))
+    return models
+
+
+def configure(*, need_llm: bool = True) -&gt; None:
+    &quot;&quot;&quot;Set LlamaIndex&#x27;s process-wide model handles.&quot;&quot;&quot;
+    Settings.embed_model = OllamaEmbedding(
+        model_name=EMBED_MODEL,
+        base_url=BASE_URL,
+    )
+    if need_llm:
+        Settings.llm = Ollama(
+            model=CHAT_MODEL,
+            base_url=BASE_URL,
+            request_timeout=120,
+            temperature=0,
+            context_window=NUM_CTX,
+        )
+</pre>
+
+<h2>ingest.py</h2>
+<pre>&quot;&quot;&quot;Build the local index: CSV -&gt; LlamaIndex Documents -&gt; Ollama -&gt; Chroma.
+
+Run after the models are pulled:
+
+    uv run python ingest.py
+&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import sys
+
+import chromadb
+import pandas as pd
+from llama_index.core import Document, StorageContext, VectorStoreIndex
+from llama_index.vector_stores.chroma import ChromaVectorStore
+
+from common import (
+    COLLECTION,
+    CSV_PATH,
+    DB_DIR,
+    EMBED_MODEL,
+    configure,
+    require_models,
+)
+
+
+def main() -&gt; int:
+    try:
+        require_models(need_chat=False)
+        configure(need_llm=False)
+    except RuntimeError as error:
+        print(f&quot;error: {error}&quot;, file=sys.stderr)
+        return 1
+
+    frame = pd.read_csv(CSV_PATH)
+    documents = [
+        Document(
+            text=f&quot;{row[&#x27;Title&#x27;]}. {row[&#x27;Review&#x27;]}&quot;,
+            metadata={
+                &quot;title&quot;: row[&quot;Title&quot;],
+                &quot;rating&quot;: int(row[&quot;Rating&quot;]),
+                &quot;date&quot;: str(row[&quot;Date&quot;]),
+            },
+        )
+        for _, row in frame.iterrows()
+    ]
+
+    client = chromadb.PersistentClient(path=str(DB_DIR))
+    collection = client.get_or_create_collection(COLLECTION)
+    existing = collection.count()
+    if existing:
+        print(f&quot;collection already has {existing} documents; nothing to do.&quot;)
+        print(f&quot;delete {DB_DIR} and rerun to rebuild.&quot;)
+        return 0
+
+    vector_store = ChromaVectorStore(chroma_collection=collection)
+    storage = StorageContext.from_defaults(vector_store=vector_store)
+    VectorStoreIndex.from_documents(
+        documents,
+        storage_context=storage,
+        show_progress=True,
+    )
+
+    print(f&quot;read {len(frame)} rows from {CSV_PATH.name}&quot;)
+    print(f&quot;embedded {len(documents)} documents with {EMBED_MODEL}&quot;)
+    print(f&quot;stored in {DB_DIR}&quot;)
+    return 0
+
+
+if __name__ == &quot;__main__&quot;:
+    raise SystemExit(main())
+</pre>
+
+<h2>ask.py</h2>
+<pre>&quot;&quot;&quot;Ask the local LlamaIndex agent a question over the Nimbus Pizza reviews.
+
+Run:
+
+    uv run python ask.py &quot;Is the gluten-free pizza good?&quot;
+    uv run python ask.py                 # interactive
+
+No API key and no network: the chat model, embeddings and vector store all run
+on this machine.
+&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import sys
+
+import chromadb
+from llama_index.core import VectorStoreIndex
+from llama_index.vector_stores.chroma import ChromaVectorStore
+
+from common import (
+    CHAT_MODEL,
+    COLLECTION,
+    DB_DIR,
+    configure,
+    require_models,
+)
+
+
+def build_engine():
+    client = chromadb.PersistentClient(path=str(DB_DIR))
+    collection = client.get_or_create_collection(COLLECTION)
+    if collection.count() == 0:
+        raise RuntimeError(&quot;the vector store is empty; run `uv run python ingest.py` first&quot;)
+
+    vector_store = ChromaVectorStore(chroma_collection=collection)
+    index = VectorStoreIndex.from_vector_store(vector_store)
+    return index.as_query_engine(similarity_top_k=4)
+
+
+def answer(engine, question: str) -&gt; None:
+    print(f&quot;\nquerying 4 local chunks with {CHAT_MODEL} ...\n&quot;)
+    response = engine.query(question)
+    print(response.response)
+    print(&quot;\nsources:&quot;)
+    for node in response.source_nodes:
+        meta = node.metadata
+        print(
+            f&quot;  [{meta.get(&#x27;title&#x27;, &#x27;untitled&#x27;)}] &quot;
+            f&quot;rating={meta.get(&#x27;rating&#x27;, &#x27;?&#x27;)} {meta.get(&#x27;date&#x27;, &#x27;?&#x27;)}&quot;
+        )
+
+
+def main() -&gt; int:
+    try:
+        require_models()
+        configure()
+        engine = build_engine()
+    except RuntimeError as error:
+        print(f&quot;error: {error}&quot;, file=sys.stderr)
+        return 1
+
+    question = &quot; &quot;.join(sys.argv[1:]).strip()
+    if question:
+        answer(engine, question)
+        return 0
+
+    print(&quot;Ask about the Nimbus Pizza reviews. Type &#x27;q&#x27; to quit.&quot;)
+    while True:
+        try:
+            question = input(&quot;\nquestion: &quot;).strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 0
+        if question.lower() in {&quot;q&quot;, &quot;quit&quot;, &quot;exit&quot;}:
+            return 0
+        if question:
+            answer(engine, question)
+
+
+if __name__ == &quot;__main__&quot;:
+    raise SystemExit(main())
+</pre>
+
+
+<h2>Files</h2>
+<table>
+  <thead><tr><th>file</th><th>role</th></tr></thead>
+  <tbody>
+    <tr><td><code>common.py</code></td><td>config, Ollama preflight, LlamaIndex Settings</td></tr>
+    <tr><td><code>ingest.py</code></td><td>CSV -&gt; LlamaIndex Documents -&gt; embeddings -&gt; Chroma</td></tr>
+    <tr><td><code>ask.py</code></td><td>VectorStoreIndex -&gt; query engine -&gt; answer + sources</td></tr>
+    <tr><td><code>data/reviews.csv</code></td><td>20 synthetic Nimbus Pizza reviews</td></tr>
+    <tr><td><code>.env.example</code></td><td>model names and base URL</td></tr>
+    <tr><td><code>pyproject.toml</code></td><td>uv project: llama-index-core, Ollama + Chroma integrations, pandas</td></tr>
+  </tbody>
+</table>
+
+<div class="footer-nav">
+  <div class="ask"><strong>Answer not in the reviews?</strong> Check the retrieved source list first. If the right review is missing, raise <code>k</code> or fix the embedding model; a chat model cannot ground an answer in context it never received.</div>
+  <div class="links">
+    <a href="../../../lessons/0014-ollama-local-rag.html">← Lesson 14</a>
+    <a href="README.md">README</a>
+    <a href="../../../lessons/0007-rag-service.html">Lesson 7</a>
+  </div>
+</div>
+
+</article>
+</body>
+</html>

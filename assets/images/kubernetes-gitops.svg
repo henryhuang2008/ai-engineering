@@ -1,0 +1,116 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 560" role="img" aria-labelledby="title desc">
+  <title id="title">GitOps delivery pipeline</title>
+  <desc id="desc">A developer pushes to a GitHub application repository. Jenkins runs tests, builds and scans the image, pushes it to a registry, and commits the new image tag to a GitOps repository. Argo CD watches the GitOps repository and reconciles the Kubernetes cluster. Argo CD is the only component with cluster write access.</desc>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#3d3d56"/>
+    </marker>
+    <marker id="arrow-dash" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#6b6b80"/>
+    </marker>
+    <style>
+      .box { fill: #ffffff; stroke: #0f4c5c; stroke-width: 1.5; rx: 8; }
+      .box-soft { fill: #f7f6f3; stroke: #d4a843; stroke-width: 1.5; rx: 8; }
+      .box-cluster { fill: #f0f7f8; stroke: #0f4c5c; stroke-width: 1.5; rx: 10; }
+      .group { fill: none; stroke: #e2e0da; stroke-width: 1.5; stroke-dasharray: 6 5; rx: 12; }
+      .title { font: 600 17px "Segoe UI", Helvetica, Arial, sans-serif; fill: #1a1a2e; }
+      .label { font: 600 13px "Segoe UI", Helvetica, Arial, sans-serif; fill: #1a1a2e; }
+      .small { font: 11px "Segoe UI", Helvetica, Arial, sans-serif; fill: #3d3d56; }
+      .tiny { font: 10px "Segoe UI", Helvetica, Arial, sans-serif; fill: #6b6b80; }
+      .edge { stroke: #3d3d56; stroke-width: 1.6; fill: none; marker-end: url(#arrow); }
+      .edge-dash { stroke: #6b6b80; stroke-width: 1.4; fill: none; stroke-dasharray: 5 4; marker-end: url(#arrow-dash); }
+      .edge-label { font: 10px "Segoe UI", Helvetica, Arial, sans-serif; fill: #6b6b80; }
+    </style>
+  </defs>
+
+  <rect width="960" height="560" fill="#fdfdfc"/>
+
+  <text x="30" y="34" class="title">GitOps delivery: Jenkins builds, Git declares, Argo CD reconciles</text>
+  <text x="30" y="54" class="small">The CI system never holds a cluster credential. The cluster pulls its desired state from Git.</text>
+
+  <!-- CI plane -->
+  <rect x="22" y="78" width="545" height="310" class="group"/>
+  <text x="38" y="100" class="tiny">CI PLANE - no cluster credentials</text>
+
+  <!-- Developer -->
+  <rect x="40" y="120" width="150" height="64" class="box"/>
+  <text x="56" y="146" class="label">Developer</text>
+  <text x="56" y="164" class="small">push / pull request</text>
+
+  <!-- GitHub app -->
+  <rect x="232" y="120" width="156" height="64" class="box"/>
+  <text x="248" y="146" class="label">GitHub</text>
+  <text x="248" y="164" class="small">application repo</text>
+
+  <!-- Jenkins -->
+  <rect x="428" y="112" width="100" height="112" class="box"/>
+  <text x="442" y="136" class="label">Jenkins</text>
+  <text x="442" y="154" class="tiny">test</text>
+  <text x="442" y="168" class="tiny">build</text>
+  <text x="442" y="182" class="tiny">scan (Trivy)</text>
+  <text x="442" y="196" class="tiny">push</text>
+  <text x="442" y="210" class="tiny">update tag</text>
+
+  <!-- Registry -->
+  <rect x="402" y="270" width="152" height="64" class="box-soft"/>
+  <text x="418" y="296" class="label">Image registry</text>
+  <text x="418" y="314" class="small">ghcr.io/org/app:sha</text>
+
+  <!-- arrows -->
+  <line x1="190" y1="152" x2="229" y2="152" class="edge"/>
+  <line x1="388" y1="152" x2="425" y2="152" class="edge"/>
+  <text x="396" y="144" class="edge-label">webhook</text>
+
+  <line x1="478" y1="224" x2="478" y2="267" class="edge"/>
+  <text x="486" y="248" class="edge-label">push</text>
+
+  <!-- GitOps repo -->
+  <rect x="600" y="112" width="160" height="96" class="box"/>
+  <text x="616" y="138" class="label">GitOps repo</text>
+  <text x="616" y="156" class="tiny">base + overlays</text>
+  <text x="616" y="170" class="tiny">dev / staging / prod</text>
+  <text x="616" y="184" class="tiny">image tag = commit sha</text>
+
+  <line x1="528" y1="132" x2="597" y2="132" class="edge"/>
+  <text x="536" y="124" class="edge-label">commit tag</text>
+
+  <!-- Argo CD -->
+  <rect x="600" y="286" width="160" height="92" class="box"/>
+  <text x="616" y="312" class="label">Argo CD</text>
+  <text x="616" y="330" class="tiny">watches Git</text>
+  <text x="616" y="344" class="tiny">syncs desired state</text>
+  <text x="616" y="358" class="tiny">reports health</text>
+
+  <line x1="680" y1="208" x2="680" y2="283" class="edge"/>
+  <text x="688" y="248" class="edge-label">poll / webhook</text>
+
+  <!-- Cluster -->
+  <rect x="806" y="276" width="132" height="160" class="box-cluster"/>
+  <text x="820" y="298" class="label">Kubernetes</text>
+  <rect x="820" y="310" width="104" height="30" class="box-soft"/>
+  <text x="834" y="330" class="small">dev</text>
+  <rect x="820" y="348" width="104" height="30" class="box-soft"/>
+  <text x="834" y="368" class="small">staging</text>
+  <rect x="820" y="386" width="104" height="30" class="box-soft"/>
+  <text x="834" y="406" class="small">prod</text>
+
+  <line x1="760" y1="330" x2="803" y2="330" class="edge"/>
+  <text x="766" y="322" class="edge-label">sync</text>
+
+  <!-- health back -->
+  <path d="M 806 400 C 780 400, 780 372, 760 372" class="edge-dash"/>
+  <text x="742" y="394" class="edge-label">health</text>
+
+  <!-- promotion -->
+  <rect x="600" y="440" width="338" height="54" class="box-soft"/>
+  <text x="616" y="460" class="small"><tspan class="label">Promotion is a pull request:</tspan> dev -&gt; staging -&gt; prod</text>
+  <text x="616" y="478" class="tiny">Review the image digest and the diff. Merge to promote; revert to roll back.</text>
+
+  <!-- legend -->
+  <line x1="38" y1="502" x2="78" y2="502" class="edge"/>
+  <text x="86" y="506" class="tiny">artifact / commit</text>
+  <line x1="208" y1="502" x2="248" y2="502" class="edge-dash"/>
+  <text x="256" y="506" class="tiny">reconcile / status</text>
+  <text x="430" y="506" class="tiny">Jenkins writes the image and the GitOps commit. Argo CD is the only cluster writer.</text>
+</svg>

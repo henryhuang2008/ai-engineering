@@ -1,0 +1,12 @@
+{"ticket": "I was charged twice for my subscription this month.", "expected": "billing"}
+{"ticket": "The app crashes every time I open the settings page.", "expected": "bug"}
+{"ticket": "How do I export my data to CSV?", "expected": "question"}
+{"ticket": "My invoice shows a plan I never upgraded to.", "expected": "billing"}
+{"ticket": "The login button does nothing when I click it.", "expected": "bug"}
+{"ticket": "What's the difference between the pro and team plans?", "expected": "question"}
+{"ticket": "Cancel this please — I want a refund for unused days.", "expected": "billing"}
+{"ticket": "The dashboard chart renders blank on Safari.", "expected": "bug"}
+{"ticket": "Can two people share one account?", "expected": "question"}
+{"ticket": "Why was I billed after I already cancelled?", "expected": "billing"}
+{"ticket": "File uploads fail with a 502 error.", "expected": "bug"}
+{"ticket": "Where can I find your privacy policy?", "expected": "question"}

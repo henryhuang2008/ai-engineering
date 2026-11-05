@@ -1,0 +1,12 @@
+[project]
+name = "0004-streaming-chat"
+version = "0.1.0"
+description = "Lesson 4 lab: FastAPI + LangChain + DeepSeek streaming chat, Next.js prompt input"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "langchain>=1.4,<2",
+    "langchain-deepseek>=1.1,<2",
+    "pydantic>=2.9,<3",
+]

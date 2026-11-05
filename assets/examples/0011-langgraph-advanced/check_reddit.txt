@@ -1,0 +1,28 @@
+question: Should a small support team build its agent on LangGraph or a plain tool loop?
+graph:    reference (fan-out, fan-in)
+source:   snapshot
+reddit:   on
+
+[   0.0s] search_bing          5 results
+[   0.0s] search_google        5 results
+[   0.0s] search_reddit        5 results
+[   1.4s] select_reddit_urls   3 urls
+[   1.4s] fetch_reddit         3 threads / 9 comments
+[   3.7s] analyze_google       analyses += google
+[   4.2s] analyze_reddit       analyses += reddit
+[   4.2s] analyze_bing         analyses += bing
+[   6.5s] synthesize           180 words
+
+answer: **Recommendation:** Start with a plain tool loop, and migrate to LangGraph only when a concrete operational requirement forces it—most likely resumable runs or a human approval gate.
+
+**Reasons:**
+1. **Simplicity wins early.** A loop is faster to read, has no dependency, and covers most single-turn support flows; every graph node is another place to test.
+2. **The graph buys recovery and inspection, not intelligence.** Its real payoff is checkpointing (pause before a side effect, resume from another worker) and per-ticket traces for audit—valuable, but only once you need them.
+3. **Migration is cheap.** Practitioners report moving from loop to graph "without changing the prompts," so starting simple doesn't lock you in.
+
+**Caveat:** If your team already knows it needs multi-day approvals or crash recovery, build the graph now—retrofitting state design later is the expensive part. Write down your state fields and reducers before coding either way.
+
+**Missing/empty sources:** None of the three sources quantified build effort, latency, or cost, gave a threshold for the "second operational requirement," or offered a dissenting account from a small team that regretted adopting LangGraph.
+
+sources: google=5 bing=5 reddit=5 | urls=3 | threads=3
+graph: bing, google, reddit | nodes=9 | 6.5s

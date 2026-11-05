@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 13 — Pydantic: Make Bad Data Fail at the Boundary</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<article class="page">
+
+<p class="meta">Lesson 13 of the AI Engineering course · ~45 min · Prereq: <a href="0012-python-libraries-for-ai.html">Lesson 12</a> + <a href="0002-your-first-llm-api-call.html">Lesson 2</a> · <a href="../reference/skill-map.html">Skill Map →</a></p>
+
+<h1>Pydantic: Make Bad Data Fail at the Boundary</h1>
+
+<p class="lede">Every AI bug you cannot reproduce starts as an unvalidated dict. Pydantic is the contract layer: it decides what a <code>Ticket</code> is, refuses anything else, and gives the same schema to FastAPI, your database code, and the model. This lesson builds that layer from one model to a validated DeepSeek reply.</p>
+
+<div class="callout win">
+  <span class="label">Your win this lesson</span>
+  You'll build a model, tighten it with field and model validators, nest it, generate its JSON Schema, load typed settings from the environment, and parse a live DeepSeek extraction into the model. You'll also leave with the five habits that keep validation at the boundary instead of scattered through the code.
+</div>
+
+<h2>Part 1 — A dataclass stores; a model checks</h2>
+
+<p>Python's type hints are documentation until something enforces them. A <code>@dataclass</code> generates an <code>__init__</code> and stops there:</p>
+
+<pre><code>@dataclass
+class DataUser:
+    name: str
+    age: int
+
+raw = DataUser(name="Alice", age="not a number")
+print(raw.age)          # "not a number" - no complaint</code></pre>
+
+<p>A Pydantic <code>BaseModel</code> looks the same and behaves differently: it validates on construction, coerces only when the type allows it, and raises a structured error otherwise.</p>
+
+<pre><code>class User(BaseModel):
+    name: str = Field(min_length=1, max_length=50)
+    age: int = Field(ge=0, le=120)
+    email: EmailStr | None = None
+
+User(name="Alice", age="not a number")
+# ValidationError: Input should be a valid integer
+
+User(name="Alice", age="25").age   # 25, an int - coercion is allowed</code></pre>
+
+<p>That coercion is a feature at a boundary: form data and JSON often send numbers as strings. It is not a license to be vague — <code>ConfigDict(strict=True)</code> turns it off when you need exact types. (<code>EmailStr</code> needs the <code>email-validator</code> package; the lab's <code>pyproject.toml</code> includes it.)</p>
+
+<h2>Part 2 — The model toolkit</h2>
+
+<table>
+  <thead><tr><th>need</th><th>method</th><th>what it returns</th></tr></thead>
+  <tbody>
+    <tr><td>build from a dict</td><td><code>Model.model_validate(data)</code></td><td>a validated instance; supports <code>strict=True</code></td></tr>
+    <tr><td>build from JSON</td><td><code>Model.model_validate_json(text)</code></td><td>parsed and validated — the LLM boundary</td></tr>
+    <tr><td>export to Python</td><td><code>model.model_dump()</code></td><td>a dict (nested models become dicts)</td></tr>
+    <tr><td>export to JSON</td><td><code>model.model_dump_json()</code></td><td>a JSON string</td></tr>
+    <tr><td>edit without mutating</td><td><code>model.model_copy(update={...})</code></td><td>a copy with the updates applied (not revalidated)</td></tr>
+    <tr><td>describe the model</td><td><code>Model.model_json_schema()</code></td><td>JSON Schema for tools and docs</td></tr>
+  </tbody>
+</table>
+
+<p><code>model_validate</code> versus <code>Model(**data)</code>: both construct; <code>model_validate</code> takes the dict as one value and exposes options. Use <code>**data</code> in small scripts, <code>model_validate</code> at a real boundary where the payload arrives as a dict.</p>
+
+<p>When validation fails, read the errors as data rather than as a stack trace:</p>
+
+<pre><code>try:
+    User(name="", age=41)
+except ValidationError as error:
+    for item in error.errors():
+        print(item["loc"], item["type"], item["msg"])
+
+# ('name',) string_too_short String should have at least 1 character</code></pre>
+
+<p><code>loc</code> is the path — the field, a list index, or a nested model. That path is usually the whole debugging session.</p>
+
+<h2>Part 3 — Constraints first, validators second</h2>
+
+<p>Most rules are declarative. <code>Field</code> puts them in the type, the JSON Schema, the FastAPI docs, and the error message at once:</p>
+
+<pre><code>class Signup(BaseModel):
+    username: str = Field(min_length=3, max_length=20)
+    plan: Literal["free", "team", "enterprise"]
+    seats: int = Field(default=1, ge=1, le=500)</code></pre>
+
+<table>
+  <thead><tr><th>constraint</th><th>for</th></tr></thead>
+  <tbody>
+    <tr><td><code>gt</code>, <code>ge</code>, <code>lt</code>, <code>le</code></td><td>number ranges</td></tr>
+    <tr><td><code>min_length</code>, <code>max_length</code></td><td>strings and lists</td></tr>
+    <tr><td><code>pattern</code></td><td>regex on a string</td></tr>
+    <tr><td><code>EmailStr</code>, <code>HttpUrl</code></td><td>the formats you would otherwise hand-check</td></tr>
+    <tr><td><code>Literal[...]</code></td><td>a closed set of labels — routes, statuses, categories</td></tr>
+  </tbody>
+</table>
+
+<p>Use a <code>field_validator</code> for business logic one field can see; use a <code>model_validator</code> when the rule spans fields:</p>
+
+<pre><code>class Signup(BaseModel):
+    username: str
+
+    @field_validator("username")
+    @classmethod
+    def no_spaces(cls, value: str) -&gt; str:
+        if " " in value:
+            raise ValueError("username cannot contain spaces")
+        return value.lower()
+
+
+class DateRange(BaseModel):
+    start: int
+    end: int
+
+    @model_validator(mode="after")
+    def ordered(self) -&gt; "DateRange":
+        if self.start &gt; self.end:
+            raise ValueError("start must be &lt;= end")
+        return self</code></pre>
+
+<p>A validator returns the value to accept it, or raises <code>ValueError</code> to reject it. Returning a transformed value (lowercased, stripped) is the quiet superpower: the model normalizes on the way in, so no other code has to remember.</p>
+
+<h2>Part 4 — Nested models and lists</h2>
+
+<p>Real payloads are nested. Use a model as a field type and Pydantic validates the whole tree:</p>
+
+<pre><code>class Address(BaseModel):
+    city: str
+    country: str
+
+class Customer(BaseModel):
+    name: str
+    address: Address
+
+class LineItem(BaseModel):
+    sku: str
+    quantity: int = Field(ge=1)
+    unit_price: float = Field(ge=0)
+
+class Order(BaseModel):
+    order_id: str = Field(pattern=r"^ORD-\d+$")
+    customer: Customer
+    items: list[LineItem]
+    note: str | None = None
+
+order = Order.model_validate(payload)
+order.customer.address.city     # Amsterdam
+order.items[0].sku              # WIDGET</code></pre>
+
+<p><code>model_dump()</code> recursively converts nested models to dicts; <code>model_dump_json()</code> does the same to a JSON string. If you need to validate a bare list without a wrapper, use <code>TypeAdapter(list[LineItem])</code>.</p>
+
+<p><strong>The schema is a public artifact.</strong> <code>Order.model_json_schema()</code> lists the required fields, the nested <code>$defs</code>, and every constraint. FastAPI publishes it as OpenAPI; LangChain hands it to a model as a tool schema. You write the model once and three systems consume it.</p>
+
+<h2>Part 5 — Settings: fail at boot, not at the first request</h2>
+
+<p><code>os.getenv</code> returns <code>str | None</code>. Every service ends up with a pile of manual casts and defaults — or a crash when a typo reaches production. <code>pydantic-settings</code> makes configuration a model:</p>
+
+<pre><code>class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix="APP_", env_file=".env", extra="ignore"
+    )
+
+    api_key: SecretStr
+    database_url: str
+    max_retries: int = Field(default=2, ge=0, le=5)
+    debug: bool = False
+
+settings = Settings()   # APP_API_KEY, APP_DATABASE_URL, ...</code></pre>
+
+<p>Field names map to uppercase environment variables; the prefix avoids collisions. Types are converted (<code>"true"</code> to <code>True</code>, <code>"8080"</code> to <code>8080</code>), constraints apply, and a missing required value raises at import time. <code>SecretStr</code> prints as <code>**********</code>; call <code>get_secret_value()</code> only where the client needs it.</p>
+
+<p>Wrap the loader in <code>@lru_cache</code> so the process parses the environment once. In production the values come from the platform's secret store, not a committed <code>.env</code>.</p>
+
+<h2>Part 6 — Structured output: the schema is the prompt</h2>
+
+<p>This is where Pydantic earns its place in an AI application. Define the object you want; LangChain converts it to a tool schema; DeepSeek calls that tool; Pydantic validates the arguments:</p>
+
+<pre><code>class Ticket(BaseModel):
+    order_id: str = Field(description="Order id, for example A-1042")
+    category: Literal["billing", "technical", "other"] = Field(
+        description="billing for money, technical for product failures"
+    )
+    urgency: int = Field(ge=1, le=5, description="1 low, 5 urgent")
+    wants_refund: bool = Field(description="True only if a refund is requested")
+    summary: str = Field(description="One sentence, using only facts in the message")
+
+extractor = model.with_structured_output(Ticket, method="function_calling")
+ticket = extractor.invoke([SystemMessage(content=SYSTEM), HumanMessage(content=TEXT)])</code></pre>
+
+<p>Real run from the lab:</p>
+
+<pre><code>type:    Ticket (validated instance)
+order:   A-1042
+route:   billing
+urgency: 5
+refund:  True
+summary: Order A-1042 was charged twice this month and the customer wants a refund today.
+
+as JSON:
+{
+  "order_id": "A-1042",
+  "category": "billing",
+  "urgency": 5,
+  "wants_refund": true,
+  "summary": "Order A-1042 was charged twice this month and the customer wants a refund today."
+}</code></pre>
+
+<p>Three things make this reliable. <strong>Descriptions are prompt text</strong> — they tell the model what "urgency" means. <strong><code>Literal</code> is a closed set</strong> — the model cannot return "probably billing". And <strong>validation is automatic</strong> — you get a <code>Ticket</code>, not a string to parse.</p>
+
+<p><strong>What Pydantic does not do:</strong> it checks shape, not truth. A perfectly valid <code>Ticket</code> can still have the wrong order id or an invented summary. That is the eval layer's job (<a href="0005-your-first-evals.html">lesson 5</a>). Keep the two separate: validation catches malformed data; evals catch wrong data.</p>
+
+<p>If a provider cannot do native structured output, ask for JSON and call <code>Ticket.model_validate_json(reply)</code>. On failure, send the <code>ValidationError</code> back to the model and retry once — a repair loop beats regex. Never hand-parse the prose.</p>
+
+<h2>Part 7 — Judgment: where Pydantic stops</h2>
+
+<table>
+  <thead><tr><th>situation</th><th>right tool</th></tr></thead>
+  <tbody>
+    <tr><td>an HTTP body, queue message, or LLM reply</td><td>Pydantic model at the edge</td></tr>
+    <tr><td>environment and secrets</td><td><code>pydantic-settings</code> + <code>SecretStr</code></td></tr>
+    <tr><td>a million rows of numeric work</td><td>pandas / numpy; validate the boundary, not each row</td></tr>
+    <tr><td>a stable internal function between two typed functions</td><td>plain type hints are enough</td></tr>
+    <tr><td>a schema that changes weekly</td><td>a dict at the storage edge, plus a versioned model when it stabilizes</td></tr>
+  </tbody>
+</table>
+
+<p>Two small settings worth knowing. <code>ConfigDict(extra="forbid")</code> rejects unknown keys, which is what you want for a strict inbound contract and usually wrong for a forward-compatible API. <code>Field(alias="user_id")</code> maps an external key to a Python field name without renaming your codebase.</p>
+
+<p>Performance is rarely the reason to avoid Pydantic v2: validation is Rust-backed. The real cost is designing the schema, and that cost buys you one place where the shape of the data is decided.</p>
+
+<h2>The five habits</h2>
+
+<ol>
+  <li><strong>Model every boundary:</strong> inbound HTTP, outbound LLM JSON, environment. Inside, trust the type.</li>
+  <li><strong>Declare constraints before writing validators:</strong> they appear in the schema and are enforced by every consumer.</li>
+  <li><strong>Use <code>model_validator</code> for rules that span fields</strong> — ranges, totals, refunds.</li>
+  <li><strong>Load settings once, typed, with <code>SecretStr</code></strong> — fail at boot, not at request 3.</li>
+  <li><strong>Give the model the same schema you validate with</strong> — descriptions and <code>Literal</code> are part of the prompt.</li>
+</ol>
+
+<h2>Check yourself</h2>
+
+<div class="quiz">
+<script type="application/json">
+{
+  "questions": [
+    {
+      "q": "What does a dataclass do with a value that does not match its type hint?",
+      "options": [
+        "Raises a ValidationError at construction",
+        "Coerces it to the declared type",
+        "Stores it unchanged - hints are not enforced",
+        "Converts the field to a string"
+      ],
+      "correct": 2,
+      "explain": "A dataclass generates __init__ from the hints and does not validate. Pydantic is the layer that checks and coerces at construction."
+    },
+    {
+      "q": "Which declaration requires age to be greater than zero?",
+      "options": [
+        "age: int = Field(gt=0)",
+        "age: int = Field(ge=0)",
+        "age: int = 0",
+        "age: Literal[1, 2, 3]"
+      ],
+      "correct": 0,
+      "explain": "gt is strictly greater than; ge allows zero. A bare default is not a constraint, and Literal only restricts to the listed values."
+    },
+    {
+      "q": "When do you need a model_validator instead of a field_validator?",
+      "options": [
+        "When the rule is a regex on one string",
+        "When the rule spans two or more fields",
+        "When the field is optional",
+        "When the model is nested"
+      ],
+      "correct": 1,
+      "explain": "start <= end, discount < total, refund <= charge all need both values. A field_validator sees one field; a model_validator sees the instance."
+    },
+    {
+      "q": "Why use SecretStr for an API key in settings?",
+      "options": [
+        "It encrypts the key at rest in memory",
+        "It validates the key against the provider",
+        "It loads the key from a .env file only",
+        "It masks the value in logs and prints"
+      ],
+      "correct": 3,
+      "explain": "SecretStr prints as ********** and requires get_secret_value() to read. It prevents accidental logging; it is not encryption or remote validation."
+    },
+    {
+      "q": "What does with_structured_output use from a Pydantic model?",
+      "options": [
+        "Its docstring as the system prompt",
+        "Its JSON Schema as the tool schema",
+        "Its field defaults as examples",
+        "Its validators as retry policies"
+      ],
+      "correct": 1,
+      "explain": "The model is converted to JSON Schema and sent as a function/tool schema. Descriptions and constraints travel with it; the reply is validated into the model."
+    },
+    {
+      "q": "A valid Ticket can still contain a wrong order id. Why?",
+      "options": [
+        "Pydantic checks shape, not factual truth",
+        "The Literal type is not enforced",
+        "model_validate skips business rules",
+        "Structured output ignores constraints"
+      ],
+      "correct": 0,
+      "explain": "Validation answers 'is this a string that looks like an order id?', not 'is this the customer's order?'. Factual correctness belongs to evals."
+    },
+    {
+      "q": "When is Pydantic a poor fit?",
+      "options": [
+        "Validating an HTTP request body",
+        "Parsing an LLM's JSON reply",
+        "Loading typed environment settings",
+        "Row-by-row validation of a large dataframe"
+      ],
+      "correct": 3,
+      "explain": "Validate the dataframe at the boundary, not every row: pandas/numpy operations are the right tool for bulk numeric work. The other three are Pydantic's core cases."
+    }
+  ]
+}
+</script>
+</div>
+
+<h2>Primary sources for this lesson</h2>
+<p><a href="https://docs.pydantic.dev/latest/">Pydantic documentation</a> — models, fields, validators, serialization, and JSON Schema. <a href="https://docs.pydantic.dev/latest/concepts/pydantic_settings/">Pydantic Settings</a> for the configuration half. The <a href="https://github.com/daveebbelaar/pydantic-crash-course">eight-chapter Pydantic crash course</a> this lesson compresses is a good second pass; its structured-output chapter uses OpenAI, while the lab here uses DeepSeek.</p>
+<p>For the model boundary: <a href="https://docs.langchain.com/oss/python/langchain/models">LangChain models and structured output</a> and the <a href="https://docs.langchain.com/oss/python/integrations/chat/deepseek">ChatDeepSeek integration page</a>. For the API boundary, FastAPI's <a href="https://fastapi.tiangolo.com/tutorial/body/">request body</a> docs show the same models generating validation and OpenAPI.</p>
+
+<h2>What's next</h2>
+<p>Pydantic is the contract every service in this course uses: the RAG API validates requests with it, the agent validates tool arguments with it, and the eval suite compares typed outputs. <a href="0014-ollama-local-rag.html">Lesson 14</a> changes the model layer: a local Ollama server, qwen3:4b-instruct, and a LlamaIndex query engine, with no API key.</p>
+
+<div class="footer-nav">
+  <div class="ask"><strong>Validation error you did not expect?</strong> Print <code>error.errors()</code> and read <code>loc</code> first — it names the field, list index, or nested model. If the path is empty, the problem is the whole payload; if it points at a list index, validate one item on its own to see the shape it wanted.</div>
+  <div class="links">
+    <a href="0012-python-libraries-for-ai.html">← Lesson 12</a>
+    <a href="../reference/skill-map.html">Skill Map &amp; Glossary</a>
+    <a href="../assets/examples/0013-pydantic/index.html">Example page</a>
+  </div>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</article>
+</body>
+</html>

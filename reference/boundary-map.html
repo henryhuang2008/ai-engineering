@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reference — The Boundary Map</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<article class="page">
+
+<p class="meta">Reference document · Draws on <a href="../lessons/0002-your-first-llm-api-call.html">Lesson 2</a> through <a href="../lessons/0011-langgraph-advanced.html">Lesson 11</a> · Prints as a cheat sheet</p>
+
+<h1>The Boundary Map</h1>
+
+<p class="lede">"Boundary" is this course's recurring insight — taught in pieces across the seventeen lessons, never as one picture. This is the picture: where every boundary sits in an agent, what crosses it, the single rule each enforces, and the lesson to revisit. The claim it compresses: <strong>error handling, security, and safety are the same discipline at different lines</strong> — label what crosses, classify what fails, cap what loops, gate what's irreversible.</p>
+
+<h2>The agent, drawn as boundaries</h2>
+
+<pre>untrusted text ↓ (label)                 failures ↓ (classify)
+side effects   → (gate)                   budgets   → (cap)
+
+  ┌─ intake ───┐   ┌── context ──┐         ┌─ output ──┐
+  │ user msg   │──▶│  assembly   │◀──▶MODEL│ grounding │──▶ reply
+  └────────────┘   └──┬───────┬──┘         └───────────┘
+                      │       │
+        ┌─ retrieval ─┘       └─ tool / MCP ─┐        ┌─ loop ────┐
+        │ scope (server-side, narrow-only)   │◀──────▶│ step+dup  │
+        └────────────────────────────────────┘  loop  │ budget    │
+                                                     └───────────┘
+                 ┌─ persistence ─┐      ┌─ human ──┐
+                 │ DB = truth    │      │ approve  │──▶ world
+                 │ window = view │      │ gate     │   (money, mail, data)
+                 └───────────────┘      └──────────┘</pre>
+
+<p>Three flow types cross these lines, and each gets exactly one treatment: <strong>untrusted text</strong> crosses downward and must be <em>labeled</em>; <strong>failures</strong> cross upward and must be <em>structured</em>; <strong>side effects</strong> cross outward and must be <em>gated or keyed</em>. If you can say which of the three a crossing is, you know its rule.</p>
+
+<h2>The table (boundary · crossing · rule · cost of skipping · lesson)</h2>
+
+<table>
+  <thead><tr><th>boundary</th><th>what crosses</th><th>the one rule</th><th>if you skip it</th><th>lesson</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Provider seam</strong></td><td>model calls in/out</td><td>One <code>build_model()</code> seam: a live <code>ChatDeepSeek</code>, or a missing-key error with the exact commands — never a fake model</td><td>a lab that cannot run; output you mistook for real</td><td><a href="../lessons/0002-your-first-llm-api-call.html">L2</a></td></tr>
+    <tr><td><strong>Intake</strong></td><td>user text ↓</td><td>Scan &amp; flag, log, reject — this layer informs, it does not protect</td><td>injection walks in (LLM01)</td><td><a href="../lessons/0013-pydantic.html">L13</a></td></tr>
+    <tr><td><strong>Context assembly</strong></td><td>retrieved + tool text ↓</td><td>Labeled untrusted data in delimiters, behind system policy; budgeted</td><td>context poisoning; instructions become data-in-context</td><td><a href="../lessons/0006-rag-foundation.html">L6</a>, <a href="../lessons/0007-rag-service.html">L7</a></td></tr>
+    <tr><td><strong>Retrieval scope</strong></td><td>query → docs</td><td>Scope resolved server-side from session; client may narrow, never widen</td><td>cross-tenant leak</td><td><a href="../lessons/0006-rag-foundation.html">L6</a>, <a href="../lessons/0007-rag-service.html">L7</a></td></tr>
+    <tr><td><strong>Tool / MCP</strong></td><td>schemas in, results out</td><td>Results are structured data — success and failure in one shape</td><td>hostile text in context; dead pipe kills the run</td><td><a href="../lessons/0003-function-calling.html">L3</a>, <a href="../lessons/0009-mcp.html">L9</a></td></tr>
+    <tr><td><strong>Failure</strong></td><td>exceptions ↑</td><td>One harness: classify → retry only if retryable ∧ idempotent → structure</td><td>crashed runs; blind retries multiply side effects</td><td><a href="../lessons/0003-function-calling.html">L3</a>, <a href="../lessons/0011-langgraph-advanced.html">L11</a></td></tr>
+    <tr><td><strong>Loop</strong></td><td>repeated decisions</td><td>Duplicate guard + step budget; every stop prints a reason</td><td>infinite loop → cost spiral, hung process</td><td><a href="../lessons/0003-function-calling.html">L3</a>, <a href="../lessons/0010-langgraph.html">L10</a></td></tr>
+    <tr><td><strong>Persistence</strong></td><td>state ↔ disk</td><td>DB = source of truth (append-only); window = view rebuilt each request</td><td>lost history; forks; stale-cache contradictions</td><td><a href="../lessons/0010-langgraph.html">L10</a></td></tr>
+    <tr><td><strong>Human gate</strong></td><td>side effects → world</td><td>Irreversible actions require approval; deny is a first-class outcome</td><td>rogue refunds; no audit story</td><td>not exercised — L17 is read-only</td></tr>
+    <tr><td><strong>Output</strong></td><td>answer ↓</td><td>Grounding check: citations must match retrieved blocks, or fail</td><td>hallucination delivered with confidence</td><td><a href="../lessons/0005-your-first-evals.html">L5</a>, <a href="../lessons/0007-rag-service.html">L7</a></td></tr>
+  </tbody>
+</table>
+
+<h2>The three questions (ask at every new boundary)</h2>
+
+<ol>
+  <li><strong>What crosses this line?</strong> Name it as one of the three flow types — untrusted text, failure, or side effect. (If nothing crosses, it isn't a boundary; don't add machinery.)</li>
+  <li><strong>What's its treatment?</strong> text → <em>label</em> · failure → <em>classify + structure</em> · side effect → <em>gate or idempotency key</em> · loop → <em>cap</em>. One treatment per flow; none of them is "try/except everywhere."</li>
+  <li><strong>What proves it holds?</strong> Every row above has a test: malformed input that must be rejected (L13), a dead source that must degrade instead of raise (L11), a citation outside the retrieved set that must fail closed (L7, L17), a re-index that must not change a chunk's provenance (L6). A boundary without an eval is a comment.</li>
+</ol>
+
+<p><strong>The two counting heuristics:</strong> count your <code>try/except</code>s — ideally one per boundary row, zero per business function (an exception is a crash with extra steps; pure functions should fail loudly in tests). And count your receipts — every crossing that failed or was gated leaves a log line or a trace step (L7, L11): boundaries are also where your eval cases come from.</p>
+
+<div class="footer-nav">
+  <div class="ask"><strong>Not sure where a new feature sits?</strong> Draw its arrows first — what text enters, what fails, what leaves the system — and the boundary (and its lesson) picks itself.</div>
+  <div class="links">
+    <a href="skill-map.html">← Skill Map &amp; Glossary</a>
+    <a href="../lessons/0011-langgraph-advanced.html">Companion: Lesson 11</a>
+  </div>
+</div>
+
+</article>
+</body>
+</html>

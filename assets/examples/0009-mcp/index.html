@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Example 0009 - MCP server, raw client, DeepSeek</title>
+<link rel="stylesheet" href="../../course.css">
+</head>
+<body>
+<article class="page">
+
+<p class="meta">Example 0009 · Companion to <a href="../../../lessons/0009-mcp.html">Lesson 9</a> · <a href="README.md">README</a></p>
+
+<h1>One MCP server, two clients</h1>
+
+<p class="lede">A <strong>FastMCP</strong> server exposes <strong>2 tools</strong> (<code>add</code>, <code>search_kb</code>), <strong>1 resource</strong> and <strong>1 prompt</strong> over stdio. <code>client_stdio.py</code> speaks the protocol directly — initialize, list, call — with no model. <code>chat.py</code> hands the same tools to <strong>DeepSeek</strong> by converting each MCP <code>inputSchema</code> into a function schema, then runs the lesson-3 tool loop against <code>session.call_tool</code>. The server is a subprocess in both cases; you never start it separately.</p>
+
+<h2>Key and run (uv)</h2>
+<pre>cd assets\examples\0009-mcp
+uv sync
+
+uv run python client_stdio.py          # no API key: list, call, print
+$env:DEEPSEEK_API_KEY = &quot;sk-...&quot;       # only the model step needs this
+uv run python chat.py &quot;What does E-311 mean?&quot; </pre>
+<p>The raw client needs no key. Only <code>chat.py</code> needs <code>DEEPSEEK_API_KEY</code>; without it the script prints the PowerShell block and exits 1. <code>mcp[cli]</code> is pinned to the 1.x SDK (<code>&gt;=1.30,&lt;2</code>) because the v2 line changes these APIs.</p>
+
+<h2>What client_stdio.py prints (real run)</h2>
+<pre>tools (2):
+  add(a, b)
+  search_kb(query, limit)
+
+resources (1):
+  kb://nimbusdesk/all - whole_kb
+
+prompts (1):
+  answer_from_kb
+
+call add(a=2, b=3)
+5
+
+call search_kb(query=&#x27;refund window&#x27;)
+Q: How long is the refund window?
+A: A full refund is available within 14 days of the initial charge. After day 14,
+annual plans are refunded pro rata minus the months already used.</pre>
+
+<h2>The same server over HTTP</h2>
+<pre># terminal 1 - pick one
+uv run python server.py sse
+uv run python server.py streamable-http
+
+# terminal 2
+uv run python client-sse.py               # http://127.0.0.1:8050/sse
+uv run python client-streamable-http.py   # http://127.0.0.1:8050/mcp</pre>
+<pre>serving over sse at http://127.0.0.1:8050/sse
+press Ctrl+C to stop
+
+connected to http://127.0.0.1:8050/sse
+tools: add, search_kb
+2 + 3 = 5</pre>
+<p>SSE and Streamable HTTP print the same tools and the same result; only the connection line changes. Both bind <code>127.0.0.1:8050</code>, so stop one server before starting the other.</p>
+
+<h2>What chat.py prints (live DeepSeek)</h2>
+<pre>tools: add, search_kb
+question: What does E-311 mean?
+  tool search_kb({&quot;query&quot;: &quot;E-311 error code&quot;})
+  -&gt; Q: What does error E-311 mean?
+answer: E-311 means the mailbox storage quota was exceeded. To fix it, archive
+conversations or raise the seat storage limit.</pre>
+
+<h2>README.md</h2>
+<pre># 0009 — MCP: write the tool once, call it from any client
+
+An MCP server and two clients: one that speaks the protocol directly, one where
+DeepSeek decides which tool to call. Same server, same tools, no rewriting for
+each client.
+
+The server exposes the three MCP primitives on purpose:
+
+| primitive | what it is | here |
+|---|---|---|
+| **tool** | model-controlled function | `add`, `search_kb` |
+| **resource** | application-controlled data | `kb://nimbusdesk/all` |
+| **prompt** | user-controlled template | `answer_from_kb` |
+
+## Run
+
+```powershell
+cd assets\examples\0009-mcp
+uv sync
+
+uv run python client_stdio.py          # no API key: list, call, print
+$env:DEEPSEEK_API_KEY = &quot;sk-...&quot;       # only the model-client step needs this
+uv run python chat.py &quot;How long is the refund window?&quot;
+```
+
+`chat.py` with no question asks about the refund window. Under stdio, the server
+is launched as a subprocess by both clients — you never start it in a second
+terminal. The HTTP transports are the opposite: start the server, then connect.
+
+```powershell
+# SSE (older HTTP transport)
+uv run python server.py sse
+uv run python client-sse.py
+
+# Streamable HTTP (new HTTP integrations)
+uv run python server.py streamable-http
+uv run python client-streamable-http.py
+```
+
+Both HTTP servers bind `127.0.0.1:8050`. Stop one before starting the other,
+or the second bind fails with `WinError 10048`.
+
+The server prints its own startup line (FastMCP runs on uvicorn, but
+`log_level=&quot;ERROR&quot;` hides uvicorn&#x27;s banner):
+
+```
+serving over sse at http://127.0.0.1:8050/sse
+press Ctrl+C to stop
+```
+
+## Inspector (optional)
+
+`uv run mcp dev server.py` opens the MCP Inspector, a browser UI for listing and
+calling tools. It needs Node.js and downloads `@modelcontextprotocol/inspector`
+through npx on first run — minutes on a slow npm network. If that hangs, point
+npm at a mirror first:
+
+```powershell
+npm config set registry https://registry.npmmirror.com
+```
+
+Then open the **exact URL printed in the terminal**, including the token:
+
+```
+http://127.0.0.1:6274?MCP_INSPECTOR_API_TOKEN=...
+```
+
+Opening bare `http://127.0.0.1:6274` shows an empty page because the token is
+missing. The Python clients in this lab do not need the Inspector.
+
+### Inspecting SSE or Streamable HTTP
+
+`mcp dev` always wires the Inspector to a **stdio** server, which is why its UI
+has no transport picker. To inspect an HTTP transport, start that server
+yourself and launch the Inspector with matching flags:
+
+```powershell
+# terminal 1
+uv run python server.py sse
+
+# terminal 2
+npx --yes @modelcontextprotocol/inspector --web `
+  --transport sse --server-url http://127.0.0.1:8050/sse
+```
+
+For Streamable HTTP, use `--transport http --server-url http://127.0.0.1:8050/mcp`.
+Open the token URL the Inspector prints. Without `--transport`/`--server-url`,
+the UI shows its own connect form where the transport can be chosen manually.
+
+## If it fails
+
+- **`502 Bad Gateway` from `127.0.0.1`** — a system proxy is intercepting
+  loopback. The HTTP clients add `127.0.0.1, localhost, ::1` to `NO_PROXY`
+  before connecting, which fixes the usual case; if it persists, check
+  `ALL_PROXY` and confirm the server is the process listening on 8050.
+- **`ConnectError: All connection attempts failed`** — the server is not
+  running. Start it in another terminal: `uv run python server.py sse`.
+- **`WinError 10048`** — port 8050 is already in use. Stop the previous server
+  (`Get-NetTCPConnection -LocalPort 8050` finds it).
+- **`ImportError: cannot import name &#x27;_schema_generation_shared&#x27; from &#x27;pydantic._internal&#x27;`**
+  — a half-installed environment, usually a venv that was deleted or moved
+  while uv was writing to it. Rebuild it:
+  `Remove-Item -Recurse -Force .venv; uv sync`.
+- **`VIRTUAL_ENV ... does not match the project environment path`** — you have
+  another example&#x27;s venv active (the prompt shows `(0007-rag-service)`). uv
+  ignores it and uses this project&#x27;s `.venv`, so the warning is harmless; run
+  `deactivate` to silence it.
+
+## What you should see
+
+`client_stdio.py`:
+
+```
+tools (2):
+  add(a, b)
+  search_kb(query, limit)
+
+resources (1):
+  kb://nimbusdesk/all - whole_kb
+
+prompts (1):
+  answer_from_kb
+
+call add(a=2, b=3)
+5
+```
+
+`chat.py` (live DeepSeek, `temperature=0`):
+
+```
+tools: add, search_kb
+question: What does E-311 mean?
+  tool search_kb({&quot;query&quot;: &quot;E-311 error code&quot;})
+  -&gt; Q: What does error E-311 mean?
+answer: E-311 means the mailbox storage quota was exceeded. To fix it, archive
+conversations or raise the seat storage limit.
+```
+
+Ask something the knowledge base does not cover — &quot;What is the SLA for the
+mobile app?&quot; — and the model says it does not know. The tool result is the only
+evidence it has.
+
+## Files
+
+| file | role |
+|---|---|
+| `server.py` | FastMCP server: 2 tools, 1 resource, 1 prompt; stdio, SSE or Streamable HTTP |
+| `client_stdio.py` | raw client: initialize, list, call — no model |
+| `client-sse.py` | same call over the older HTTP+SSE transport |
+| `client-streamable-http.py` | same call over one `/mcp` endpoint |
+| `chat.py` | DeepSeek + the same server, tools bound as functions |
+| `data/kb.json` | the NimbusDesk Q&amp;A the `search_kb` tool reads |
+
+## How the LLM bridge works
+
+There is no magic adapter here, and that is the point. MCP already publishes a
+JSON schema for every tool (`inputSchema`), which is exactly what a chat model
+wants for function calling:
+
+```python
+def as_function_tools(tools):
+    return [
+        {
+            &quot;type&quot;: &quot;function&quot;,
+            &quot;function&quot;: {
+                &quot;name&quot;: tool.name,
+                &quot;description&quot;: tool.description,
+                &quot;parameters&quot;: tool.inputSchema,
+            },
+        }
+        for tool in tools
+    ]
+```
+
+After that it is the lesson-3 loop with one new step: instead of calling a local
+function, the client calls `session.call_tool(...)` and feeds the text back as a
+`ToolMessage`. Four turns maximum, then it stops.
+
+## Transports
+
+| transport | client | server command | use |
+|---|---|---|---|
+| **stdio** | `stdio_client(...)` | (launched by the client) | local; the client launches the server as a subprocess. Used by `chat.py`. |
+| **SSE** | `sse_client(...)` | `server.py sse` | older HTTP transport; follow an existing tutorial |
+| **Streamable HTTP** | `streamablehttp_client(...)` | `server.py streamable-http` | new HTTP integrations, one `/mcp` endpoint |
+
+All three clients print the same tools and the same `2 + 3 = 5`; only the
+connection line changes:
+
+```
+connected to http://127.0.0.1:8050/sse
+tools: add, search_kb
+2 + 3 = 5
+```
+
+Stdio has one hard rule: **stdout is the protocol**. A stray `print()` corrupts
+the stream. Log to stderr, or set `log_level=&quot;ERROR&quot;` as this server does.
+
+## MCP vs plain function calling
+
+| | plain function calling | MCP |
+|---|---|---|
+| tools live | in your process | in a server process |
+| reuse across apps | copy the code | point another client at the server |
+| language boundary | same runtime | any MCP client, any language |
+| latency | a direct call | a protocol round trip |
+| setup | one decorator | a server + a client + a transport |
+
+Use MCP when the tool is shared, remote, or written by someone else. For one
+app with three local functions, plain `@tool` is still the right answer.
+
+## Lifecycle
+
+Both clients use the same shape, and the context managers are the lifecycle:
+
+```python
+async with stdio_client(params) as (read, write):
+    async with ClientSession(read, write) as session:
+        await session.initialize()   # version negotiation
+        ...                          # list / call
+# session closed, subprocess terminated
+```
+
+`initialize()` is not optional: it negotiates the protocol version before any
+request. For resources that live as long as the server — a database pool, a
+loaded model — use FastMCP&#x27;s `lifespan` instead of opening them per tool call.
+
+## Security defaults
+
+- HTTP transports bind to `127.0.0.1`; there is no authentication in this lab.
+- Stdio servers inherit the client&#x27;s permissions. Only launch servers you trust.
+- Publishing a port does not add auth. A remote MCP server needs TLS, explicit
+  trusted hosts/origins, and an auth layer.
+
+## Notes
+
+- **Two different FastMCPs.** This lab uses `mcp.server.fastmcp.FastMCP` — the v1 SDK&#x27;s server class. The standalone `fastmcp` package (v2) is not a dependency. Clients use the SDK transports: `stdio_client`, `sse_client`, `streamablehttp_client`.
+- `mcp[cli]` is pinned to the 1.x SDK (`&gt;=1.30,&lt;2`). The v2 SDK changes these APIs; do not swap the pin without reading the migration notes.
+- The server also runs under `mcp dev server.py` (MCP Inspector, needs Node.js)
+  and `mcp install server.py` (Claude Desktop). Neither is required here.
+- `nest-asyncio` is not needed outside Jupyter, so this lab does not install it.
+</pre>
+
+<h2>server.py</h2>
+<pre>&quot;&quot;&quot;NimbusDesk MCP server: two tools, one resource, one prompt.
+
+Run it directly only to see it start; under stdio the client launches it as a
+subprocess and talks to it over stdin/stdout:
+
+    uv run python server.py
+
+stdout carries protocol messages. Anything you print for humans must go to
+stderr, or it corrupts the stream.
+&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import json
+import re
+import socket
+import sys
+from pathlib import Path
+
+from mcp.server.fastmcp import FastMCP
+
+HERE = Path(__file__).resolve().parent
+KB_PATH = HERE / &quot;data&quot; / &quot;kb.json&quot;
+
+mcp = FastMCP(
+    &quot;NimbusDesk&quot;,
+    host=&quot;127.0.0.1&quot;,
+    port=8050,
+    # The SDK logs every request to stderr at INFO. That is useful while
+    # debugging the server, noise while reading the client&#x27;s output.
+    log_level=&quot;ERROR&quot;,
+)
+
+
+def knowledge_base() -&gt; list[dict]:
+    payload = json.loads(KB_PATH.read_text(encoding=&quot;utf-8&quot;))
+    return payload[&quot;entries&quot;]
+
+
+@mcp.tool()
+def add(a: int, b: int) -&gt; int:
+    &quot;&quot;&quot;Add two numbers together.&quot;&quot;&quot;
+    return a + b
+
+
+@mcp.tool()
+def search_kb(query: str, limit: int = 3) -&gt; str:
+    &quot;&quot;&quot;Search the NimbusDesk knowledge base and return the best matching entries.
+
+    Args:
+        query: Words from the customer&#x27;s question, for example &quot;refund window&quot;.
+        limit: Maximum entries to return, 1-10.
+    &quot;&quot;&quot;
+    terms = [term for term in re.findall(r&quot;[a-z0-9-]+&quot;, query.lower()) if len(term) &gt; 2]
+    scored: list[tuple[int, dict]] = []
+    for entry in knowledge_base():
+        haystack = f&quot;{entry[&#x27;question&#x27;]} {entry[&#x27;answer&#x27;]}&quot;.lower()
+        score = sum(haystack.count(term) for term in terms)
+        if score:
+            scored.append((score, entry))
+
+    scored.sort(key=lambda pair: -pair[0])
+    top = scored[: max(1, min(limit, 10))]
+    if not top:
+        return &quot;No matching entries.&quot;
+    return &quot;\n\n&quot;.join(
+        f&quot;Q: {entry[&#x27;question&#x27;]}\nA: {entry[&#x27;answer&#x27;]}&quot; for _, entry in top
+    )
+
+
+@mcp.resource(&quot;kb://nimbusdesk/all&quot;)
+def whole_kb() -&gt; str:
+    &quot;&quot;&quot;The entire NimbusDesk knowledge base as JSON.&quot;&quot;&quot;
+    return KB_PATH.read_text(encoding=&quot;utf-8&quot;)
+
+
+@mcp.prompt()
+def answer_from_kb(question: str) -&gt; str:
+    &quot;&quot;&quot;Template for answering a product question from the knowledge base.&quot;&quot;&quot;
+    return (
+        &quot;Answer the question using only the NimbusDesk knowledge base. &quot;
+        &quot;If an entry does not cover it, say so instead of guessing.\n\n&quot;
+        f&quot;Question: {question}&quot;
+    )
+
+
+if __name__ == &quot;__main__&quot;:
+    transport = sys.argv[1] if len(sys.argv) &gt; 1 else &quot;stdio&quot;
+    if transport not in {&quot;stdio&quot;, &quot;sse&quot;, &quot;streamable-http&quot;}:
+        raise SystemExit(
+            f&quot;unknown transport: {transport} &quot;
+            &quot;(use stdio, sse, or streamable-http)&quot;
+        )
+
+    # FastMCP runs on uvicorn, but log_level=&quot;ERROR&quot; above hides its banner.
+    # Check the port first, then print our own line, so a silent or misleading
+    # terminal never looks like a successful start when it is not.
+    if transport == &quot;stdio&quot;:
+        print(&quot;serving over stdio (stdout is the protocol)&quot;, file=sys.stderr)
+    else:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.settimeout(0.3)
+            in_use = probe.connect_ex((&quot;127.0.0.1&quot;, 8050)) == 0
+        if in_use:
+            raise SystemExit(
+                &quot;port 8050 is already in use - stop the other server &quot;
+                &quot;(sse and streamable-http share the port), then retry&quot;
+            )
+        path = &quot;/sse&quot; if transport == &quot;sse&quot; else &quot;/mcp&quot;
+        print(
+            f&quot;serving over {transport} at http://127.0.0.1:8050{path}&quot;,
+            file=sys.stderr,
+        )
+        print(&quot;press Ctrl+C to stop&quot;, file=sys.stderr)
+
+    mcp.run(transport=transport)
+</pre>
+
+<h2>client_stdio.py</h2>
+<pre>&quot;&quot;&quot;Call the MCP server with no LLM in the loop.
+
+This is the protocol as it actually is: the client launches the server as a
+subprocess, initializes a session, then lists and calls capabilities. An LLM is
+just another client that decides which tool to call.
+
+    uv run python client_stdio.py
+&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import asyncio
+import sys
+from pathlib import Path
+
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+HERE = Path(__file__).resolve().parent
+SERVER = HERE / &quot;server.py&quot;
+
+
+def text_of(result) -&gt; str:
+    parts = [block.text for block in result.content if getattr(block, &quot;text&quot;, None)]
+    return &quot;\n&quot;.join(parts) or &quot;(no text content)&quot;
+
+
+async def main() -&gt; None:
+    params = StdioServerParameters(command=sys.executable, args=[str(SERVER)])
+
+    async with stdio_client(params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+
+            tools = await session.list_tools()
+            print(f&quot;tools ({len(tools.tools)}):&quot;)
+            for tool in tools.tools:
+                arguments = &quot;, &quot;.join(tool.inputSchema.get(&quot;properties&quot;, {}))
+                print(f&quot;  {tool.name}({arguments})&quot;)
+
+            resources = await session.list_resources()
+            print(f&quot;\nresources ({len(resources.resources)}):&quot;)
+            for resource in resources.resources:
+                print(f&quot;  {resource.uri} - {resource.name}&quot;)
+
+            prompts = await session.list_prompts()
+            print(f&quot;\nprompts ({len(prompts.prompts)}):&quot;)
+            for prompt in prompts.prompts:
+                print(f&quot;  {prompt.name}&quot;)
+
+            print(&quot;\ncall add(a=2, b=3)&quot;)
+            result = await session.call_tool(&quot;add&quot;, arguments={&quot;a&quot;: 2, &quot;b&quot;: 3})
+            print(text_of(result))
+
+            print(&quot;\ncall search_kb(query=&#x27;refund window&#x27;)&quot;)
+            result = await session.call_tool(
+                &quot;search_kb&quot;, arguments={&quot;query&quot;: &quot;refund window&quot;}
+            )
+            print(text_of(result))
+
+
+if __name__ == &quot;__main__&quot;:
+    asyncio.run(main())
+</pre>
+
+<h2>client-sse.py</h2>
+<pre>&quot;&quot;&quot;Call the server over SSE - the older HTTP transport.
+
+SSE is retained for compatibility and for following older tutorials. New HTTP
+integrations should use Streamable HTTP (client-streamable-http.py).
+
+Unlike stdio, HTTP does not launch the server for you. Two terminals:
+
+Terminal 1:  uv run python server.py sse
+Terminal 2:  uv run python client-sse.py
+&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import asyncio
+import os
+import socket
+import sys
+from urllib.parse import urlsplit
+
+from mcp import ClientSession
+from mcp.client.sse import sse_client
+
+URL = &quot;http://127.0.0.1:8050/sse&quot;
+SERVER_COMMAND = &quot;uv run python server.py sse&quot;
+
+
+def allow_localhost_direct() -&gt; None:
+    &quot;&quot;&quot;Keep a system HTTP proxy from intercepting 127.0.0.1.
+
+    httpx honours HTTP_PROXY/ALL_PROXY from the environment. On machines behind
+    a corporate proxy, a request to localhost can come back as a 502 from the
+    proxy instead of reaching the server. NO_PROXY exempts loopback.
+    &quot;&quot;&quot;
+    hosts = {&quot;127.0.0.1&quot;, &quot;localhost&quot;, &quot;::1&quot;}
+    for name in (&quot;NO_PROXY&quot;, &quot;no_proxy&quot;):
+        current = {
+            host.strip() for host in os.environ.get(name, &quot;&quot;).split(&quot;,&quot;) if host.strip()
+        }
+        os.environ[name] = &quot;,&quot;.join(sorted(current | hosts))
+
+
+def diagnose() -&gt; str:
+    &quot;&quot;&quot;Say whether the port is empty or occupied by the wrong process.&quot;&quot;&quot;
+    parts = urlsplit(URL)
+    host = parts.hostname or &quot;127.0.0.1&quot;
+    port = parts.port or 80
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        listening = sock.connect_ex((host, port)) == 0
+    if listening:
+        return (
+            f&quot;something is listening on {host}:{port} but did not answer as MCP - &quot;
+            &quot;stop that process or change the port&quot;
+        )
+    return (
+        f&quot;nothing is listening on {host}:{port} - start the server in another &quot;
+        f&quot;terminal:  {SERVER_COMMAND}&quot;
+    )
+
+
+async def main() -&gt; None:
+    async with sse_client(URL) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+
+            tools = await session.list_tools()
+            print(f&quot;connected to {URL}&quot;)
+            print(f&quot;tools: {&#x27;, &#x27;.join(tool.name for tool in tools.tools)}&quot;)
+
+            result = await session.call_tool(&quot;add&quot;, arguments={&quot;a&quot;: 2, &quot;b&quot;: 3})
+            print(f&quot;2 + 3 = {result.content[0].text}&quot;)
+
+
+if __name__ == &quot;__main__&quot;:
+    allow_localhost_direct()
+    try:
+        asyncio.run(main())
+    except (BaseExceptionGroup, OSError) as exc:
+        detail = (
+            exc.exceptions[0]
+            if isinstance(exc, BaseExceptionGroup) and exc.exceptions
+            else exc
+        )
+        print(f&quot;could not reach {URL}\n  {type(detail).__name__}: {detail}&quot;, file=sys.stderr)
+        print(diagnose(), file=sys.stderr)
+        raise SystemExit(1) from None
+</pre>
+
+<h2>client-streamable-http.py</h2>
+<pre>&quot;&quot;&quot;Call the server over Streamable HTTP - one endpoint, both directions.
+
+This is the transport to use for new HTTP integrations; SSE is the older one.
+The client yields three values: read stream, write stream, and a session-id
+getter (unused here).
+
+Unlike stdio, HTTP does not launch the server for you. Two terminals:
+
+Terminal 1:  uv run python server.py streamable-http
+Terminal 2:  uv run python client-streamable-http.py
+&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import asyncio
+import os
+import socket
+import sys
+from urllib.parse import urlsplit
+
+from mcp import ClientSession
+from mcp.client.streamable_http import streamablehttp_client
+
+URL = &quot;http://127.0.0.1:8050/mcp&quot;
+SERVER_COMMAND = &quot;uv run python server.py streamable-http&quot;
+
+
+def allow_localhost_direct() -&gt; None:
+    &quot;&quot;&quot;Keep a system HTTP proxy from intercepting 127.0.0.1.
+
+    httpx honours HTTP_PROXY/ALL_PROXY from the environment. On machines behind
+    a corporate proxy, a request to localhost can come back as a 502 from the
+    proxy instead of reaching the server. NO_PROXY exempts loopback.
+    &quot;&quot;&quot;
+    hosts = {&quot;127.0.0.1&quot;, &quot;localhost&quot;, &quot;::1&quot;}
+    for name in (&quot;NO_PROXY&quot;, &quot;no_proxy&quot;):
+        current = {
+            host.strip() for host in os.environ.get(name, &quot;&quot;).split(&quot;,&quot;) if host.strip()
+        }
+        os.environ[name] = &quot;,&quot;.join(sorted(current | hosts))
+
+
+def diagnose() -&gt; str:
+    &quot;&quot;&quot;Say whether the port is empty or occupied by the wrong process.&quot;&quot;&quot;
+    parts = urlsplit(URL)
+    host = parts.hostname or &quot;127.0.0.1&quot;
+    port = parts.port or 80
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        listening = sock.connect_ex((host, port)) == 0
+    if listening:
+        return (
+            f&quot;something is listening on {host}:{port} but did not answer as MCP - &quot;
+            &quot;stop that process or change the port&quot;
+        )
+    return (
+        f&quot;nothing is listening on {host}:{port} - start the server in another &quot;
+        f&quot;terminal:  {SERVER_COMMAND}&quot;
+    )
+
+
+async def main() -&gt; None:
+    async with streamablehttp_client(URL) as (read, write, _):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+
+            tools = await session.list_tools()
+            print(f&quot;connected to {URL}&quot;)
+            print(f&quot;tools: {&#x27;, &#x27;.join(tool.name for tool in tools.tools)}&quot;)
+
+            result = await session.call_tool(&quot;add&quot;, arguments={&quot;a&quot;: 2, &quot;b&quot;: 3})
+            print(f&quot;2 + 3 = {result.content[0].text}&quot;)
+
+
+if __name__ == &quot;__main__&quot;:
+    allow_localhost_direct()
+    try:
+        asyncio.run(main())
+    except (BaseExceptionGroup, OSError) as exc:
+        detail = (
+            exc.exceptions[0]
+            if isinstance(exc, BaseExceptionGroup) and exc.exceptions
+            else exc
+        )
+        print(f&quot;could not reach {URL}\n  {type(detail).__name__}: {detail}&quot;, file=sys.stderr)
+        print(diagnose(), file=sys.stderr)
+        raise SystemExit(1) from None
+</pre>
+
+<h2>chat.py</h2>
+<pre>&quot;&quot;&quot;DeepSeek chooses the tool; this client executes it over MCP.
+
+The bridge is deliberately small: MCP&#x27;s `inputSchema` is already a JSON schema,
+which is exactly the shape a chat model expects for function calling. Convert,
+bind, loop.
+
+    $env:DEEPSEEK_API_KEY = &quot;sk-...&quot;
+    uv run python chat.py &quot;How long is the refund window?&quot;
+&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import sys
+from pathlib import Path
+
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+from langchain_deepseek import ChatDeepSeek
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+HERE = Path(__file__).resolve().parent
+SERVER = HERE / &quot;server.py&quot;
+
+SYSTEM = &quot;&quot;&quot;You answer NimbusDesk support questions using the tools provided.
+
+Use search_kb before answering a product question. If the knowledge base does
+not cover the question, say so - do not guess. Keep the answer to two sentences.&quot;&quot;&quot;
+
+
+def missing_key() -&gt; str:
+    return (
+        &quot;DEEPSEEK_API_KEY is not set - the model needs it to choose a tool.\n&quot;
+        &#x27;  PowerShell (this session):  $env:DEEPSEEK_API_KEY = &quot;sk-...&quot;\n&#x27;
+        &#x27;  PowerShell (persist):       setx DEEPSEEK_API_KEY &quot;sk-...&quot;   # reopen terminal\n&#x27;
+        &quot;  Get a key:                  https://platform.deepseek.com/api_keys&quot;
+    )
+
+
+def text_of(result) -&gt; str:
+    parts = [block.text for block in result.content if getattr(block, &quot;text&quot;, None)]
+    return &quot;\n&quot;.join(parts) or &quot;(no text content)&quot;
+
+
+def as_function_tools(tools) -&gt; list[dict]:
+    &quot;&quot;&quot;MCP tool -&gt; the dict shape ChatDeepSeek.bind_tools accepts.&quot;&quot;&quot;
+    return [
+        {
+            &quot;type&quot;: &quot;function&quot;,
+            &quot;function&quot;: {
+                &quot;name&quot;: tool.name,
+                &quot;description&quot;: tool.description or &quot;&quot;,
+                &quot;parameters&quot;: tool.inputSchema,
+            },
+        }
+        for tool in tools
+    ]
+
+
+async def main() -&gt; int:
+    if not os.environ.get(&quot;DEEPSEEK_API_KEY&quot;):
+        print(missing_key(), file=sys.stderr)
+        return 1
+
+    question = &quot; &quot;.join(sys.argv[1:]).strip() or &quot;What is the refund window?&quot;
+    model = ChatDeepSeek(
+        model=&quot;deepseek-flash&quot;,
+        temperature=0,
+        extra_body={&quot;thinking&quot;: {&quot;type&quot;: &quot;disabled&quot;}},
+    )
+    params = StdioServerParameters(command=sys.executable, args=[str(SERVER)])
+
+    async with stdio_client(params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+
+            listed = await session.list_tools()
+            print(f&quot;tools: {&#x27;, &#x27;.join(tool.name for tool in listed.tools)}&quot;)
+            model_with_tools = model.bind_tools(as_function_tools(listed.tools))
+
+            print(f&quot;question: {question}&quot;)
+            messages = [SystemMessage(content=SYSTEM), HumanMessage(content=question)]
+
+            for _ in range(4):
+                reply = await model_with_tools.ainvoke(messages)
+                messages.append(reply)
+
+                if not reply.tool_calls:
+                    print(f&quot;answer: {reply.content}&quot;)
+                    return 0
+
+                for call in reply.tool_calls:
+                    print(f&quot;  tool {call[&#x27;name&#x27;]}({json.dumps(call[&#x27;args&#x27;])})&quot;)
+                    result = await session.call_tool(
+                        call[&quot;name&quot;], arguments=call[&quot;args&quot;]
+                    )
+                    content = text_of(result)
+                    print(f&quot;  -&gt; {content.splitlines()[0][:100]}&quot;)
+                    messages.append(
+                        ToolMessage(content=content, tool_call_id=call[&quot;id&quot;])
+                    )
+
+    print(&quot;stopped after 4 model turns&quot;, file=sys.stderr)
+    return 1
+
+
+if __name__ == &quot;__main__&quot;:
+    raise SystemExit(asyncio.run(main()))
+</pre>
+
+
+<h2>Files</h2>
+<table>
+  <thead><tr><th>file</th><th>role</th></tr></thead>
+  <tbody>
+    <tr><td><code>server.py</code></td><td>FastMCP server: 2 tools, 1 resource, 1 prompt; stdio, SSE or Streamable HTTP</td></tr>
+    <tr><td><code>client_stdio.py</code></td><td>raw client: initialize, list, call - no model</td></tr>
+    <tr><td><code>client-sse.py</code></td><td>same call over the older HTTP+SSE transport</td></tr>
+    <tr><td><code>client-streamable-http.py</code></td><td>same call over one /mcp endpoint</td></tr>
+    <tr><td><code>chat.py</code></td><td>DeepSeek + the same server, MCP tools bound as functions</td></tr>
+    <tr><td><code>data/kb.json</code></td><td>the NimbusDesk Q&amp;A that search_kb reads</td></tr>
+  </tbody>
+</table>
+
+<div class="footer-nav">
+  <div class="ask"><strong>Server fine by hand, broken under a client?</strong> Check stdout for a stray print or banner first. Then check the client launched the same Python environment.</div>
+  <div class="links">
+    <a href="../../../lessons/0009-mcp.html">← Lesson 9</a>
+    <a href="README.md">README</a>
+    <a href="../../../lessons/0003-function-calling.html">Lesson 3</a>
+  </div>
+</div>
+
+</article>
+</body>
+</html>

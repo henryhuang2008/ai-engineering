@@ -1,0 +1,36 @@
+{
+  "entries": [
+    {
+      "question": "How long is the refund window?",
+      "answer": "A full refund is available within 14 days of the initial charge. After day 14, annual plans are refunded pro rata minus the months already used."
+    },
+    {
+      "question": "How long does a duplicate charge refund take?",
+      "answer": "Duplicate charges are confirmed within 2 business days and refunded to the original payment method. Refunds above 2000 USD need finance approval, which adds up to 3 business days."
+    },
+    {
+      "question": "How many seats does the Team plan include?",
+      "answer": "The Team plan includes 25 seats, 100 GB of storage and 300 API requests per minute. Extra seats cost 12 USD per seat per month."
+    },
+    {
+      "question": "Is SAML SSO available on Team?",
+      "answer": "No. SAML 2.0 single sign-on and SCIM provisioning are available on Business only. Starter and Team use Google or Microsoft OAuth."
+    },
+    {
+      "question": "What does error E-204 mean?",
+      "answer": "E-204 means the OAuth token for an integration expired. Reconnect the integration in Settings > Integrations; if it persists, revoke the NimbusDesk app at the identity provider and connect again."
+    },
+    {
+      "question": "What does error E-311 mean?",
+      "answer": "E-311 means the mailbox storage quota was exceeded. Archive conversations or raise the seat storage limit."
+    },
+    {
+      "question": "What happens to deleted conversations?",
+      "answer": "Deleted conversations stay recoverable for 30 days and are then permanently purged. Backups are retained for 35 days."
+    },
+    {
+      "question": "What is the API rate limit on Business?",
+      "answer": "Business allows 600 requests per minute per workspace, with a burst of twice the per-minute rate for up to 10 seconds. HTTP 429 responses include a Retry-After header in seconds."
+    }
+  ]
+}

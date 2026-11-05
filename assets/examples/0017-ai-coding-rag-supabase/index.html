@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Example 0017 - Supabase RAG filing analyst</title>
+<link rel="stylesheet" href="../../course.css">
+</head>
+<body>
+<article class="page">
+
+<p class="meta">Example 0017 · Companion to <a href="../../../lessons/0017-project-supabase-rag-ai-coding.html">Lesson 17</a> · <a href="README.md">README</a></p>
+
+<h1>Rag with Supabase — the capstone repository</h1>
+
+<p class="lede">An internal analyst product for a fictional research firm: ask questions across SEC 10-K filings in plain English, get answers whose factual claims cite retrieved passages, and open the passage in one click. This is a <strong>working implementation through Phase 7</strong>, not a finished production service. The pilot and deployment phases have not started, and four verification gates are still open.</p>
+
+<h2>What is in the tree</h2>
+<table>
+  <thead><tr><th>path</th><th>role</th></tr></thead>
+  <tbody>
+    <tr><td><a href="AGENTS.md"><code>AGENTS.md</code></a></td><td>repo-wide rules for coding agents — read first</td></tr>
+    <tr><td><a href="docs/client-brief.md"><code>docs/client-brief.md</code></a></td><td>the client, the trust contract, ten example questions</td></tr>
+    <tr><td><a href="docs/architecture.md"><code>docs/architecture.md</code></a></td><td>service boundaries, data model, retrieval and stream contract</td></tr>
+    <tr><td><a href="docs/todo.md"><code>docs/todo.md</code></a></td><td>the phase checklist and its open gates — the scorecard</td></tr>
+    <tr><td><a href="backend/AGENTS.md"><code>backend/AGENTS.md</code></a></td><td>FastAPI, migration, test and dependency conventions</td></tr>
+    <tr><td><a href="frontend/AGENTS.md"><code>frontend/AGENTS.md</code></a></td><td>Vite, React, TypeScript and UI conventions</td></tr>
+    <tr><td><a href="backend/app/config.py"><code>backend/app/config.py</code></a></td><td>typed settings: the single source of truth for providers</td></tr>
+    <tr><td><a href="backend/alembic/versions/202611050001_initial_schema.py"><code>backend/alembic/versions/</code></a></td><td>pgvector, generated tsvector, HNSW/GIN indexes, RLS</td></tr>
+    <tr><td><a href="backend/app/retrieval/retriever.py"><code>backend/app/retrieval/</code></a></td><td>Qwen query embeddings, pgvector + full-text retrieval, RRF</td></tr>
+    <tr><td><a href="backend/app/assistant/agent.py"><code>backend/app/assistant/</code></a></td><td>PydanticAI agent, typed dependencies, three bounded tools</td></tr>
+    <tr><td><a href="backend/app/grounding/validator.py"><code>backend/app/grounding/</code></a></td><td>citation membership and exact-quote validation, fail closed</td></tr>
+    <tr><td><a href="data/README.md"><code>data/README.md</code></a></td><td>download, Docling conversion, chunking, embedding and cost caps</td></tr>
+  </tbody>
+</table>
+
+<h2>Stack</h2>
+<pre><code>backend     Python 3.12 + FastAPI + Pydantic v2
+frontend    Vite + React + TypeScript + AI SDK useChat
+database    Supabase Postgres: pgvector + generated tsvector
+migrations  SQLAlchemy models + Alembic
+auth        Supabase Auth (email) + bearer-token verification
+LLM         DeepSeek deepseek-chat, orchestrated by PydanticAI
+embeddings  Qwen text-embedding-v4, 1536 dimensions (DashScope)
+hosting     Railway target for both services, hosted Supabase</code></pre>
+
+<p><strong>Provider note:</strong> the backend depends on the <code>openai</code> package, but it is used as an OpenAI-compatible transport. DeepSeek is the chat model and Qwen is the embedding model. The package name is a transport detail; <code>backend/app/config.py</code> and <code>backend/pyproject.toml</code> are the source of truth for what actually runs.</p>
+
+<h2>Phase status</h2>
+<table>
+  <thead><tr><th>phase</th><th>state</th><th>evidence or remaining work</th></tr></thead>
+  <tbody>
+    <tr><td>0 · prerequisites + corpus</td><td><strong>done</strong></td><td>25 filings, 5 companies × 2021–2025</td></tr>
+    <tr><td>1 · backend + schema</td><td><strong>done</strong></td><td>6 tables, vector(1536), HNSW + GIN, RLS</td></tr>
+    <tr><td>2 · authentication</td><td><strong>done</strong></td><td>401 before protected work, thread ownership</td></tr>
+    <tr><td>3 · stubbed chat slice</td><td><strong>done</strong></td><td>threads, history, SSE stub, persistence</td></tr>
+    <tr><td>4 · ingestion</td><td><strong>done · gate open</strong></td><td>GOOGL FY2025: 53 chunks, 309,229 tokens, CNY 0.1589; offsets 53/53 null</td></tr>
+    <tr><td>5 · hybrid retrieval</td><td><strong>done · gate open</strong></td><td>50 + 50 candidates, RRF k=60, top 10; client-brief coverage not verified</td></tr>
+    <tr><td>6 · agent + grounding</td><td><strong>done · gate open</strong></td><td>three tools, fail-closed validator; representative questions not verified live</td></tr>
+    <tr><td>7 · trust UI</td><td><strong>done · gate open</strong></td><td>citation chips + source panel; browser smoke test outstanding</td></tr>
+    <tr><td>8 · pilot readiness</td><td><strong>not started</strong></td><td>setup docs, 10-question smoke, latency, five-analyst pilot</td></tr>
+    <tr><td>9 · deployment</td><td><strong>not started</strong></td><td>services, production auth, migration, audited ingestion, rollback</td></tr>
+  </tbody>
+</table>
+
+<p><strong>Coverage limit:</strong> only GOOGL fiscal 2025 is ingested. The other four companies are outside current retrieval scope, so most multi-company and multi-year questions in the brief are blocked on corpus coverage rather than graded as agent failures.</p>
+
+<h2>Run it</h2>
+<pre><code># backend
+cd backend
+uv sync
+uv run alembic upgrade head
+uv run uvicorn app.main:app --reload
+
+# fast tests: no network, no database, no provider keys
+uv run pytest -q -m "not integration"
+
+# frontend
+cd frontend
+pnpm install
+pnpm dev</code></pre>
+
+<p>Required settings live in <code>backend/.env</code>; the checked-in <a href="backend/.env.example"><code>.env.example</code></a> lists the names. Startup fails explicitly when required values are missing. Ingestion commands and their cost caps are in <a href="data/README.md"><code>data/README.md</code></a>; the chunk job is a dry run unless <code>--pilot</code> or <code>--all</code> is passed with an approved cap.</p>
+
+<h2>What "grounded" means here</h2>
+<ol>
+  <li>The model may call only <code>search_filings</code>, <code>read_chunk</code> and <code>read_surrounding_chunks</code>.</li>
+  <li>Output is a list of typed claims, each carrying one or more retrieved chunk IDs.</li>
+  <li>The validator rejects unknown IDs, missing citations, malformed output and inexact quotes.</li>
+  <li>Insufficient evidence returns a fixed refusal with no citations.</li>
+  <li>The validated answer is persisted atomically before any text delta is streamed.</li>
+</ol>
+<p>This is referential validation, not a proof of semantic entailment. Client-brief evaluation and human review remain necessary, and the project says so in <a href="docs/architecture.md"><code>docs/architecture.md</code></a>.</p>
+
+<h2>Read in this order</h2>
+<ol>
+  <li><code>AGENTS.md</code> — what the coding agent may and may not do.</li>
+  <li><code>docs/client-brief.md</code> — the problem, the trust contract and the acceptance questions.</li>
+  <li><code>docs/todo.md</code> — the build order and the honest status of each phase.</li>
+  <li><code>docs/architecture.md</code> — service boundaries, schema, retrieval, streaming.</li>
+  <li><code>backend/AGENTS.md</code> and <code>frontend/AGENTS.md</code> — local conventions.</li>
+  <li><code>backend/app/grounding/validator.py</code> and <code>backend/app/retrieval/fusion.py</code> — the two contracts that make trust testable.</li>
+</ol>
+
+<div class="footer-nav">
+  <div class="ask"><strong>Before you extend it:</strong> pick one open gate from <code>docs/todo.md</code>, write its acceptance check, and run the fast suite first. Adding features before closing a verification gate is how a capstone turns back into a demo.</div>
+  <div class="links">
+    <a href="../../../lessons/0017-project-supabase-rag-ai-coding.html">← Lesson 17</a>
+    <a href="README.md">README</a>
+    <a href="docs/todo.md">Phase checklist</a>
+    <a href="docs/architecture.md">Architecture</a>
+  </div>
+</div>
+
+</article>
+</body>
+</html>

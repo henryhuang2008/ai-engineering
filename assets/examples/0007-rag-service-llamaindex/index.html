@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Example 0007 (LlamaIndex) - The same RAG service, framework-managed</title>
+<link rel="stylesheet" href="../../course.css">
+</head>
+<body>
+<article class="page">
+
+<p class="meta">Example 0007 · LlamaIndex variant · Companion to <a href="../../../lessons/0007-rag-service.html">Lesson 7</a> · <a href="README.md">README</a></p>
+
+<h1>The same RAG service, LlamaIndex</h1>
+
+<p class="lede">The same three NimbusDesk documents, the same Qwen embeddings and DeepSeek answer — but <strong>LlamaIndex</strong> owns the nodes, the LanceDB vector store, the retriever and the query engine. Docling still produces the chunks; <code>QwenEmbedding</code> preserves the query/document split; <code>response.source_nodes</code> is the evidence.</p>
+
+<h2>Keys and run</h2>
+<pre>$env:DASHSCOPE_API_KEY = &quot;sk-...&quot;     # Qwen embeddings
+$env:DEEPSEEK_API_KEY = &quot;sk-...&quot;      # DeepSeek generation
+
+cd assets\examples\0007-rag-service-llamaindex
+uv sync
+
+uv run python ingest.py --preview     # parse + chunk only; no key
+uv run python ingest.py               # embed + index
+uv run python ask.py &quot;How many seats does the Team plan include?&quot;
+uv run python ask.py --show &quot;What does E-311 mean?&quot; </pre>
+<p>If Docling cannot reach huggingface.co, set <code>$env:HF_ENDPOINT = "https://hf-mirror.com"</code> once; models are cached after the first run.</p>
+
+<h2>Offline lane</h2>
+<pre>15 chunks from 3 documents in 103.6s
+characters per chunk: min 102  median 327  max 990</pre>
+<pre>Generating embeddings: 100%|...| 15/15
+indexed 15 chunks from 3 documents in 48.1s
+stored in ...\index\lancedb</pre>
+
+<h2>Online lane</h2>
+<pre>question: How many seats does the Team plan include?
+
+answer: 25 seats.
+
+sources:
+  [1] 0.3546  nimbusdesk-plans.docx  NimbusDesk plans and limits
+  [2] 0.3111  release-notes.md  NimbusDesk release notes &gt; 2026-05-19
+  [3] 0.3036  nimbusdesk-handbook.pdf  3. Single sign-on
+  ...</pre>
+<pre>answer: INSUFFICIENT_CONTEXT
+
+sources:
+  [1] 0.3340  nimbusdesk-handbook.pdf  8. API rate limits
+  ...
+
+insufficient_context: True</pre>
+<p>The query engine returns text plus <code>source_nodes</code>. Unlike the main lab, this variant does not force a numbered citations array; the prompt asks for <code>INSUFFICIENT_CONTEXT</code> when the evidence is missing.</p>
+
+<h2>What LlamaIndex owns</h2>
+<pre><code>Settings.embed_model = QwenEmbedding()
+Settings.llm = DeepSeek(model=&quot;deepseek-flash&quot;, temperature=0, is_chat_model=True)
+
+vector_store = LanceDBVectorStore(uri=&quot;index/lancedb&quot;, table_name=&quot;chunks_llamaindex&quot;)
+index = VectorStoreIndex.from_vector_store(vector_store)
+engine = index.as_query_engine(similarity_top_k=6, text_qa_template=TEXT_QA)
+
+response = engine.query(question)
+print(response.response)
+for node in response.source_nodes:
+    print(node.metadata[&quot;source&quot;], node.score)</code></pre>
+<p>Compare with the main lab: there you wrote the LanceDB schema, the FTS index, the RRF query and the Pydantic citation validator. Here LlamaIndex provides the index and query engine; you keep Docling, the embedding adapter and the prompt.</p>
+
+<h2>README.md</h2>
+<pre># 0007 (LlamaIndex variant) — the same RAG service, framework-managed
+
+This is the lesson 7 service rebuilt with **LlamaIndex** instead of the hand-written
+LanceDB + LangChain path:
+
+```
+docs/  (reused from ../0007-rag-service/docs)
+   │ parse.py: Docling -&gt; HybridChunker -&gt; contextualized text
+   ▼
+TextNode[] ── QwenEmbedding(text-embedding-v4) ──▶ LanceDBVectorStore
+                                                      │
+question ── VectorStoreIndex.as_query_engine(k=6) ────┘
+   │
+   ▼
+DeepSeek (deepseek-flash) ──▶ answer + source_nodes
+```
+
+The corpus is the same three NimbusDesk documents, so both examples answer the
+same five questions. The difference is who owns the pipeline:
+
+| piece | main lab | this variant |
+|---|---|---|
+| parse/chunk | Docling `HybridChunker` | same |
+| embedding | explicit Qwen batching | `QwenEmbedding(BaseEmbedding)` adapter |
+| store | hand-written LanceDB table + FTS | `LanceDBVectorStore` |
+| retrieval | explicit dense + BM25 + RRF | LlamaIndex `as_query_engine(k=6)` (dense) |
+| answer | `ChatDeepSeek` + Pydantic + citations | `DeepSeek` + query engine; sources printed |
+| incremental hashes | yes | `--rebuild` only |
+
+If you need the explicit hybrid RRF and numbered citation validation, keep the
+main lab. This variant shows how much of the plumbing LlamaIndex owns and what
+you give up when you hand it over.
+
+## Run
+
+```powershell
+$env:DASHSCOPE_API_KEY = &quot;sk-...&quot;     # Qwen embeddings
+$env:DEEPSEEK_API_KEY = &quot;sk-...&quot;      # DeepSeek generation
+
+cd assets\examples\0007-rag-service-llamaindex
+uv sync
+
+uv run python ingest.py --preview     # parse + chunk only; no key
+uv run python ingest.py               # embed + index
+uv run python ask.py &quot;How many seats does the Team plan include?&quot;
+uv run python ask.py --show &quot;What does E-311 mean?&quot;
+```
+
+If Docling cannot reach `huggingface.co`, set the mirror once:
+
+```powershell
+$env:HF_ENDPOINT = &quot;https://hf-mirror.com&quot;
+```
+
+The first preview takes roughly 30–100 s on CPU: it imports PyTorch and runs the
+layout model. Later runs use the cached models.
+
+## What you should see
+
+```
+$ uv run python ingest.py --preview
+15 chunks from 3 documents in 103.6s
+characters per chunk: min 102  median 327  max 990
+```
+
+```
+$ uv run python ingest.py
+Generating embeddings: 100%|...| 15/15
+indexed 15 chunks from 3 documents in 48.1s
+stored in ...\index\lancedb
+```
+
+```
+$ uv run python ask.py &quot;How many seats does the Team plan include?&quot;
+question: How many seats does the Team plan include?
+
+answer: 25 seats.
+
+sources:
+  [1] 0.3546  nimbusdesk-plans.docx  NimbusDesk plans and limits
+  [2] 0.3111  release-notes.md  NimbusDesk release notes &gt; 2026-05-19
+  ...
+```
+
+Unanswerable question:
+
+```
+$ uv run python ask.py &quot;What is the SLA for the mobile app?&quot;
+answer: INSUFFICIENT_CONTEXT
+...
+insufficient_context: True
+```
+
+The source list is the evidence. Unlike the main lab, this variant does not force
+a numbered `citations` array; the query engine returns text plus `source_nodes`,
+and the prompt tells the model to say `INSUFFICIENT_CONTEXT` rather than guess.
+
+## The LlamaIndex pieces
+
+```python
+Settings.embed_model = QwenEmbedding()          # custom BaseEmbedding adapter
+Settings.llm = DeepSeek(model=&quot;deepseek-flash&quot;, temperature=0, is_chat_model=True)
+
+vector_store = LanceDBVectorStore(uri=&quot;index/lancedb&quot;, table_name=&quot;chunks_llamaindex&quot;)
+index = VectorStoreIndex.from_vector_store(vector_store)
+engine = index.as_query_engine(similarity_top_k=6, text_qa_template=TEXT_QA)
+response = engine.query(question)
+```
+
+- `QwenEmbedding` wraps `text-embedding-v4` and preserves the `query` vs `document`
+  split from lesson 6.
+- `TextNode` carries the chunk text and metadata (`source`, `headings`, `pages`,
+  `doc_hash`).
+- `LanceDBVectorStore` persists nodes and vectors; `StorageContext` binds it to
+  the index.
+- `response.source_nodes` is the retrieved evidence, with scores.
+
+## Files
+
+| file | role |
+|---|---|
+| `common.py` | paths (shared corpus), Qwen constants, key checks |
+| `qwen.py` | Qwen embeddings + `QwenEmbedding(BaseEmbedding)` |
+| `parse.py` | Docling + HybridChunker, identical to the main lab |
+| `ingest.py` | chunks → `TextNode` → Qwen → LanceDB |
+| `ask.py` | `VectorStoreIndex` → query engine → answer + sources |
+| `pyproject.toml` | uv project: llama-index-core, DeepSeek + LanceDB integrations, Docling |
+
+## If it fails
+
+- **`DASHSCOPE_API_KEY is not set`** / **`DEEPSEEK_API_KEY is not set`** — the
+  scripts print the exact PowerShell lines and exit 1.
+- **Docling download timeout** — set `HF_ENDPOINT=https://hf-mirror.com` and
+  retry; the models are cached after the first success.
+- **`no index found`** — run `uv run python ingest.py`.
+- **`Table chunks_llamaindex doesn&#x27;t exist yet`** — the index is empty or was
+  deleted; re-run ingest.
+- **Stale index after changing the embedding model** — run `ingest.py --rebuild`;
+  vectors from different models are not comparable.
+- **A dimension error from LanceDB** — the table was built with another embedder;
+  rebuild it.
+</pre>
+
+<h2>common.py</h2>
+<pre>&quot;&quot;&quot;Shared paths, constants and key checks for the LlamaIndex variant.
+
+The corpus is reused from the main lesson 7 lab, so both examples answer over
+exactly the same three documents.
+&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+DOCS_DIR = HERE.parent / &quot;0007-rag-service&quot; / &quot;docs&quot;
+INDEX_DIR = HERE / &quot;index&quot;
+DB_DIR = INDEX_DIR / &quot;lancedb&quot;
+TABLE_NAME = &quot;chunks_llamaindex&quot;
+
+EMBED_MODEL = &quot;text-embedding-v4&quot;
+EMBED_DIM = 1024
+EMBED_BATCH = 10
+MAX_CHUNK_TOKENS = 512
+DEFAULT_BASE_URL = &quot;https://dashscope.aliyuncs.com/api/v1&quot;
+
+SUPPORTED_SUFFIXES = {&quot;.pdf&quot;, &quot;.docx&quot;, &quot;.pptx&quot;, &quot;.xlsx&quot;, &quot;.html&quot;, &quot;.md&quot;}
+
+KEY_HELP = {
+    &quot;DASHSCOPE_API_KEY&quot;: (
+        &quot;indexing and search need Qwen text-embedding-v4&quot;,
+        &quot;https://bailian.console.alibabacloud.com/&quot;,
+    ),
+    &quot;DEEPSEEK_API_KEY&quot;: (
+        &quot;the answer step needs DeepSeek&quot;,
+        &quot;https://platform.deepseek.com/api_keys&quot;,
+    ),
+}
+
+
+class MissingKey(RuntimeError):
+    &quot;&quot;&quot;Raised with copy-pasteable setup instructions, never a stack trace.&quot;&quot;&quot;
+
+
+def missing_keys_message(names: list[str]) -&gt; str:
+    lines: list[str] = []
+    for name in names:
+        what, where = KEY_HELP[name]
+        lines.append(f&quot;{name} is not set - {what}.&quot;)
+        lines.append(f&#x27;  PowerShell (this session):  $env:{name} = &quot;sk-...&quot;&#x27;)
+        lines.append(
+            f&#x27;  PowerShell (persist):        setx {name} &quot;sk-...&quot;   # reopen the terminal&#x27;
+        )
+        lines.append(f&quot;  Get a key:                  {where}&quot;)
+        lines.append(&quot;&quot;)
+    lines.append(
+        &quot;Optional, region-specific endpoint (if the default returns 401):\n&quot;
+        &#x27;  $env:DASHSCOPE_BASE_URL = &quot;https://&lt;your-region-host&gt;/api/v1&quot;&#x27;
+    )
+    return &quot;\n&quot;.join(lines)
+
+
+def require_keys(names: list[str]) -&gt; None:
+    missing = [name for name in names if not os.environ.get(name)]
+    if missing:
+        raise MissingKey(missing_keys_message(missing))
+
+
+def docs() -&gt; list[Path]:
+    if not DOCS_DIR.exists():
+        raise SystemExit(
+            f&quot;corpus not found: {DOCS_DIR}\n&quot;
+            &quot;This variant reuses the documents from 0007-rag-service/docs.&quot;
+        )
+    return sorted(
+        path
+        for path in DOCS_DIR.rglob(&quot;*&quot;)
+        if path.is_file() and path.suffix.lower() in SUPPORTED_SUFFIXES
+    )
+</pre>
+
+<h2>qwen.py</h2>
+<pre>&quot;&quot;&quot;Qwen text-embedding-v4 for LlamaIndex, keeping the query/document split.&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import os
+from typing import Any, Literal
+
+import dashscope
+from llama_index.core.embeddings import BaseEmbedding
+
+from common import (
+    DEFAULT_BASE_URL,
+    EMBED_BATCH,
+    EMBED_DIM,
+    EMBED_MODEL,
+    MissingKey,
+    missing_keys_message,
+)
+
+TextType = Literal[&quot;document&quot;, &quot;query&quot;]
+
+
+def _client() -&gt; dashscope.Client:
+    key = os.environ.get(&quot;DASHSCOPE_API_KEY&quot;)
+    if not key:
+        raise MissingKey(missing_keys_message([&quot;DASHSCOPE_API_KEY&quot;]))
+    base_url = os.environ.get(&quot;DASHSCOPE_BASE_URL&quot;, DEFAULT_BASE_URL)
+    return dashscope.Client(api_key=key, base_url=base_url)
+
+
+def _embed(texts: list[str], text_type: TextType) -&gt; list[list[float]]:
+    if not texts:
+        return []
+    client = _client()
+    vectors: list[list[float]] = []
+    for start in range(0, len(texts), EMBED_BATCH):
+        batch = texts[start : start + EMBED_BATCH]
+        try:
+            response = client.embeddings.create(
+                model=EMBED_MODEL,
+                input=batch,
+                dimension=EMBED_DIM,
+                text_type=text_type,
+                output_type=&quot;dense&quot;,
+            )
+        except Exception as exc:
+            raise SystemExit(f&quot;Qwen embedding request failed: {exc}&quot;) from exc
+        items = sorted(response.embeddings, key=lambda item: item.index)
+        vectors.extend(item.embedding for item in items)
+    if len(vectors) != len(texts):
+        raise SystemExit(
+            f&quot;expected {len(texts)} vectors from Qwen, received {len(vectors)}&quot;
+        )
+    return vectors
+
+
+def embed_documents(texts: list[str]) -&gt; list[list[float]]:
+    return _embed(texts, &quot;document&quot;)
+
+
+def embed_query(text: str) -&gt; list[float]:
+    return _embed([text], &quot;query&quot;)[0]
+
+
+class QwenEmbedding(BaseEmbedding):
+    &quot;&quot;&quot;LlamaIndex adapter: batch documents, asymmetric query embedding.&quot;&quot;&quot;
+
+    model_name: str = EMBED_MODEL
+
+    def _get_query_embedding(self, query: str) -&gt; list[float]:
+        return embed_query(query)
+
+    async def _aget_query_embedding(self, query: str) -&gt; list[float]:
+        return embed_query(query)
+
+    def _get_text_embedding(self, text: str) -&gt; list[float]:
+        return embed_documents([text])[0]
+
+    def _get_text_embeddings(self, texts: list[str]) -&gt; list[list[float]]:
+        return embed_documents(texts)
+
+    def _get_text_embedding_batch(
+        self, texts: list[str], **kwargs: Any
+    ) -&gt; list[list[float]]:
+        return embed_documents(texts)
+</pre>
+
+<h2>parse.py</h2>
+<pre>&quot;&quot;&quot;Docling -&gt; HybridChunker, shared by ingest and --preview.
+
+The parsing and chunking are intentionally identical to the main lesson 7 lab:
+the framework changes, the chunk contract does not.
+&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import hashlib
+from pathlib import Path
+
+from common import MAX_CHUNK_TOKENS
+
+
+def huggingface_hint(exc: Exception) -&gt; SystemExit:
+    text = str(exc)
+    lower = text.lower()
+    if (
+        &quot;huggingface.co&quot; in lower
+        or &quot;couldn&#x27;t connect&quot; in lower
+        or &quot;connecttimeout&quot; in lower
+        or &quot;winerror 10060&quot; in lower
+    ):
+        return SystemExit(
+            &quot;Docling could not download its layout models.\n&quot;
+            &quot;If huggingface.co is unreachable from your network, use a mirror and retry:\n&quot;
+            &#x27;  $env:HF_ENDPOINT = &quot;https://hf-mirror.com&quot;\n&#x27;
+            &quot;Models are cached after the first successful run.&quot;
+        )
+    return SystemExit(f&quot;Docling failed: {exc}&quot;)
+
+
+def sha256(path: Path) -&gt; str:
+    digest = hashlib.sha256()
+    with path.open(&quot;rb&quot;) as handle:
+        for block in iter(lambda: handle.read(1 &lt;&lt; 20), b&quot;&quot;):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def parse_documents(paths: list[Path], ocr: bool = False) -&gt; list[dict]:
+    print(
+        &quot;  load    Docling (first run imports PyTorch and downloads models; be patient)&quot;,
+        flush=True,
+    )
+    from docling.chunking import HybridChunker
+    from docling.datamodel.base_models import InputFormat
+    from docling.datamodel.pipeline_options import PdfPipelineOptions
+    from docling.document_converter import DocumentConverter, PdfFormatOption
+
+    print(&quot;  load    converter&quot;, flush=True)
+    pipeline = PdfPipelineOptions()
+    pipeline.do_ocr = ocr
+    converter = DocumentConverter(
+        format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline)}
+    )
+    try:
+        chunker = HybridChunker(max_tokens=MAX_CHUNK_TOKENS, merge_peers=True)
+    except OSError as exc:
+        raise huggingface_hint(exc) from None
+    print(f&quot;  load    chunker ({MAX_CHUNK_TOKENS}-token budget)&quot;, flush=True)
+
+    records: list[dict] = []
+    for path in paths:
+        print(f&quot;  parse   {path.name}&quot;, flush=True)
+        try:
+            result = converter.convert(str(path))
+        except Exception as exc:
+            raise huggingface_hint(exc) from None
+        chunks = list(chunker.chunk(dl_doc=result.document))
+        doc_hash = sha256(path)
+        for position, chunk in enumerate(chunks):
+            text = chunker.contextualize(chunk)
+            headings = &quot; &gt; &quot;.join(chunk.meta.headings or [])
+            pages = sorted(
+                {
+                    prov.page_no
+                    for item in (chunk.meta.doc_items or [])
+                    for prov in (item.prov or [])
+                }
+            )
+            records.append(
+                {
+                    &quot;id&quot;: hashlib.sha1(
+                        f&quot;{path.name}|{position}|{text}&quot;.encode(&quot;utf-8&quot;)
+                    ).hexdigest()[:12],
+                    &quot;text&quot;: text,
+                    &quot;source&quot;: path.name,
+                    &quot;headings&quot;: headings or &quot;(no heading)&quot;,
+                    &quot;pages&quot;: &quot;,&quot;.join(str(page) for page in pages),
+                    &quot;doc_hash&quot;: doc_hash,
+                }
+            )
+        print(f&quot;          {len(chunks)} chunks&quot;, flush=True)
+    return records
+</pre>
+
+<h2>ingest.py</h2>
+<pre>&quot;&quot;&quot;Offline lane with LlamaIndex: Docling chunks -&gt; Qwen vectors -&gt; LanceDB.
+
+    uv run python ingest.py --preview     # parse + chunk only, no key needed
+    uv run python ingest.py               # embed and index
+    uv run python ingest.py --rebuild     # delete the index and rebuild
+
+The corpus is the three documents from the main lesson 7 lab, so both examples
+answer the same questions over the same text.
+&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import argparse
+import shutil
+import statistics
+import sys
+import time
+
+from llama_index.core import Settings, StorageContext, VectorStoreIndex
+from llama_index.core.schema import TextNode
+from llama_index.vector_stores.lancedb import LanceDBVectorStore
+
+from common import (
+    DB_DIR,
+    TABLE_NAME,
+    MissingKey,
+    docs,
+    missing_keys_message,
+    require_keys,
+)
+from parse import parse_documents
+from qwen import QwenEmbedding
+
+
+def preview(records: list[dict], document_count: int, elapsed: float) -&gt; None:
+    lengths = [len(record[&quot;text&quot;]) for record in records]
+    print()
+    print(f&quot;{len(records)} chunks from {document_count} documents in {elapsed:.1f}s&quot;)
+    if not lengths:
+        return
+    print(
+        &quot;characters per chunk: &quot;
+        f&quot;min {min(lengths)}  median {int(statistics.median(lengths))}  max {max(lengths)}&quot;
+    )
+    print(&quot;\nfirst three chunks as the embedder will see them:\n&quot;)
+    for record in records[:3]:
+        head = record[&quot;text&quot;].replace(&quot;\n&quot;, &quot; &quot;)
+        print(f&quot;  [{record[&#x27;id&#x27;]}] {record[&#x27;source&#x27;]}  ({record[&#x27;headings&#x27;]})&quot;)
+        print(f&quot;    {head[:220]}{&#x27;...&#x27; if len(head) &gt; 220 else &#x27;&#x27;}&quot;)
+        print()
+
+
+def main() -&gt; int:
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(&quot;--preview&quot;, action=&quot;store_true&quot;)
+    parser.add_argument(&quot;--rebuild&quot;, action=&quot;store_true&quot;)
+    parser.add_argument(&quot;--ocr&quot;, action=&quot;store_true&quot;)
+    args = parser.parse_args()
+
+    paths = docs()
+    print(f&quot;corpus: {len(paths)} documents in {paths[0].parent}&quot;)
+
+    if args.preview:
+        started = time.perf_counter()
+        records = parse_documents(paths, ocr=args.ocr)
+        preview(records, len(paths), time.perf_counter() - started)
+        return 0
+
+    if DB_DIR.exists() and any(DB_DIR.iterdir()) and not args.rebuild:
+        print(f&quot;index already exists in {DB_DIR}; use --rebuild to replace it.&quot;)
+        return 0
+
+    require_keys([&quot;DASHSCOPE_API_KEY&quot;])
+
+    if args.rebuild:
+        shutil.rmtree(DB_DIR, ignore_errors=True)
+
+    Settings.embed_model = QwenEmbedding()
+
+    started = time.perf_counter()
+    records = parse_documents(paths, ocr=args.ocr)
+    if not records:
+        print(&quot;no chunks produced - is the corpus empty?&quot;, file=sys.stderr)
+        return 1
+
+    nodes = [
+        TextNode(
+            id_=record[&quot;id&quot;],
+            text=record[&quot;text&quot;],
+            metadata={
+                &quot;source&quot;: record[&quot;source&quot;],
+                &quot;headings&quot;: record[&quot;headings&quot;],
+                &quot;pages&quot;: record[&quot;pages&quot;],
+                &quot;doc_hash&quot;: record[&quot;doc_hash&quot;],
+            },
+        )
+        for record in records
+    ]
+
+    vector_store = LanceDBVectorStore(
+        uri=str(DB_DIR),
+        table_name=TABLE_NAME,
+        mode=&quot;overwrite&quot;,
+    )
+    storage = StorageContext.from_defaults(vector_store=vector_store)
+    VectorStoreIndex(nodes, storage_context=storage, show_progress=True)
+
+    print(
+        f&quot;\nindexed {len(nodes)} chunks from {len(paths)} documents &quot;
+        f&quot;in {time.perf_counter() - started:.1f}s&quot;
+    )
+    print(f&quot;stored in {DB_DIR}&quot;)
+    print(&quot;LlamaIndex embedded and persisted the nodes.&quot;)
+    return 0
+
+
+if __name__ == &quot;__main__&quot;:
+    try:
+        raise SystemExit(main())
+    except MissingKey as exc:
+        print(exc, file=sys.stderr)
+        raise SystemExit(1) from None
+    except KeyboardInterrupt:
+        print(&quot;\ninterrupted&quot;, file=sys.stderr)
+        raise SystemExit(130) from None
+</pre>
+
+<h2>ask.py</h2>
+<pre>&quot;&quot;&quot;Online lane with LlamaIndex: question -&gt; retriever -&gt; DeepSeek -&gt; answer.
+
+    uv run python ask.py &quot;How many seats does the Team plan include?&quot;
+    uv run python ask.py --show &quot;What does E-311 mean?&quot;
+
+The query engine owns retrieval and synthesis. `response.source_nodes` is the
+evidence that backed the answer; print it, because an answer without its sources
+is not verifiable.
+&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+
+from llama_index.core import Settings, VectorStoreIndex
+from llama_index.core.prompts import PromptTemplate
+from llama_index.llms.deepseek import DeepSeek
+from llama_index.vector_stores.lancedb import LanceDBVectorStore
+
+from common import (
+    DB_DIR,
+    TABLE_NAME,
+    MissingKey,
+    missing_keys_message,
+    require_keys,
+)
+from qwen import QwenEmbedding
+
+SYSTEM = &quot;&quot;&quot;You answer questions about NimbusDesk using only the context provided.
+If the context does not contain the answer, reply exactly: INSUFFICIENT_CONTEXT.
+Do not use prior knowledge and do not invent a source.&quot;&quot;&quot;
+
+TEXT_QA = PromptTemplate(
+    SYSTEM
+    + &quot;&quot;&quot;
+
+Context:
+{context_str}
+
+Question: {query_str}
+Answer:&quot;&quot;&quot;
+)
+
+
+def main() -&gt; int:
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(&quot;question&quot;, nargs=&quot;*&quot;)
+    parser.add_argument(&quot;--k&quot;, type=int, default=6)
+    parser.add_argument(&quot;--show&quot;, action=&quot;store_true&quot;)
+    args = parser.parse_args()
+
+    require_keys([&quot;DASHSCOPE_API_KEY&quot;, &quot;DEEPSEEK_API_KEY&quot;])
+
+    if not DB_DIR.exists():
+        print(&quot;no index found - run `uv run python ingest.py` first&quot;, file=sys.stderr)
+        return 1
+
+    Settings.embed_model = QwenEmbedding()
+    Settings.llm = DeepSeek(
+        model=&quot;deepseek-flash&quot;,
+        api_key=os.environ[&quot;DEEPSEEK_API_KEY&quot;],
+        api_base=os.environ.get(&quot;DEEPSEEK_BASE_URL&quot;, &quot;https://api.deepseek.com&quot;),
+        temperature=0,
+        is_chat_model=True,
+    )
+
+    vector_store = LanceDBVectorStore(uri=str(DB_DIR), table_name=TABLE_NAME)
+    index = VectorStoreIndex.from_vector_store(vector_store)
+    engine = index.as_query_engine(
+        similarity_top_k=args.k,
+        text_qa_template=TEXT_QA,
+    )
+
+    question = &quot; &quot;.join(args.question).strip()
+    if not question:
+        question = input(&quot;\nquestion&gt; &quot;).strip()
+        if not question:
+            return 0
+
+    response = engine.query(question)
+
+    print(f&quot;\nquestion: {question}&quot;)
+    print(f&quot;\nanswer: {response.response}&quot;)
+    print(&quot;\nsources:&quot;)
+    for number, node in enumerate(response.source_nodes, start=1):
+        meta = node.metadata
+        print(
+            f&quot;  [{number}] {node.score:.4f}  &quot;
+            f&quot;{meta.get(&#x27;source&#x27;, &#x27;?&#x27;)}  {meta.get(&#x27;headings&#x27;, &#x27;(no heading)&#x27;)}&quot;
+        )
+        if args.show:
+            print(f&quot;       {node.text[:300].replace(chr(10), &#x27; &#x27;)}...&quot;)
+
+    if &quot;INSUFFICIENT_CONTEXT&quot; in str(response.response):
+        print(&quot;\ninsufficient_context: True&quot;)
+    return 0
+
+
+if __name__ == &quot;__main__&quot;:
+    try:
+        raise SystemExit(main())
+    except MissingKey as exc:
+        print(exc, file=sys.stderr)
+        raise SystemExit(1) from None
+    except KeyboardInterrupt:
+        print(&quot;\ninterrupted&quot;, file=sys.stderr)
+        raise SystemExit(130) from None
+</pre>
+
+
+<h2>Files</h2>
+<table>
+  <thead><tr><th>file</th><th>role</th></tr></thead>
+  <tbody>
+    <tr><td><code>common.py</code></td><td>paths (shared corpus), Qwen constants, key checks</td></tr>
+    <tr><td><code>qwen.py</code></td><td>Qwen embeddings + QwenEmbedding(BaseEmbedding)</td></tr>
+    <tr><td><code>parse.py</code></td><td>Docling + HybridChunker, identical to the main lab</td></tr>
+    <tr><td><code>ingest.py</code></td><td>chunks -&gt; TextNode -&gt; Qwen -&gt; LanceDB</td></tr>
+    <tr><td><code>ask.py</code></td><td>VectorStoreIndex -&gt; query engine -&gt; answer + sources</td></tr>
+    <tr><td><code>pyproject.toml</code></td><td>uv project: llama-index-core, DeepSeek + LanceDB, Docling</td></tr>
+  </tbody>
+</table>
+
+<div class="footer-nav">
+  <div class="ask"><strong>Wrong chunk or no chunk?</strong> Print <code>response.source_nodes</code> first. If the fact is not in the retrieved six, the query engine cannot ground the answer; fix chunking or retrieval before touching the prompt.</div>
+  <div class="links">
+    <a href="../../../lessons/0007-rag-service.html">← Lesson 7</a>
+    <a href="README.md">README</a>
+    <a href="../../examples/0007-rag-service/index.html">Main lab</a>
+  </div>
+</div>
+
+</article>
+</body>
+</html>

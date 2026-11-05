@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 1 — What an AI Engineer Is in 2026 (And Where You Fit)</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<article class="page">
+
+<p class="meta">Lesson 1 of the AI Engineering course · ~15 min · <a href="../reference/skill-map.html">Skill Map reference →</a></p>
+
+<h1>What an AI Engineer Is in 2026 (And Where You Fit)</h1>
+
+<p class="lede">You already ship software. This lesson shows you the stack you're adding on top — which parts your background has already paid for, which tools the 2026 market actually demands, and where this course lands you.</p>
+
+<div class="callout win">
+  <span class="label">Your win this lesson</span>
+  By the end, you can name the six layers of the AI application stack, explain how AI engineering differs from ML engineering, point to the exact layers your existing skills cover — and name the toolchain and the two projects you build here, plus the capstone they lead to.
+</div>
+
+<h2>First: AI engineer ≠ ML engineer</h2>
+
+<p>The single most common misconception — and the one that sends people into months of useless math. An <strong>ML engineer</strong> trains and serves models: data pipelines, gradient descent, GPUs. An <strong>AI engineer</strong> builds products <em>on top of</em> foundation models someone else trained, using their APIs. You call the model; you own everything around the call: the context you feed it, the tools it can use, the evals that prove it works, the infrastructure that keeps it up. <a href="https://huyenchip.com/">Chip Huyen</a>, whose book is the field's textbook, defines AI engineering as "building applications with readily available foundation models" — and notes it is deliberately distinct from traditional ML engineering. <a href="https://www.oreilly.com/library/view/ai-engineering/9781098166298/">[1]</a></p>
+
+<p>DeepLearning.AI's skills map — built from analysis of 10,000+ job postings and interviews with hiring managers — puts it plainly: companies "usually do not need you to invent a new model." They need someone who can wire a model into a product reliably. <a href="https://www.deeplearning.ai/resources/ai-engineering-skills/">[2]</a> That's you, minus a few layers.</p>
+
+<h2>The six-layer stack</h2>
+
+<p>Every LLM-powered product — chatbots, copilots, agents, RAG search — is built from the same six layers. Gold marks where your existing skills already apply:</p>
+
+<div class="stack">
+  <div class="layer"><strong>L6 · Prod</strong> Deployment, CI/CD, monitoring, cost control, security — <em>the layer that separates demos from products</em></div>
+  <div class="layer"><strong>L5 · Agents</strong> LLMs that plan, call tools, and act in a loop instead of just replying</div>
+  <div class="layer"><strong>L4 · RAG</strong> Retrieval-augmented generation — grounding answers in your private data via embeddings + search</div>
+  <div class="layer"><strong>L3 · Context</strong> Prompts, system instructions, structured outputs, conversation state — how you spend the context window</div>
+  <div class="layer"><strong>L2 · APIs</strong> Calling models: OpenAI, Anthropic, open models via hosted endpoints; streaming, tools, tokens</div>
+  <div class="layer you"><strong>L1 · You</strong> Software fundamentals, APIs, containers, CI/CD, cloud — <em>you already live here</em></div>
+</div>
+
+<p>Here's the part most roadmaps bury: <strong>layers 5 and 6 are where hiring actually happens</strong> — agents and production. Note carefully what this does <em>not</em> mean: your Docker/K8s/Jenkins history is not your career pitch (you're heading toward product-facing AI work). It's quiet leverage. The production layer that terrifies most career-switchers — containerized services, CI pipelines, tracing, cost dashboards — is already fluent ground for you, so you can spend your learning hours on layers 2–5, where you're actually new. <a href="https://www.deeplearning.ai/resources/ai-engineering-skills/">[2]</a></p>
+
+<p>One more 2026 signal worth knowing now: <strong>MCP (Model Context Protocol)</strong> — the open standard for wiring agents into real systems (GitHub, Jira, databases) — moved from launch to Linux Foundation governance in about a year, backed by OpenAI, Google, Microsoft, and AWS, and job postings now name it outright. Building an MCP server is structurally the work you already know: design a schema, expose tools, handle auth and observability. We'll cover it in the agents phase. <a href="https://modelcontextprotocol.io">[spec]</a></p>
+
+<h2>Your gap, honestly assessed</h2>
+
+<table>
+  <thead><tr><th>Layer</th><th>You already have</th><th>You need to add</th></tr></thead>
+  <tbody>
+    <tr class="you"><td>L1 Foundations</td><td>C#/.NET <em>and</em> Python, React, APIs, Git</td><td>Nothing structural — both languages already yours</td></tr>
+    <tr class="you"><td>L2–3 Model I/O</td><td>API literacy, JSON, schemas</td><td>LLM API calls, prompt/context design, structured output</td></tr>
+    <tr class="you"><td>L4 RAG</td><td>Postgres, SQL Server, MongoDB, Redis — modeling, indexing, query tuning</td><td>Embeddings, vector search, chunking, hybrid ranking, retrieval quality</td></tr>
+    <tr><td>L5 Agents</td><td>—</td><td>Tool calling, agent loops, orchestration (LangChain/LangGraph)</td></tr>
+    <tr class="you"><td>L6 Production</td><td>Docker, K8s, Jenkins, Postgres/Mongo/Redis ops, monitoring instincts</td><td>LLM-specific ops: tracing, eval gates, cost/latency tuning</td></tr>
+  </tbody>
+</table>
+
+<p>Python deserves one honest sentence, and it's a happy one: <strong>you already write it.</strong> That matters more than most roadmaps admit, because nearly every AI library, tutorial, and job posting assumes Python — you can start using them on day one instead of translating. Your .NET side isn't a detour either; it's the differentiator. Enterprise buyers run on Azure and C#, and Microsoft's agent stack is built for exactly that world, where the talent pool is smaller. So the plan is <strong>dual-stack, no language detours</strong>: Python for the AI ecosystem (provider SDKs, LangGraph, FastAPI), C# where enterprise integration pays — and wherever a lesson's idea maps cleanly to .NET, the C# shape gets called out.</p>
+
+<p>Your database work is the most under-credited row on that table. RAG is a retrieval problem wearing an ML costume: schema design, index choice, query plans, filtered search, transactions, caching — the things you already do in Postgres, SQL Server, MongoDB, and Redis — are exactly what makes a vector store production-grade. All four now ship vector search (pgvector in Postgres, the native <code>VECTOR</code> type in SQL Server 2025, Atlas Vector Search in MongoDB, vector indexes in Redis), so project 2 can run on infrastructure you already operate instead of a new system. What is genuinely new is <em>relevance</em>: embeddings, chunking, hybrid ranking, reranking, and proving retrieval quality with evals. That's the L4 work — and it's where your hours should go, not into databases you can already run.</p>
+
+<h2>The toolchain, decided</h2>
+
+<p>Tool churn is the tax on self-study, so the choices are already made. One principle governs them: <strong>primitives before frameworks</strong>, so every abstraction stays transparent.</p>
+
+<ul>
+  <li><strong>First: the provider layer.</strong> LangChain's chat interface — <code>ChatDeepSeek</code> for DeepSeek, <code>ChatOpenAI</code>/<code>ChatAnthropic</code> for the others — is the default handle in this course, and <strong>function calling</strong> is the native primitive underneath: you declare tools as JSON schemas and the model returns structured calls. Every framework wraps this; lesson 3 builds the loop explicitly from <code>@tool</code>, <code>bind_tools()</code> and <code>ToolMessage</code>, so nothing stays hidden.</li>
+  <li><strong>Then: LangGraph</strong> (+ LangChain) — the market default for agents (~13.6M weekly downloads in November 2026; LinkedIn, Uber, Klarna in production; a fixture in Agentic AI Engineer postings).</li>
+  <li><strong>Your .NET edge: Microsoft Agent Framework</strong> — v1.0 shipped in April 2026 as the successor to Semantic Kernel and AutoGen, with first-class .NET and Python APIs, MCP and A2A support, and Azure Foundry integration. Learned after LangGraph as a second orchestration flavor — the Azure/.NET world you already work in is where it's demanded.</li>
+  <li><strong>Standards: MCP</strong> — the agent-to-tools protocol, covered in the agents phase.</li>
+  <li><strong>Supporting cast:</strong> FastAPI + pydantic (your controller instincts map 1:1), Next.js + the Vercel AI SDK for chat product shells, one vector store (pgvector, if Postgres is already yours), tracing via LangSmith or OpenTelemetry.</li>
+</ul>
+
+<p>Skip for now: CrewAI, AutoGen, deep vendor-SDK dives — revisit only when a target posting demands one. Full market evidence in the <a href="../reference/skill-map.html">SDK decision guide</a>.</p>
+
+<h2>Where this course lands you</h2>
+
+<p>Two warm-up projects here, plus the capstone in lesson 17 — each a prerequisite for the next — because portfolio work, not certificates, is what product teams hire on:</p>
+
+<ol>
+  <li><strong>Chat assistant</strong> — FastAPI service, streaming React UI, structured output, an evals harness. Proves layers 2–3.</li>
+  <li><strong>Docs RAG service</strong> — chunking, embeddings, hybrid retrieval, grounded citations. Proves layer 4, the most-requested skill in postings.</li>
+  <li><strong>Capstone (lesson 17): a grounded SEC-filing analyst</strong> — Supabase Postgres with pgvector and full-text search, a cost-capped ingestion pipeline, hybrid retrieval fused with RRF, a PydanticAI agent that may only search and read retrieved chunks, a validator that refuses unsupported claims, and a citation UI that opens the exact passage. Built in phases through the AI-coding workflow, with the pilot and deployment gates left honestly open.</li>
+</ol>
+
+<h2>Check yourself</h2>
+
+<div class="quiz">
+<script type="application/json">
+{
+  "questions": [
+    {
+      "q": "What does an AI engineer primarily build?",
+      "options": [
+        "Custom transformer models from scratch",
+        "Applications on top of foundation models",
+        "Data pipelines for analytics teams",
+        "Kubernetes clusters for GPU fleets"
+      ],
+      "correct": 1,
+      "explain": "AI engineers consume trained models via APIs and build the application around them — context, retrieval, agents, and production infrastructure."
+    },
+    {
+      "q": "Which approach is the first lever for fixing wrong LLM outputs?",
+      "options": [
+        "Careful context engineering and retrieval",
+        "Training larger custom models daily",
+        "Rewriting the frontend in a new framework",
+        "Adding more microservices to the backend"
+      ],
+      "correct": 0,
+      "explain": "Before fine-tuning or switching models, engineers fix the context: better prompts, better retrieved documents, clearer constraints. That's layer 3–4 work."
+    },
+    {
+      "q": "Which existing skill of yours transfers most directly to AI products?",
+      "options": [
+        "React component state management patterns",
+        "Entity framework database migration habits",
+        "Containerization for deploying AI services",
+        "Jenkins pipeline groovy script syntax"
+      ],
+      "correct": 2,
+      "explain": "Containerization is the direct bridge: LLM apps ship as containers, and your Docker/K8s experience covers the scarcest half of AI production skills."
+    },
+    {
+      "q": "What is RAG's job in an LLM application?",
+      "options": [
+        "Make the model train faster overnight",
+        "Replace the need for careful prompts",
+        "Ground answers in your private data",
+        "Compress every token to cut billing"
+      ],
+      "correct": 2,
+      "explain": "RAG retrieves relevant documents from your data and places them in the model's context, grounding responses in evidence instead of the model's training memory."
+    },
+    {
+      "q": "What most separates AI systems from traditional software?",
+      "options": [
+        "Everything must run on GPU clusters",
+        "There is no testing methodology at all",
+        "Only Python may be used in production",
+        "Outputs are probabilistic, so evaluate"
+      ],
+      "correct": 3,
+      "explain": "Same input can yield different outputs. That's why evaluation — not just unit tests — becomes a first-class engineering discipline in AI systems."
+    },
+    {
+      "q": "What does function calling actually do?",
+      "options": [
+        "Fine tunes the model on your data",
+        "Lets the model request tool invocations",
+        "Stores embeddings for later semantic search",
+        "Guarantees identical outputs every call"
+      ],
+      "correct": 1,
+      "explain": "You declare tools as JSON schemas; the model decides when to use one and returns a structured call request. Your code executes it and feeds the result back. It's the primitive every agent framework wraps."
+    }
+  ]
+}
+</script>
+</div>
+
+<h2>Primary source for this lesson</h2>
+<p>Read the <a href="https://www.deeplearning.ai/resources/ai-engineering-skills/">DeepLearning.AI AI Engineering Skills Map</a> (~20 min). It's the highest-signal overview of what employers actually hire for, and it's the backbone of this course's structure. Bookmark it; we'll return to its four pillars as we progress.</p>
+
+<h2>What's next</h2>
+<p>Next lesson: <a href="0002-your-first-llm-api-call.html"><strong>your first LLM call</strong></a> — messages, streamed tokens, one tool round trip, and pydantic-typed output, driven through LangChain against DeepSeek. It's the doorway to layers 2–3; the FastAPI + React service arrives in lesson 4, when project 1 — the chat assistant — starts. Milestones after that: function calling (3) → streaming UI (4) → evals (5) → RAG (6–8) → MCP (9) → LangGraph (10–11) → libraries and Pydantic (12–13) → a local model (14) → AI coding (15) → GitOps delivery (16) → the Supabase RAG capstone (17). Full rationale in the <a href="../reference/skill-map.html">SDK decision guide</a>.</p>
+
+<div class="footer-nav">
+  <div class="ask"><strong>Stuck or curious?</strong> Ask me anything about this lesson — I'm your teacher across sessions. Questions like "wait, how does that fit with my .NET job?" or "should I learn Microsoft Agent Framework instead?" are exactly right.</div>
+  <div class="links">
+    <a href="../reference/skill-map.html">Skill Map &amp; Glossary →</a>
+    <a href="../MISSION.md">Mission</a>
+    <a href="https://github.com/chiphuyen/aie-book/blob/main/resources.md">Chip Huyen's reading list</a>
+  </div>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</article>
+</body>
+</html>

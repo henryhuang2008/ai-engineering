@@ -1,0 +1,27 @@
+[
+  {
+    "title": "LangGraph documentation: persistence",
+    "url": "https://langchain-ai.github.io/langgraph/concepts/persistence/",
+    "snippet": "Checkpointers save graph state per thread, so a run can resume after a crash or pause for human approval. MemorySaver is in-process; SqliteSaver and PostgresSaver persist to disk."
+  },
+  {
+    "title": "When a tool loop is enough",
+    "url": "https://example.com/notes/when-a-tool-loop-is-enough",
+    "snippet": "A while-loop over bind_tools covers most single-turn support flows. A graph earns its place when you need branching, parallel retrieval, or state that outlives the process. The extra layer is not free: every node is another place to test."
+  },
+  {
+    "title": "Support agent architecture: classify, retrieve, draft, approve",
+    "url": "https://example.com/notes/support-agent-architecture",
+    "snippet": "A common production pattern is four nodes and one approval gate: classify the ticket, retrieve policy, draft with citations, then require a human before any refund executes. State and audit trails matter more than the model choice."
+  },
+  {
+    "title": "LangGraph in production: what teams report",
+    "url": "https://example.com/reports/langgraph-in-production",
+    "snippet": "Teams cite per-node traces and resumable runs as the main benefits. Smaller teams often keep a plain loop until they need checkpointing or human-in-the-loop, then migrate the loop into a graph without changing the prompts."
+  },
+  {
+    "title": "Comparing agent frameworks in 2026",
+    "url": "https://example.com/notes/agent-frameworks-2026",
+    "snippet": "Framework choice matters less than eval coverage. LangGraph is common where state must survive a process; lighter runtimes dominate single-process prototypes. Most migrations are driven by an operational requirement, not a benchmark."
+  }
+]

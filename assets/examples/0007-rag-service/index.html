@@ -1,0 +1,827 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Example 0007 - RAG service: offline index and online answer</title>
+<link rel="stylesheet" href="../../course.css">
+</head>
+<body>
+<article class="page">
+
+<p class="meta">Example 0007 · Companion to <a href="../../../lessons/0007-rag-service.html">Lesson 7</a> · <a href="README.md">README</a></p>
+
+<h1>The RAG service: two lanes, one table</h1>
+
+<p class="lede">A real build of lesson 6's pipeline. <strong>3 documents</strong> in three formats become <strong>15 chunks</strong> in one LanceDB table, with a BM25 index beside the vectors. <code>ingest.py</code> is the offline lane — Docling parse, HybridChunker, Qwen <code>text-embedding-v4</code> at 1024 dimensions, incremental by document hash. <code>ask.py</code> is the online lane — query embedding with <code>text_type="query"</code>, one hybrid query fused by RRF, optional cross-encoder, then <code>ChatDeepSeek</code> forced into a pydantic answer with citations checked against the retrieved set. No fake model, no canned answer.</p>
+
+<h2>Key and run (uv)</h2>
+<pre>$env:DASHSCOPE_API_KEY = &quot;sk-...&quot;     # Qwen text-embedding-v4
+$env:DEEPSEEK_API_KEY = &quot;sk-...&quot;      # DeepSeek deepseek-flash
+
+cd assets\examples\0007-rag-service
+uv sync                               # first sync is large: Docling + PyTorch
+uv run python ingest.py --preview     # parse + chunk, no API key needed
+uv run python ingest.py               # embed and index (~15 chunks)
+uv run python ask.py &quot;How many seats does the Team plan include?&quot;
+uv run python ask.py --show           # prompt loop, with retrieved evidence</pre>
+<p>Two keys, because DeepSeek has no embeddings endpoint. No key prints these commands and exits 1. The first Docling run downloads layout models once; if <code>huggingface.co</code> is unreachable, set <code>$env:HF_ENDPOINT = "https://hf-mirror.com"</code>. <code>uv.lock</code> pins the full graph, so <code>uv sync</code> is the whole install step.</p>
+
+<h2>What --preview prints (real run)</h2>
+<pre>corpus: 3 documents in ...\0007-rag-service\docs
+  load    Docling (first run imports PyTorch and downloads models; be patient)
+  load    converter
+  load    chunker (512-token budget)
+  parse   nimbusdesk-handbook.pdf
+          10 chunks
+  parse   nimbusdesk-plans.docx
+          1 chunks
+  parse   release-notes.md
+          4 chunks
+
+15 chunks from 3 documents in 34.7s
+characters per chunk: min 102  median 327  max 990</pre>
+<p>That first <strong>35 seconds is Docling</strong>, not a hang: importing PyTorch and running the layout model on CPU. OCR is off by default because these pages already carry text; <code>--ocr</code> is for scans. Fifteen chunks is small enough to inspect by hand, which is the point: boundary mistakes are visible here and invisible after embedding.</p>
+
+<h2>README.md</h2>
+<pre># 0007 — The RAG service: index once, answer every query
+
+Lesson 6 drew the pipeline. This is the first real build of it: a corpus of three
+documents, an offline lane that turns them into a LanceDB table, and an online lane
+that answers questions from that table with citations.
+
+**Two parts, two commands.**
+
+| part | lanes | command | what it produces |
+|---|---|---|---|
+| offline | stages 1–4 | `uv run python ingest.py` | chunks, 1024-d vectors and a BM25 index in one LanceDB table |
+| online | stages 5–8 | `uv run python ask.py &quot;...&quot;` | a grounded answer with validated citations |
+
+There is no fake model and no cached answer. The embedder is **Qwen
+`text-embedding-v4`**, the generator is **DeepSeek `deepseek-flash`**, and the store is
+**LanceDB** because it ships BM25 and hybrid search on the same table as the vectors.
+
+---
+
+## Keys
+
+Two vendors, because DeepSeek has no embeddings endpoint. Both are needed for a full
+run; `--preview` needs neither.
+
+```powershell
+$env:DASHSCOPE_API_KEY = &quot;sk-...&quot;     # Qwen embeddings
+$env:DEEPSEEK_API_KEY = &quot;sk-...&quot;      # DeepSeek generation
+```
+
+Persist them with `setx` and reopen the terminal. No key prints these commands and
+exits 1.
+
+- Qwen key: &lt;https://bailian.console.alibabacloud.com/&gt;
+- DeepSeek key: &lt;https://platform.deepseek.com/api_keys&gt;
+
+Keys are region-specific. If the embedding call returns 401, set the endpoint from
+your DashScope console:
+
+```powershell
+$env:DASHSCOPE_BASE_URL = &quot;https://&lt;your-region-host&gt;/api/v1&quot;
+```
+
+## Run
+
+```powershell
+cd assets\examples\0007-rag-service
+uv sync                                  # first run is large: Docling + PyTorch
+uv run python ingest.py --preview        # parse + chunk, no API key, no index
+uv run python ingest.py                  # embed and index (writes index/lancedb)
+uv run python ask.py &quot;How many seats does the Team plan include?&quot;
+```
+
+`uv run python ask.py` with no question starts a prompt loop. `--show` prints the
+retrieved evidence; `--k` changes how many chunks reach the model (default 6);
+`--rerank` adds a cross-encoder, off by default so you can measure the difference.
+`--ocr` turns OCR on for scanned PDFs (off by default; it roughly doubles parse time).
+
+### First run downloads models
+
+Docling downloads its layout models once (a few hundred MB) and caches them. If
+`huggingface.co` is unreachable, use a mirror:
+
+```powershell
+$env:HF_ENDPOINT = &quot;https://hf-mirror.com&quot;
+```
+
+The lab prints this hint itself when the download fails.
+
+---
+
+## The corpus
+
+`docs/` holds three formats on purpose, so the parse stage has real work to do:
+
+| file | format | why it is here |
+|---|---|---|
+| `nimbusdesk-handbook.pdf` | PDF | headings, page anchors, a troubleshooting table |
+| `nimbusdesk-plans.docx` | DOCX | a real table: seats, storage, API limits, SSO |
+| `release-notes.md` | Markdown | dated entries; exact error codes and version facts |
+
+NimbusDesk is fictional, but the facts are specific and checkable: 25 Team seats,
+E-311, a 14-day refund window, SAML on Business only.
+
+### What `--preview` prints
+
+```
+corpus: 3 documents in ...\0007-rag-service\docs
+  load    Docling (first run imports PyTorch and downloads models; be patient)
+  load    converter
+  load    chunker (512-token budget)
+  parse   nimbusdesk-handbook.pdf
+          10 chunks
+  parse   nimbusdesk-plans.docx
+          1 chunks
+  parse   release-notes.md
+          4 chunks
+
+15 chunks from 3 documents in 34.7s
+characters per chunk: min 102  median 327  max 990
+```
+
+That first **35 seconds is Docling**, not a hang: importing PyTorch plus running the
+layout model on CPU. Later stages reuse the loaded process, but every `uv run` is a
+fresh process, so plan for it. If you press Ctrl+C, the script exits with
+`interrupted` instead of a traceback.
+
+Inspect this before spending tokens. If a chunk is a single heading, or a table is
+split in half, fix the corpus or the chunk budget — not the prompt.
+
+## What a good answer looks like
+
+The ids, scores and wording vary between runs. The facts and the shape should not:
+
+```
+question: How many seats does the Team plan include?
+retrieved 6 chunks (hybrid, RRF)
+  [1] 0.0xxx  nimbusdesk-plans.docx  NimbusDesk plans and limits
+  ...
+
+answer: The Team plan includes 25 seats [1].
+insufficient_context: False
+citations:
+  [1] nimbusdesk-plans.docx  chunk &lt;id&gt;
+```
+
+Five questions to try, with the fact to check:
+
+| question | must contain | best source |
+|---|---|---|
+| How many seats does the Team plan include? | 25 | plans DOCX |
+| What does E-311 mean? | mailbox storage quota | handbook §7 |
+| How long do I have to request a refund? | 14 days | handbook §6 |
+| Is SAML SSO available on Team? | no, Business only | plans DOCX / handbook §3 |
+| What happens to deleted conversations? | recoverable 30 days, then purged | handbook §4 |
+
+Ask something the corpus does **not** answer (&quot;What is the SLA for the mobile app?&quot;)
+and the `insufficient_context` flag is the thing to watch, not the prose.
+
+---
+
+## How it maps to lesson 6
+
+| stage | in the code |
+|---|---|
+| 1 parse | `DocumentConverter().convert(path)` — Docling reads order, headings, tables |
+| 2 chunk | `HybridChunker(max_tokens=512, merge_peers=True)`; `contextualize()` prepends the heading path |
+| 3 embed + index | `text_type=&quot;document&quot;`, 1024 dims, batches of 10; BM25 index on the same text |
+| 4 store | one LanceDB table: id, text, source, headings, pages, doc_hash, vector |
+| 5 prepare query | `text_type=&quot;query&quot;`, same model and dimension |
+| 6 retrieve | one hybrid query; dense + BM25 fused by `RRFReranker` |
+| 7 rerank | `--rerank` swaps in `CrossEncoderReranker`; off by default |
+| 8 generate | `ChatDeepSeek` + `with_structured_output(Answer, method=&quot;function_calling&quot;)`; citation numbers checked against the retrieved set |
+
+Incremental indexing is real, not a TODO: each row stores the document&#x27;s sha256, an
+unchanged file is skipped, and a changed file has its rows deleted before the new ones
+are added. Delete `index/` to start clean, or pass `--rebuild`.
+
+## Files
+
+| file | role |
+|---|---|
+| `common.py` | paths, model name, dimension, key checks |
+| `qwen.py` | `text-embedding-v4` wrapper: batching and `query`/`document` |
+| `store.py` | LanceDB schema, FTS index, hybrid query |
+| `ingest.py` | offline lane + `--preview` |
+| `ask.py` | online lane + citation validation |
+| `docs/` | the corpus |
+| `index/` | generated LanceDB database (not source) |
+
+## Notes and limits
+
+- **Batch limit:** Qwen accepts at most 10 texts per embedding request. `qwen.py`
+  batches for you; do not remove it.
+- **Dimension is fixed:** 1024 is written into the table schema. Changing the model or
+  the dimension means rebuilding the index, not migrating it.
+- **Chunk budget:** 512 tokens. The DOCX table lands as one 990-character chunk because
+  it is short; longer tables are repeated per chunk with their header.
+- **No vector index:** 15 rows do not need one. LanceDB brute-forces small tables; an
+  IVF/HNSW index is an operational step for a much larger corpus, not part of this lab.
+- **No rerank by default:** stage 7 is a flag, not a default, so the difference is
+  measurable rather than assumed.
+- **Cost:** embedding 15 chunks and a handful of queries is well under a cent at
+  `text-embedding-v4` list price. Generation dominates the bill.
+</pre>
+
+<h2>ingest.py</h2>
+<pre>&quot;&quot;&quot;Part 1, offline: documents -&gt; chunks -&gt; vectors + BM25 -&gt; one LanceDB table.
+
+Stages 1-4 of lesson 6, in one command:
+
+    uv run python ingest.py --preview     # parse + chunk only, no API key needed
+    uv run python ingest.py               # embed and index
+    uv run python ingest.py --rebuild     # ignore hashes, rebuild everything
+    uv run python ingest.py --preview --ocr   # scanned PDFs only; OCR is slow
+
+The first run downloads Docling&#x27;s layout models and a tokenizer (a few hundred
+MB, once) and the first preview takes roughly 30-60 s on a CPU. OCR is off by
+default because born-digital PDFs already carry text; turn it on with --ocr
+when the pages are scans.
+
+Incremental by design: a document whose sha256 has not changed is skipped, and
+a changed document has its old rows deleted before the new ones are added. The
+document hash is stored in the table, so there is no manifest to drift.
+&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import statistics
+import sys
+import time
+from pathlib import Path
+
+from common import (
+    MAX_CHUNK_TOKENS,
+    MissingKey,
+    TABLE_NAME,
+    docs,
+    require_keys,
+)
+from store import (
+    Chunk,
+    build_fts,
+    connect,
+    create_table,
+    delete_source,
+    existing_hashes,
+    open_table,
+    table_names,
+)
+
+
+def huggingface_hint(exc: Exception) -&gt; SystemExit:
+    text = str(exc)
+    if &quot;huggingface.co&quot; in text or &quot;couldn&#x27;t connect&quot; in text.lower():
+        return SystemExit(
+            &quot;Docling could not download its layout models.\n&quot;
+            &quot;If huggingface.co is unreachable from your network, use a mirror and retry:\n&quot;
+            &#x27;  $env:HF_ENDPOINT = &quot;https://hf-mirror.com&quot;\n&#x27;
+            &quot;Models are cached after the first successful run.&quot;
+        )
+    return SystemExit(f&quot;Docling failed: {exc}&quot;)
+
+
+def sha256(path: Path) -&gt; str:
+    digest = hashlib.sha256()
+    with path.open(&quot;rb&quot;) as handle:
+        for block in iter(lambda: handle.read(1 &lt;&lt; 20), b&quot;&quot;):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def parse_documents(paths: list[Path], ocr: bool = False) -&gt; list[dict]:
+    &quot;&quot;&quot;Docling -&gt; HybridChunker. Structure first, token budget second.&quot;&quot;&quot;
+    print(
+        &quot;  load    Docling (first run imports PyTorch and downloads models; be patient)&quot;,
+        flush=True,
+    )
+    from docling.chunking import HybridChunker
+    from docling.datamodel.base_models import InputFormat
+    from docling.datamodel.pipeline_options import PdfPipelineOptions
+    from docling.document_converter import DocumentConverter, PdfFormatOption
+
+    print(&quot;  load    converter&quot;, flush=True)
+    pipeline = PdfPipelineOptions()
+    # Born-digital PDFs already carry text; OCR is the slow path and is off
+    # by default. Scanned pages need `--ocr`.
+    pipeline.do_ocr = ocr
+    converter = DocumentConverter(
+        format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline)}
+    )
+    try:
+        chunker = HybridChunker(max_tokens=MAX_CHUNK_TOKENS, merge_peers=True)
+    except OSError as exc:
+        raise huggingface_hint(exc) from None
+    print(&quot;  load    chunker (512-token budget)&quot;, flush=True)
+    records: list[dict] = []
+
+    for path in paths:
+        print(f&quot;  parse   {path.name}&quot;, flush=True)
+        try:
+            result = converter.convert(str(path))
+        except OSError as exc:
+            raise huggingface_hint(exc) from None
+        chunks = list(chunker.chunk(dl_doc=result.document))
+        doc_hash = sha256(path)
+        for position, chunk in enumerate(chunks):
+            # contextualize() prepends the heading path, so a chunk about
+            # refunds still knows it is under &quot;Refunds and billing corrections&quot;.
+            text = chunker.contextualize(chunk)
+            headings = &quot; &gt; &quot;.join(chunk.meta.headings or [])
+            pages = sorted(
+                {
+                    prov.page_no
+                    for item in (chunk.meta.doc_items or [])
+                    for prov in (item.prov or [])
+                }
+            )
+            records.append(
+                {
+                    &quot;id&quot;: hashlib.sha1(
+                        f&quot;{path.name}|{position}|{text}&quot;.encode(&quot;utf-8&quot;)
+                    ).hexdigest()[:12],
+                    &quot;text&quot;: text,
+                    &quot;source&quot;: path.name,
+                    &quot;headings&quot;: headings or &quot;(no heading)&quot;,
+                    &quot;pages&quot;: &quot;,&quot;.join(str(page) for page in pages),
+                    &quot;doc_hash&quot;: doc_hash,
+                }
+            )
+        print(f&quot;          {len(chunks)} chunks&quot;, flush=True)
+
+    return records
+
+
+def preview(records: list[dict], document_count: int, elapsed: float) -&gt; None:
+    lengths = [len(record[&quot;text&quot;]) for record in records]
+    print()
+    print(f&quot;{len(records)} chunks from {document_count} documents in {elapsed:.1f}s&quot;)
+    if not lengths:
+        return
+    print(
+        &quot;characters per chunk: &quot;
+        f&quot;min {min(lengths)}  median {int(statistics.median(lengths))}  max {max(lengths)}&quot;
+    )
+    print(&quot;\nfirst three chunks as the embedder will see them:\n&quot;)
+    for record in records[:3]:
+        head = record[&quot;text&quot;].replace(&quot;\n&quot;, &quot; &quot;)
+        print(f&quot;  [{record[&#x27;id&#x27;]}] {record[&#x27;source&#x27;]}  ({record[&#x27;headings&#x27;]})&quot;)
+        print(f&quot;    {head[:220]}{&#x27;...&#x27; if len(head) &gt; 220 else &#x27;&#x27;}&quot;)
+        print()
+
+
+def main() -&gt; int:
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        &quot;--preview&quot;,
+        action=&quot;store_true&quot;,
+        help=&quot;parse and chunk only; print what would be embedded&quot;,
+    )
+    parser.add_argument(
+        &quot;--rebuild&quot;,
+        action=&quot;store_true&quot;,
+        help=&quot;ignore document hashes and re-index everything&quot;,
+    )
+    parser.add_argument(
+        &quot;--ocr&quot;,
+        action=&quot;store_true&quot;,
+        help=&quot;run OCR (needed for scanned PDFs; slower, off by default)&quot;,
+    )
+    args = parser.parse_args()
+
+    paths = docs()
+    print(f&quot;corpus: {len(paths)} documents in {paths[0].parent}&quot;)
+
+    if args.preview:
+        started = time.perf_counter()
+        records = parse_documents(paths, ocr=args.ocr)
+        preview(records, len(paths), time.perf_counter() - started)
+        return 0
+
+    db = connect()
+    fresh = args.rebuild or TABLE_NAME not in table_names(db)
+    table = None
+    if fresh:
+        todo = paths
+    else:
+        table = open_table(db)
+        known = existing_hashes(table)
+        current = {path.name: sha256(path) for path in paths}
+        todo = [path for path in paths if known.get(path.name) != current[path.name]]
+
+    if not todo:
+        if table is None:
+            print(&quot;no documents found in docs/&quot;, file=sys.stderr)
+            return 1
+        build_fts(table)
+        print(f&quot;nothing changed; {table.count_rows()} chunks already indexed&quot;)
+        return 0
+
+    require_keys([&quot;DASHSCOPE_API_KEY&quot;])
+    if fresh:
+        table = create_table(db, [])
+
+    started = time.perf_counter()
+    records = parse_documents(todo, ocr=args.ocr)
+    if not records:
+        print(&quot;no chunks produced - is the corpus empty?&quot;, file=sys.stderr)
+        return 1
+
+    print(f&quot;\n  embed   {len(records)} chunks with Qwen text-embedding-v4&quot;)
+    from qwen import embed_documents
+
+    vectors = embed_documents([record[&quot;text&quot;] for record in records])
+    rows = [Chunk(**record, vector=vector) for record, vector in zip(records, vectors)]
+
+    if not fresh:
+        for path in todo:
+            delete_source(table, path.name)
+    table.add(rows)
+    build_fts(table)
+
+    print(
+        f&quot;\nindexed {len(rows)} chunks from {len(todo)} documents &quot;
+        f&quot;({len(paths) - len(todo)} unchanged) in {time.perf_counter() - started:.1f}s; &quot;
+        f&quot;table now holds {table.count_rows()}&quot;
+    )
+    return 0
+
+
+if __name__ == &quot;__main__&quot;:
+    try:
+        raise SystemExit(main())
+    except MissingKey as exc:
+        print(exc, file=sys.stderr)
+        raise SystemExit(1) from None
+    except KeyboardInterrupt:
+        print(&quot;\ninterrupted&quot;, file=sys.stderr)
+        raise SystemExit(130) from None
+</pre>
+
+<h2>ask.py</h2>
+<pre>&quot;&quot;&quot;Part 2, online: question -&gt; two representations -&gt; hybrid search -&gt; answer.
+
+Stages 5-8 of lesson 6:
+
+  5 prepare  embed the question with text_type=&quot;query&quot;; BM25 uses the same text
+  6 retrieve one hybrid query: dense + BM25, fused by reciprocal rank fusion
+  7 rerank   optional cross-encoder (--rerank); off by default so you can compare
+  8 generate ChatDeepSeek, forced into a pydantic Answer, citations validated
+
+Run one question:
+
+    uv run python ask.py &quot;How many seats does the Team plan include?&quot;
+
+Or leave the question off for a prompt loop. `--show` prints the evidence that
+was retrieved, which is the first thing to inspect when an answer is wrong.
+&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import argparse
+import sys
+
+from pydantic import BaseModel, Field
+
+from common import TABLE_NAME, MissingKey, require_keys
+from qwen import embed_query
+from store import connect, hybrid_search, open_table, table_names
+
+SYSTEM = &quot;&quot;&quot;You answer questions about NimbusDesk using only the evidence provided.
+
+Rules:
+- Every factual claim must come from the evidence, not from prior knowledge.
+- Cite the evidence numbers you used in square brackets, for example [1] or [2, 4].
+- If the evidence does not contain the answer, say so plainly and set
+  insufficient_context to true. Do not guess and do not invent a source.&quot;&quot;&quot;
+
+
+class Answer(BaseModel):
+    answer: str = Field(description=&quot;The answer, grounded only in the evidence.&quot;)
+    citations: list[int] = Field(
+        default_factory=list,
+        description=&quot;Evidence numbers used, for example [1, 3].&quot;,
+    )
+    insufficient_context: bool = Field(
+        description=&quot;True when the evidence does not answer the question.&quot;,
+    )
+
+
+def format_evidence(rows: list[dict]) -&gt; str:
+    blocks = []
+    for number, row in enumerate(rows, start=1):
+        heading = row.get(&quot;headings&quot;) or &quot;(no heading)&quot;
+        blocks.append(f&quot;[{number}] {row[&#x27;source&#x27;]} - {heading}\n{row[&#x27;text&#x27;]}&quot;)
+    return &quot;\n\n&quot;.join(blocks)
+
+
+def answer_question(question: str, k: int, rerank: bool, show: bool) -&gt; None:
+    db = connect()
+    if TABLE_NAME not in table_names(db):
+        raise SystemExit(&quot;no index found - run `uv run python ingest.py` first&quot;)
+    table = open_table(db)
+
+    vector = embed_query(question)
+    rows = hybrid_search(table, question, vector, k=k, rerank=rerank)
+    if not rows:
+        print(&quot;no chunks retrieved - is the index empty?&quot;)
+        return
+
+    print(f&quot;\nquestion: {question}&quot;)
+    print(f&quot;retrieved {len(rows)} chunks (hybrid, {&#x27;cross-encoder&#x27; if rerank else &#x27;RRF&#x27;})&quot;)
+    for number, row in enumerate(rows, start=1):
+        score = row.get(&quot;_relevance_score&quot;)
+        score_text = f&quot;{score:.4f}&quot; if isinstance(score, float) else &quot;-&quot;
+        print(f&quot;  [{number}] {score_text}  {row[&#x27;source&#x27;]}  {row[&#x27;headings&#x27;]}&quot;)
+
+    if show:
+        print(&quot;\n--- evidence ---&quot;)
+        print(format_evidence(rows))
+        print(&quot;--- end evidence ---&quot;)
+
+    from langchain_core.messages import HumanMessage, SystemMessage
+    from langchain_deepseek import ChatDeepSeek
+
+    model = ChatDeepSeek(
+        model=&quot;deepseek-flash&quot;,
+        temperature=0,
+        extra_body={&quot;thinking&quot;: {&quot;type&quot;: &quot;disabled&quot;}},
+    )
+    structured = model.with_structured_output(Answer, method=&quot;function_calling&quot;)
+    message = (
+        f&quot;Question: {question}\n\n&quot;
+        f&quot;Evidence:\n\n{format_evidence(rows)}\n\n&quot;
+        &quot;Answer from the evidence above.&quot;
+    )
+    result = structured.invoke(
+        [SystemMessage(content=SYSTEM), HumanMessage(content=message)]
+    )
+
+    valid = [number for number in result.citations if 1 &lt;= number &lt;= len(rows)]
+    if len(valid) != len(result.citations):
+        bad = sorted({n for n in result.citations if not 1 &lt;= n &lt;= len(rows)})
+        print(f&quot;\nwarning: dropped citations outside the evidence set: {bad}&quot;)
+    if not valid and not result.insufficient_context:
+        print(&quot;\nwarning: answer has no citations and does not flag insufficient context&quot;)
+
+    print(f&quot;\nanswer: {result.answer}&quot;)
+    print(f&quot;insufficient_context: {result.insufficient_context}&quot;)
+    if valid:
+        print(&quot;citations:&quot;)
+        for number in dict.fromkeys(valid):
+            row = rows[number - 1]
+            print(f&quot;  [{number}] {row[&#x27;source&#x27;]}  chunk {row[&#x27;id&#x27;]}&quot;)
+
+
+def main() -&gt; int:
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(&quot;question&quot;, nargs=&quot;*&quot;, help=&quot;one question; omit for a prompt loop&quot;)
+    parser.add_argument(&quot;--k&quot;, type=int, default=6, help=&quot;chunks passed to the model (default 6)&quot;)
+    parser.add_argument(
+        &quot;--rerank&quot;,
+        action=&quot;store_true&quot;,
+        help=&quot;add a cross-encoder reranker (downloads a model on first use)&quot;,
+    )
+    parser.add_argument(&quot;--show&quot;, action=&quot;store_true&quot;, help=&quot;print the retrieved evidence&quot;)
+    args = parser.parse_args()
+
+    require_keys([&quot;DASHSCOPE_API_KEY&quot;, &quot;DEEPSEEK_API_KEY&quot;])
+
+    if args.question:
+        answer_question(&quot; &quot;.join(args.question), args.k, args.rerank, args.show)
+        return 0
+
+    while True:
+        try:
+            question = input(&quot;\nquestion&gt; &quot;).strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 0
+        if not question or question.lower() in {&quot;exit&quot;, &quot;quit&quot;}:
+            return 0
+        answer_question(question, args.k, args.rerank, args.show)
+
+
+if __name__ == &quot;__main__&quot;:
+    try:
+        raise SystemExit(main())
+    except MissingKey as exc:
+        print(exc, file=sys.stderr)
+        raise SystemExit(1) from None
+    except KeyboardInterrupt:
+        print(&quot;\ninterrupted&quot;, file=sys.stderr)
+        raise SystemExit(130) from None
+</pre>
+
+<h2>qwen.py</h2>
+<pre>&quot;&quot;&quot;Qwen text-embedding-v4, with the query/document split lesson 6 asks for.
+
+DeepSeek has no embeddings endpoint. That is not a problem: generation and
+embedding are independent, and this file is the only place that knows the
+embedder is Qwen.
+
+Two details are easy to miss and expensive to get wrong:
+  * the same model must be used at index time and query time;
+  * the API embeds at most 10 texts per request, so batching is explicit.
+&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import os
+from typing import Literal
+
+import dashscope
+
+from common import (
+    DEFAULT_BASE_URL,
+    EMBED_BATCH,
+    EMBED_DIM,
+    EMBED_MODEL,
+    MissingKey,
+    missing_keys_message,
+)
+
+TextType = Literal[&quot;document&quot;, &quot;query&quot;]
+
+
+def _client() -&gt; dashscope.Client:
+    key = os.environ.get(&quot;DASHSCOPE_API_KEY&quot;)
+    if not key:
+        raise MissingKey(missing_keys_message([&quot;DASHSCOPE_API_KEY&quot;]))
+    base_url = os.environ.get(&quot;DASHSCOPE_BASE_URL&quot;, DEFAULT_BASE_URL)
+    return dashscope.Client(api_key=key, base_url=base_url)
+
+
+def _embed(texts: list[str], text_type: TextType) -&gt; list[list[float]]:
+    if not texts:
+        return []
+    client = _client()
+    vectors: list[list[float]] = []
+    for start in range(0, len(texts), EMBED_BATCH):
+        batch = texts[start : start + EMBED_BATCH]
+        try:
+            response = client.embeddings.create(
+                model=EMBED_MODEL,
+                input=batch,
+                dimension=EMBED_DIM,
+                text_type=text_type,
+                output_type=&quot;dense&quot;,
+            )
+        except Exception as exc:  # network, auth, quota - show the reason
+            raise SystemExit(f&quot;Qwen embedding request failed: {exc}&quot;) from exc
+        items = sorted(response.embeddings, key=lambda item: item.index)
+        vectors.extend(item.embedding for item in items)
+    if len(vectors) != len(texts):
+        raise SystemExit(
+            f&quot;expected {len(texts)} vectors from Qwen, received {len(vectors)}&quot;
+        )
+    return vectors
+
+
+def embed_documents(texts: list[str]) -&gt; list[list[float]]:
+    &quot;&quot;&quot;Index-time embedding: text_type=&#x27;document&#x27;.&quot;&quot;&quot;
+    return _embed(texts, &quot;document&quot;)
+
+
+def embed_query(text: str) -&gt; list[float]:
+    &quot;&quot;&quot;Query-time embedding: text_type=&#x27;query&#x27;, same model, same dimension.&quot;&quot;&quot;
+    return _embed([text], &quot;query&quot;)[0]
+</pre>
+
+<h2>store.py</h2>
+<pre>&quot;&quot;&quot;LanceDB: one table for rows, vectors and the BM25 index.
+
+A row is a chunk. The vector column feeds the dense half of a hybrid query;
+the FTS index on `text` feeds the BM25 half. Both live in the same table, so a
+filter applies to both and chunk ids never have to be joined by hand.
+&quot;&quot;&quot;
+
+from __future__ import annotations
+
+from typing import Any
+
+import lancedb
+from lancedb.index import FTS
+from lancedb.pydantic import LanceModel, Vector
+from lancedb.rerankers import RRFReranker
+
+from common import DB_DIR, EMBED_DIM, TABLE_NAME
+
+
+class Chunk(LanceModel):
+    id: str
+    text: str
+    source: str
+    headings: str
+    pages: str
+    doc_hash: str
+    vector: Vector(EMBED_DIM)
+
+
+def connect() -&gt; lancedb.DBConnection:
+    DB_DIR.mkdir(parents=True, exist_ok=True)
+    return lancedb.connect(str(DB_DIR))
+
+
+def table_names(db: lancedb.DBConnection) -&gt; list[str]:
+    return list(db.table_names())
+
+
+def open_table(db: lancedb.DBConnection) -&gt; lancedb.table.Table:
+    return db.open_table(TABLE_NAME)
+
+
+def create_table(db: lancedb.DBConnection, rows: list[Chunk]) -&gt; lancedb.table.Table:
+    table = db.create_table(TABLE_NAME, schema=Chunk, mode=&quot;overwrite&quot;)
+    if rows:
+        table.add(rows)
+    return table
+
+
+def delete_source(table: lancedb.table.Table, source: str) -&gt; None:
+    escaped = source.replace(&quot;&#x27;&quot;, &quot;&#x27;&#x27;&quot;)
+    table.delete(f&quot;source = &#x27;{escaped}&#x27;&quot;)
+
+
+def build_fts(table: lancedb.table.Table) -&gt; None:
+    &quot;&quot;&quot;BM25 index. These analyser settings are fixed here and assumed at query time.&quot;&quot;&quot;
+    table.create_index(
+        &quot;text&quot;,
+        config=FTS(
+            language=&quot;English&quot;,
+            stem=True,
+            remove_stop_words=True,
+            ascii_folding=True,
+        ),
+        replace=True,
+    )
+
+
+def existing_hashes(table: lancedb.table.Table) -&gt; dict[str, str]:
+    &quot;&quot;&quot;source -&gt; doc_hash, read back from the table itself (no manifest file).&quot;&quot;&quot;
+    columns = table.to_arrow().to_pydict()
+    return dict(zip(columns[&quot;source&quot;], columns[&quot;doc_hash&quot;]))  # noqa: B905
+
+
+def hybrid_search(
+    table: lancedb.table.Table,
+    text: str,
+    vector: list[float],
+    k: int = 8,
+    rerank: bool = False,
+) -&gt; list[dict[str, Any]]:
+    query = (
+        table.search(query_type=&quot;hybrid&quot;)
+        .vector(vector)
+        .text(text)
+    )
+    if rerank:
+        from lancedb.rerankers import CrossEncoderReranker
+
+        query = query.rerank(CrossEncoderReranker())
+    else:
+        query = query.rerank(RRFReranker())
+    return query.limit(k).to_list()
+</pre>
+
+
+<h2>Files</h2>
+<table>
+  <thead><tr><th>file</th><th>role</th></tr></thead>
+  <tbody>
+    <tr><td><code>common.py</code></td><td>paths, model name, dimension, key checks</td></tr>
+    <tr><td><code>qwen.py</code></td><td>text-embedding-v4 wrapper: batching and query/document</td></tr>
+    <tr><td><code>store.py</code></td><td>LanceDB schema, FTS index, hybrid query</td></tr>
+    <tr><td><code>ingest.py</code></td><td>offline lane + --preview</td></tr>
+    <tr><td><code>ask.py</code></td><td>online lane + citation validation</td></tr>
+    <tr><td><code>docs/</code></td><td>the corpus: PDF, DOCX, Markdown</td></tr>
+    <tr><td><code>index/</code></td><td>generated LanceDB database (not source)</td></tr>
+  </tbody>
+</table>
+
+<div class="footer-nav">
+  <div class="ask"><strong>Answer wrong?</strong> Run with <code>--show</code> and read the evidence before touching the prompt. The retrieved chunk is the usual suspect.</div>
+  <div class="links">
+    <a href="../../../lessons/0007-rag-service.html">← Lesson 7</a>
+    <a href="README.md">README</a>
+    <a href="../../../lessons/0006-rag-foundation.html">Lesson 6</a>
+  </div>
+</div>
+
+</article>
+</body>
+</html>
