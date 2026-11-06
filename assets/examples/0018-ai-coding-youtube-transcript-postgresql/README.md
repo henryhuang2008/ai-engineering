@@ -68,7 +68,7 @@ Create a local environment file from the example:
 Copy-Item .env.example .env
 ```
 
-Configure `DEEPSEEK_API_KEY` for preview generation. SMTP settings (`SMTP_HOST`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `EMAIL_SENDER`, and `EMAIL_RECIPIENT`) are needed only when you opt in to email delivery. The DeepSeek base URL, model, SMTP port, and database URL have local-development defaults in `.env.example`. Do not commit `.env`; it is ignored by Git.
+Configure `DEEPSEEK_API_KEY` for preview generation. SMTP settings (`SMTP_HOST`, `SMTP_USERNAME`, `SMTP_APPPASSWORD`, `EMAIL_SENDER`, and `EMAIL_RECIPIENT`) are needed only when you opt in to email delivery. For Gmail, `SMTP_APPPASSWORD` should be your Google app password. The DeepSeek base URL, model, SMTP port, and database URL have local-development defaults in `.env.example`. Do not commit `.env`; it is ignored by Git.
 
 Apply database migrations (including the migration that allows multiple recorded attempts per UTC date):
 

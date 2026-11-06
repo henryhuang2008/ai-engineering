@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
+from sqlalchemy.engine import make_url
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(PROJECT_ROOT / ".env")
@@ -40,7 +41,7 @@ class Settings:
         recipient = self.email_recipient
         if not host or not username or not password or not sender or not recipient:
             raise ValueError(
-                "SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, "
+                "SMTP_HOST, SMTP_USERNAME, SMTP_APPPASSWORD, "
                 "EMAIL_SENDER, and EMAIL_RECIPIENT are required to send a digest"
             )
         return (
@@ -61,12 +62,19 @@ def get_settings() -> Settings:
     if not 1 <= smtp_port <= 65535:
         raise ValueError("SMTP_PORT must be between 1 and 65535")
 
+    database_url = os.getenv(
+        "DATABASE_URL",
+        "postgresql+psycopg://youtube_digest:local_dev_password"
+        "@localhost:5432/youtube_digest",
+    )
+    parsed_database_url = make_url(database_url)
+    if parsed_database_url.host == "localhost":
+        database_url = parsed_database_url.set(host="127.0.0.1").render_as_string(
+            hide_password=False
+        )
+
     return Settings(
-        database_url=os.getenv(
-            "DATABASE_URL",
-            "postgresql+psycopg://youtube_digest:local_dev_password"
-            "@localhost:5432/youtube_digest",
-        ),
+        database_url=database_url,
         deepseek_api_key=os.getenv("DEEPSEEK_API_KEY") or None,
         deepseek_base_url=os.getenv(
             "DEEPSEEK_BASE_URL", "https://api.deepseek.com"
@@ -75,7 +83,7 @@ def get_settings() -> Settings:
         smtp_host=os.getenv("SMTP_HOST") or None,
         smtp_port=smtp_port,
         smtp_username=os.getenv("SMTP_USERNAME") or None,
-        smtp_password=os.getenv("SMTP_PASSWORD") or None,
+        smtp_password=os.getenv("SMTP_APPPASSWORD") or None,
         email_sender=os.getenv("EMAIL_SENDER") or None,
         email_recipient=os.getenv("EMAIL_RECIPIENT") or None,
     )

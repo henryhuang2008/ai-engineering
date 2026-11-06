@@ -71,5 +71,13 @@ def send_digest_email(
         client.ehlo()
         client.starttls(context=context)
         client.ehlo()
-        client.login(username, password)
+        try:
+            client.login(username, password)
+        except smtplib.SMTPServerDisconnected as error:
+            raise ConnectionError(
+                "SMTP server disconnected during authentication. For Gmail, "
+                "use your full Gmail address and a 16-character Google app "
+                "password (remove any display spaces); do not use your regular "
+                "account password."
+            ) from error
         client.send_message(message)
