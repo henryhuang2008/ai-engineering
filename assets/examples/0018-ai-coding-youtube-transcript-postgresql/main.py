@@ -1,6 +1,5 @@
-def main():
-    print("Hello from 0018-ai-coding-youtube-transcript-postgresql!")
+from app.cli import main
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

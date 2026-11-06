@@ -10,7 +10,15 @@ TRUNCATION_MARKER = "\n[Content truncated.]"
 
 
 def build_digest_input(articles: Sequence[Article]) -> str:
+    content, _ = build_digest_input_with_articles(articles)
+    return content
+
+
+def build_digest_input_with_articles(
+    articles: Sequence[Article],
+) -> tuple[str, tuple[Article, ...]]:
     parts: list[str] = []
+    included_articles: list[Article] = []
     input_length = 0
 
     for article in articles:
@@ -65,10 +73,11 @@ def build_digest_input(articles: Sequence[Article]) -> str:
             block = prefix + content[:content_limit]
 
         parts.append(block)
+        included_articles.append(article)
         input_length += len(block)
         if total_limit_reached:
             break
         if input_length >= MAX_DIGEST_INPUT_CHARS:
             break
 
-    return "".join(parts)
+    return "".join(parts), tuple(included_articles)

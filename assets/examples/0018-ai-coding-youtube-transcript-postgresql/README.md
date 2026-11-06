@@ -60,6 +60,39 @@ The fixture represents the sample channel in `app/data/channels.json`. The optio
 
 `app.digest.input.build_digest_input` formats saved articles for digest generation. It uses a saved transcript when present and falls back to the RSS description; content is limited to 12,000 characters per video and 48,000 characters total, including article metadata. Content that exceeds a limit is marked as truncated.
 
+## Digest generation and email
+
+Create a local environment file from the example:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Configure `DEEPSEEK_API_KEY` for preview generation. SMTP settings (`SMTP_HOST`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `EMAIL_SENDER`, and `EMAIL_RECIPIENT`) are needed only when you opt in to email delivery. The DeepSeek base URL, model, SMTP port, and database URL have local-development defaults in `.env.example`. Do not commit `.env`; it is ignored by Git.
+
+Apply database migrations (including the migration that allows multiple recorded attempts per UTC date):
+
+```shell
+uv run python main.py migrate
+```
+
+By default, `run` reads already-ingested records from PostgreSQL, generates a preview, and prints it. It does not fetch YouTube feeds, send email, or save a digest attempt:
+
+```shell
+uv run python main.py run
+```
+
+Generating the preview still calls DeepSeek, so the model response time depends on the API. To refresh saved articles first, run ingestion separately with `uv run python main.py seed`.
+
+To explicitly send the digest instead of printing a preview, add `--send-email`. A successful send is recorded in PostgreSQL. Re-running on the same UTC date skips after a successful send; `--force` records and sends another attempt:
+
+```shell
+uv run python main.py run --send-email
+uv run python main.py run --send-email --force
+```
+
+Failed generation and delivery attempts are recorded as `failed` and can be retried. Runs with no articles in the time window are recorded as `empty` without calling DeepSeek or sending email. Unit tests use mocks and do not call DeepSeek or send messages.
+
 ## Running tests
 
 Run the test suite from the project root (the directory containing `pyproject.toml`):

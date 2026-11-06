@@ -30,6 +30,7 @@ SMTP (`smtplib`), CLI parsing (`argparse`), and JSON handling (`json`) use the P
 - [x] Set up Alembic under `app/database/alembic/`.
 - [x] Add `app/database/migrate.py` and the initial schema migration.
 - [x] Verify migrations can be applied to the local PostgreSQL database.
+- [ ] Apply the digest-attempt migration to local PostgreSQL and verify the updated schema.
 
 After PostgreSQL is running, apply the schema from the project root:
 
@@ -58,28 +59,36 @@ Run ingestion manually from the project root with `uv run python -m app.ingest.s
 
 - [x] Fetch captions from a YouTube URL and fall back to the RSS description when unavailable.
 - [x] Connect RSS video records to transcript lookup and show the selected content for each video in the live test.
-- [x] Build bounded digest input from saved transcripts, falling back to RSS descriptions when unavailable (12,000 content characters per video; 48,000 characters total).
 
 ## Digest generation and email
 
-- [ ] Add the editable system prompt at `app/agent/prompts/digest_system.md`.
-- [ ] Implement the DeepSeek agent service and validate response URLs.
-- [ ] Generate a digest from articles published in the last 24 hours.
-- [ ] Render and send the digest email over SMTP.
-- [ ] Persist digest results and prevent repeat sends on the same UTC day.
-- [ ] Support intentional repeat sends with `--force`.
+See the detailed design and acceptance criteria in [digest-generation-and-email-plan.md](./digest-generation-and-email-plan.md).
+
+Implementation plan:
+
+1. [x] Build bounded digest input from saved transcripts, falling back to RSS descriptions when unavailable (12,000 content characters per video; 48,000 characters total).
+2. [x] Add the editable system prompt at `app/agent/prompts/digest_system.md` and implement the DeepSeek service using the OpenAI-compatible API settings.
+3. [x] Select articles published in the last 24 hours using a UTC time window; define and test boundary behavior and the empty-input case.
+4. [x] Generate structured digest entries from the selected articles and bounded input; reject malformed responses and links that do not exactly match the input article URLs.
+5. [x] Render a readable plain-text and HTML email, escaping article-provided text in HTML.
+6. [x] Configure SMTP settings and send the rendered email using STARTTLS; surface send failures rather than reporting success.
+7. [x] Persist each digest attempt and its outcome (`sent`, `failed`, or `empty`), including its UTC run date, window, content, model, recipient, and send time. Add a migration to replace the current unique-per-run-date constraint so intentional forced attempts can also be recorded.
+8. [x] Make the `run` command print a database-backed preview by default; require `--send-email` for delivery, skip if a digest was already sent for that UTC date, and let `--force` record another attempt. An empty or failed attempt must not be reported as sent.
+9. [x] Test article-window selection, transcript/description input, response and URL validation, email rendering, mocked SMTP success/failure, persistence, duplicate-run prevention, and `--force`.
+10. [x] Document configuration and manual run instructions in `README.md`.
+11. [ ] After applying migrations and configuring credentials, verify a successful local email delivery and the saved digest record.
 
 ## CLI and documentation
 
-- [ ] Implement the `migrate`, `seed`, and `run` CLI commands.
-- [ ] Keep `main.py` as a thin entrypoint to the CLI.
-- [ ] Document local setup and manual run instructions in `README.md`.
+- [x] Implement the `migrate`, `seed`, and `run` CLI commands.
+- [x] Keep `main.py` as a thin entrypoint to the CLI.
+- [x] Document local setup and manual run instructions in `README.md`.
 
 ## Local environment
 
 - [x] Add Docker Compose for local PostgreSQL 16.
-- [ ] Add `.env.example` for database, DeepSeek, and SMTP settings.
-- [ ] Add or confirm `.env` is ignored by Git.
+- [x] Add `.env.example` for database, DeepSeek, and SMTP settings.
+- [x] Add or confirm `.env` is ignored by Git.
 
 Start PostgreSQL manually from the project root:
 
@@ -92,7 +101,7 @@ Check readiness with `docker compose -f docker/docker-compose.yml ps`; stop it w
 ## End-to-end verification
 
 - [x] Start PostgreSQL using Docker Compose.
-- [x] Apply migrations and verify the database schema.
+- [ ] Apply the current migrations and verify the upgraded database schema.
 - [x] Run ingestion and verify source and article records.
 - [ ] Run the digest and verify it is emailed and recorded.
 - [ ] Verify a second run on the same UTC day does not send again unless `--force` is used.

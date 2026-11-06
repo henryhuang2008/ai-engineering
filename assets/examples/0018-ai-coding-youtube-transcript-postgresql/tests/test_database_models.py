@@ -22,9 +22,9 @@ class DatabaseModelTests(unittest.TestCase):
         )
         self.assertEqual(Source.__tablename__, "sources")
 
-    def test_digest_is_unique_per_utc_run_date(self) -> None:
+    def test_digest_allows_multiple_attempts_and_validates_status(self) -> None:
         digest_table = Digest.__table__
-        self.assertIn(
+        self.assertNotIn(
             "uq_digests_run_date",
             {constraint.name for constraint in digest_table.constraints},
         )

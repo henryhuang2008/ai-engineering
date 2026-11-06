@@ -9,7 +9,6 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
-    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -20,7 +19,6 @@ from app.database.models.base import Base, utc_now
 class Digest(Base):
     __tablename__ = "digests"
     __table_args__ = (
-        UniqueConstraint("run_date", name="uq_digests_run_date"),
         CheckConstraint(
             "status IN ('sent', 'failed', 'empty')",
             name="ck_digests_status",
