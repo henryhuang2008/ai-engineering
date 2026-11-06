@@ -1,5 +1,27 @@
 # Daily YouTube Digest
 
+## Local PostgreSQL
+
+Start the PostgreSQL 16 container from the project root:
+
+```shell
+docker compose -f docker/docker-compose.yml up -d
+```
+
+Check the container and health status:
+
+```shell
+docker compose -f docker/docker-compose.yml ps
+```
+
+Stop the container without deleting the database volume:
+
+```shell
+docker compose -f docker/docker-compose.yml down
+```
+
+The database is available on `localhost:5432`. Defaults are database `youtube_digest`, username `youtube_digest`, and password `local_dev_password`; these can be overridden with `POSTGRES_DB`, `POSTGRES_USER`, and `POSTGRES_PASSWORD` environment variables or a root `.env` file. The named `postgres_data` volume preserves data when the container is stopped.
+
 ## Running tests
 
 Run the test suite from the project root (the directory containing `pyproject.toml`):

@@ -20,7 +20,7 @@ SMTP (`smtplib`), CLI parsing (`argparse`), and JSON handling (`json`) use the P
 
 - [x] Add Dave Ebbelaar to `app/data/channels.json` as the first channel to follow.
 - [x] Implement RSS fetching and parsing for channel metadata and video ID, title, URL, description, and publication time.
-- [ ] Inspect a live feed and confirm the parsed fields against real entries.
+- [x] Inspect a live feed and confirm the parsed fields against real entries.
 
 ## Database
 
@@ -59,9 +59,17 @@ SMTP (`smtplib`), CLI parsing (`argparse`), and JSON handling (`json`) use the P
 
 ## Local environment
 
-- [ ] Add Docker Compose for local PostgreSQL 16.
+- [x] Add Docker Compose for local PostgreSQL 16.
 - [ ] Add `.env.example` for database, DeepSeek, and SMTP settings.
 - [ ] Add or confirm `.env` is ignored by Git.
+
+Start PostgreSQL manually from the project root:
+
+```shell
+docker compose -f docker/docker-compose.yml up -d
+```
+
+Check readiness with `docker compose -f docker/docker-compose.yml ps`; stop it with `docker compose -f docker/docker-compose.yml down`. The named volume preserves database data when stopped.
 
 ## End-to-end verification
 
