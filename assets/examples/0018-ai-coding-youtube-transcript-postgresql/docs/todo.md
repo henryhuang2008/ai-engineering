@@ -29,7 +29,7 @@ SMTP (`smtplib`), CLI parsing (`argparse`), and JSON handling (`json`) use the P
 - [x] Configure the SQLAlchemy engine and session.
 - [x] Set up Alembic under `app/database/alembic/`.
 - [x] Add `app/database/migrate.py` and the initial schema migration.
-- [ ] Verify migrations can be applied to the local PostgreSQL database.
+- [x] Verify migrations can be applied to the local PostgreSQL database.
 
 After PostgreSQL is running, apply the schema from the project root:
 
@@ -43,20 +43,22 @@ Confirm the applied revision with `uv run alembic -c app/database/alembic.ini cu
 
 Implementation plan:
 
-1. [ ] Confirm PostgreSQL is running and the initial Alembic migration is applied.
-2. [ ] Load and validate `app/data/channels.json` entries (`name`, `channel_id`).
-3. [ ] Upsert each configured channel into `sources` by `channel_id`; refresh its name and feed URL, mark it active, and mark removed channels inactive.
-4. [ ] Fetch each active channel's RSS feed and map its channel/video fields into the existing data models.
-5. [ ] Upsert articles by unique `video_id`; refresh RSS metadata without overwriting any transcript already stored for that video.
-6. [ ] Report feed/database failures explicitly, and verify one failed channel does not silently appear successful.
-7. [ ] Add tests for channel upserts, article inserts/updates, duplicate video IDs, inactive channels, and failed feeds.
-8. [ ] Run ingestion against local PostgreSQL and verify source/article row counts and representative field values.
+1. [x] Confirm PostgreSQL is running and the initial Alembic migration is applied.
+2. [x] Load and validate `app/data/channels.json` entries (`name`, `channel_id`).
+3. [x] Upsert each configured channel into `sources` by `channel_id`; refresh its name and feed URL, mark it active, and mark removed channels inactive.
+4. [x] Fetch each active channel's RSS feed and map its channel/video fields into the existing data models.
+5. [x] Upsert articles by unique `video_id`; refresh RSS metadata without overwriting any transcript already stored for that video.
+6. [x] Report feed/database failures explicitly, and verify one failed channel does not silently appear successful.
+7. [x] Add tests for channel upserts, article inserts/updates, duplicate video IDs, inactive channels, and failed feeds.
+8. [x] Run ingestion against local PostgreSQL and verify source/article row counts and representative field values.
+
+Run ingestion manually from the project root with `uv run python -m app.ingest.seed`. Use `uv run python -m app.ingest.seed --dummy-data` to test against the bundled RSS fixture without requesting YouTube.
 
 ## Transcript retrieval
 
 - [x] Fetch captions from a YouTube URL and fall back to the RSS description when unavailable.
 - [x] Connect RSS video records to transcript lookup and show the selected content for each video in the live test.
-- [ ] Integrate transcript content into the digest input and set an appropriate length limit.
+- [x] Build bounded digest input from saved transcripts, falling back to RSS descriptions when unavailable (12,000 content characters per video; 48,000 characters total).
 
 ## Digest generation and email
 
@@ -89,8 +91,8 @@ Check readiness with `docker compose -f docker/docker-compose.yml ps`; stop it w
 
 ## End-to-end verification
 
-- [ ] Start PostgreSQL using Docker Compose.
-- [ ] Apply migrations and verify the database schema.
-- [ ] Run ingestion and verify source and article records.
+- [x] Start PostgreSQL using Docker Compose.
+- [x] Apply migrations and verify the database schema.
+- [x] Run ingestion and verify source and article records.
 - [ ] Run the digest and verify it is emailed and recorded.
 - [ ] Verify a second run on the same UTC day does not send again unless `--force` is used.

@@ -36,6 +36,30 @@ uv run alembic -c app/database/alembic.ini current
 
 The migration creates the `sources`, `articles`, and `digests` tables. It does not seed channels or fetch videos.
 
+## YouTube ingestion
+
+Edit `app/data/channels.json` to configure channels. Each entry requires a non-empty `name` and a valid YouTube `channel_id`.
+
+Run the manual ingestion command from the project root:
+
+```shell
+uv run python -m app.ingest.seed
+```
+
+The command upserts configured channels, marks removed channels inactive, fetches each channel's RSS feed, and upserts videos by video ID. RSS updates preserve any transcript already stored. Failed channel feeds are listed on stderr, and the command exits non-zero if any feed fails; other channels can still succeed.
+
+To test ingestion without network access, use the included dummy RSS fixture:
+
+```shell
+uv run python -m app.ingest.seed --dummy-data
+```
+
+The fixture represents the sample channel in `app/data/channels.json`. The option explicitly reports that dummy data was used and rejects a channel configuration that does not match the fixture.
+
+## Digest input
+
+`app.digest.input.build_digest_input` formats saved articles for digest generation. It uses a saved transcript when present and falls back to the RSS description; content is limited to 12,000 characters per video and 48,000 characters total, including article metadata. Content that exceeds a limit is marked as truncated.
+
 ## Running tests
 
 Run the test suite from the project root (the directory containing `pyproject.toml`):
@@ -61,6 +85,14 @@ To fetch recent channel videos and print each video's available transcript (or R
 ```shell
 uv run python -m unittest discover -s tests -p live_youtube_test.py -v
 ```
+
+To test dummy-feed ingestion and read the inserted source and article records back from a temporary SQLite database:
+
+```shell
+uv run python -m unittest discover -s tests -p test_ingest_sync.py -v
+```
+
+This automated test does not write to PostgreSQL. To insert the dummy records into the configured PostgreSQL database, run `uv run python -m app.ingest.seed --dummy-data`.
 
 The test uses `YOUTUBE_LOOKBACK_HOURS` as its look-back window (default: 180). For example, in Git Bash:
 

@@ -10,7 +10,7 @@ DeepSeek is called through the official OpenAI-compatible endpoint (`https://api
 
 - Add `app/database` with SQLAlchemy models, session, `migrate.py`, and Alembic. Schema changes are new revisions, not `create_all`.
 - Seed `channels.json` and ingest YouTube RSS into articles with video-id dedupe.
-- Add `app/agent/service.py` to load the system prompt, call DeepSeek, and reject unknown URLs. `digest/generate.py` only selects the last 24 hours and calls that service.
+- Add `app/agent/service.py` to load the system prompt, call DeepSeek, and reject unknown URLs. `digest/generate.py` only selects the last 24 hours, builds bounded input with `digest/input.py`, and calls that service.
 - Render and send the SMTP digest, persist digest rows, and skip a second send the same UTC day.
 - Add docker-compose for local Postgres, `.env.example`, and README steps for a manual local run.
 
@@ -72,7 +72,9 @@ Application code stays in `app/`. The database container stays in `docker/`. `ma
 │   │   └── smtp.py
 │   └── ingest/
 │       ├── __init__.py
-│       └── youtube.py         # channel RSS
+│       ├── youtube.py         # channel RSS fetch and parsing
+│       ├── sync.py            # channels/articles database upserts
+│       └── seed.py            # manual RSS-to-database ingestion
 ├── docker/
 │   └── docker-compose.yml     # Postgres 16
 ├── docs/
@@ -90,7 +92,8 @@ Application code stays in `app/`. The database container stays in `docker/`. `ma
 - [app/config.py](../app/config.py) — env settings. `DATABASE_URL` points at the local Docker Postgres.
 - [app/database/models/](../app/database/models/) and [app/database/session.py](../app/database/session.py) — SQLAlchemy 2 models, one class per model file, and the engine. Tables are created only by Alembic.
 - [app/data/channels.json](../app/data/channels.json) — curated `{name, channel_id}` list. Edit this to change sources; the pipeline upserts it every run and marks channels removed from the file as inactive.
-- [app/ingest/youtube.py](../app/ingest/youtube.py) — `https://www.youtube.com/feeds/videos.xml?channel_id=...` via `feedparser`. Stores video id, title, URL, description, and `published_at`. Dedupes on video id.
+- [app/ingest/youtube.py](../app/ingest/youtube.py) — fetches and parses `https://www.youtube.com/feeds/videos.xml?channel_id=...` via `feedparser`.
+- [app/ingest/sync.py](../app/ingest/sync.py) and [app/ingest/seed.py](../app/ingest/seed.py) — validate the curated channels, upsert channels and articles, dedupe on video id while preserving transcripts, and provide a manual ingestion command.
 - [app/agent/service.py](../app/agent/service.py) — the agent service. It loads the system prompt, sends the article JSON to DeepSeek, parses the snippet JSON, and drops any URL that was not in the input set.
 - [app/agent/prompts/digest_system.md](../app/agent/prompts/digest_system.md) — the agent system prompt. A marked insights section at the top is what you edit (interests, tone, what to skip). Loaded at runtime, overridable with `DIGEST_SYSTEM_PROMPT_PATH`.
 - [app/digest/generate.py](../app/digest/generate.py) — selects articles from the last 24 hours and calls `app.agent.service`. It does not talk to DeepSeek itself.
