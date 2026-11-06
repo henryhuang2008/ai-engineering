@@ -15,7 +15,7 @@ class SettingsTests(unittest.TestCase):
             "SMTP_HOST": "smtp.example.com",
             "SMTP_PORT": "2525",
             "SMTP_USERNAME": "user",
-            "SMTP_PASSWORD": "password",
+            "SMTP_APPPASSWORD": "password",
             "EMAIL_SENDER": "digest@example.com",
             "EMAIL_RECIPIENT": "reader@example.com",
         }
@@ -50,6 +50,23 @@ class SettingsTests(unittest.TestCase):
         with patch.dict(os.environ, {"SMTP_PORT": "invalid"}, clear=True):
             with self.assertRaisesRegex(ValueError, "SMTP_PORT must be an integer"):
                 get_settings()
+
+    def test_normalizes_localhost_database_to_ipv4(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "DATABASE_URL": (
+                    "postgresql+psycopg://user:password@localhost:5432/digest"
+                )
+            },
+            clear=True,
+        ):
+            settings = get_settings()
+
+        self.assertEqual(
+            settings.database_url,
+            "postgresql+psycopg://user:password@127.0.0.1:5432/digest",
+        )
 
 
 if __name__ == "__main__":

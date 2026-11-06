@@ -1,4 +1,5 @@
 import unittest
+import smtplib
 from unittest.mock import MagicMock, patch
 
 from app.agent.service import DigestEntry, GeneratedDigest
@@ -76,6 +77,22 @@ class DigestEmailTests(unittest.TestCase):
         smtp.starttls.assert_called_once()
         smtp.login.assert_called_once_with("user", "password")
         smtp.send_message.assert_called_once()
+
+    @patch("app.emailer.smtp.smtplib.SMTP")
+    def test_explains_smtp_disconnect_during_authentication(self, smtp_class) -> None:
+        smtp = MagicMock()
+        smtp_class.return_value.__enter__.return_value = smtp
+        smtp.login.side_effect = smtplib.SMTPServerDisconnected(
+            "Connection unexpectedly closed"
+        )
+
+        with self.assertRaisesRegex(ConnectionError, "16-character Google app password"):
+            send_digest_email(
+                self.digest.subject,
+                render_digest_email(self.digest),
+                settings=settings(),
+            )
+        smtp.send_message.assert_not_called()
 
 
 if __name__ == "__main__":

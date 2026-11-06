@@ -105,3 +105,24 @@ Check readiness with `docker compose -f docker/docker-compose.yml ps`; stop it w
 - [x] Run ingestion and verify source and article records.
 - [ ] Run the digest and verify it is emailed and recorded.
 - [ ] Verify a second run on the same UTC day does not send again unless `--force` is used.
+
+## Aggregator scope (planned, not built)
+
+The product brief is an AI news aggregator: more than one source kind, a daily scheduler, and a digest shaped by the operator's own prompt. The shipped slice stops at a manual YouTube run. The phases below are deferred; each box stays unchecked until its acceptance check has actually run.
+
+### Scheduler
+
+- [ ] Add a daily trigger in UTC that runs ingestion and then digest generation. Touches the host scheduler or `docker/`. Acceptance: a documented crontab or systemd timer runs both commands and writes one log line per run. (implementation)
+- [ ] Serialize runs so two overlapping invocations cannot both send. Acceptance: two forced parallel runs produce exactly one email, and the second exits without sending. (implementation + verification)
+- [ ] Alert on a failed or empty digest. Acceptance: a deliberately broken credential or an empty window produces a visible alert within one run. (implementation)
+- [ ] Persist per-source `last_success` and `last_error`. Acceptance: after one injected feed failure, a query distinguishes "no new videos" from "this source has failed for N days". (implementation)
+
+### Additional source kinds
+
+- [ ] Add a second collector and register it through `sources.kind`. Acceptance: one run inserts articles from both kinds, with per-kind tests and no change to the digest code. (implementation)
+- [ ] When the second kind lands, generalize the article key from `video_id` to `(source_id, external_id)` in a new Alembic revision. Acceptance: `alembic current` reports the new head and the upsert test passes for both kinds. (implementation)
+
+### Per-user insight profiles
+
+- [ ] Add a `digest_profiles` table and select a prompt per recipient instead of using the single global prompt file. Acceptance: two profiles produce two different prompts in a test, and the digest row records which profile ran. (implementation)
+

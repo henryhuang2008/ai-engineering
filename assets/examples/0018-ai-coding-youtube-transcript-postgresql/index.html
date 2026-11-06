@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Example 0018 - AI news digest, YouTube slice</title>
+    <link rel="stylesheet" href="../../course.css" />
+  </head>
+  <body>
+    <article class="page">
+      <p class="meta">
+        Example 0018 · Companion to
+        <a href="../../../lessons/0018-project-youtube-digest.html"
+          >Lesson 18</a
+        >
+        · <a href="README.md">README</a>
+      </p>
+
+      <h1>
+        AI News Digest — the YouTube slice of an aggregator pipeline
+      </h1>
+
+      <p class="lede">
+        A manually invoked Python job that is the first slice of an AI news
+        aggregator: it reads a curated list of YouTube channels over RSS, stores
+        videos in PostgreSQL, summarizes the last 24 hours with DeepSeek against
+        your own editorial prompt, emails the result, and records every attempt.
+        There is no scheduler, no frontend and no deployment. Two external
+        sources are unreliable: the RSS endpoint intermittently returns 404, and
+        caption retrieval can be blocked by IP.
+      </p>
+
+      <p>
+        <strong>Scope.</strong> The product brief asks for multiple source kinds,
+        a daily scheduler and per-user insight profiles. This repository ships
+        one kind, run by hand. Those phases are unchecked in
+        <a href="docs/todo.md">docs/todo.md</a>; the lesson treats them as the
+        next build, not as done work.
+      </p>
+
+      <h2>What is in the tree</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>path</th>
+            <th>role</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              <a href="docs/todo.md"><code>docs/todo.md</code></a>
+            </td>
+            <td>
+              the phase checklist, with the open verification gates visible
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <a href="docs/daily-youtube-digest-plan.md"
+                ><code>docs/daily-youtube-digest-plan.md</code></a
+              >
+            </td>
+            <td>scope, flow, layout and data model</td>
+          </tr>
+          <tr>
+            <td>
+              <a href="docs/digest-generation-and-email-plan.md"
+                ><code>docs/digest-generation-and-email-plan.md</code></a
+              >
+            </td>
+            <td>
+              window selection, input bounds, validation, persistence and
+              idempotency
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <a href="app/cli.py"><code>app/cli.py</code></a>
+            </td>
+            <td>
+              <code>migrate</code>, <code>seed</code> and <code>run</code>; the
+              only top-level entrypoint
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <a href="app/config.py"><code>app/config.py</code></a>
+            </td>
+            <td>database, DeepSeek and SMTP settings; the source of truth</td>
+          </tr>
+          <tr>
+            <td>
+              <a href="app/database/models/"
+                ><code>app/database/models/</code></a
+              >
+            </td>
+            <td>
+              <code>sources</code>, <code>articles</code> and
+              <code>digests</code>
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <a href="app/database/alembic/versions/"
+                ><code>app/database/alembic/versions/</code></a
+              >
+            </td>
+            <td>the initial schema and the multiple-attempts migration</td>
+          </tr>
+          <tr>
+            <td>
+              <a href="app/ingest/youtube.py"><code>app/ingest/</code></a>
+            </td>
+            <td>
+              RSS fetch and parse, transcript fetch, channel/article upserts
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <a href="app/digest/"><code>app/digest/</code></a>
+            </td>
+            <td>24-hour selection, bounded input, preview and recorded runs</td>
+          </tr>
+          <tr>
+            <td>
+              <a href="app/agent/service.py"
+                ><code>app/agent/service.py</code></a
+              >
+            </td>
+            <td>DeepSeek call, strict JSON parsing and URL allowlist</td>
+          </tr>
+          <tr>
+            <td>
+              <a href="app/emailer/smtp.py"><code>app/emailer/smtp.py</code></a>
+            </td>
+            <td>plain-text and escaped HTML rendering, STARTTLS delivery</td>
+          </tr>
+          <tr>
+            <td>
+              <a href="tests/"><code>tests/</code></a>
+            </td>
+            <td>
+              54 deterministic unit tests; no network, no Postgres, no provider
+              keys
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Stack</h2>
+      <pre><code>runtime     Python 3.12 + uv
+database    PostgreSQL 16 in Docker, SQLAlchemy 2 + Alembic
+discovery   YouTube channel RSS via feedparser
+captions    youtube-transcript-api, with RSS-description fallback
+LLM         DeepSeek deepseek-chat via the OpenAI-compatible SDK
+email       smtplib + email.message, STARTTLS on port 587
+interface   argparse CLI; preview by default, email on explicit opt-in</code></pre>
+
+      <h2>Phase status</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>area</th>
+            <th>state</th>
+            <th>evidence or remaining work</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>project setup</td>
+            <td><strong>done</strong></td>
+            <td>uv project, Docker Compose, <code>.env.example</code></td>
+          </tr>
+          <tr>
+            <td>RSS discovery</td>
+            <td><strong>done · external risk</strong></td>
+            <td>live feed parsed; endpoint has intermittent 404 windows</td>
+          </tr>
+          <tr>
+            <td>database</td>
+            <td><strong>done · gate open</strong></td>
+            <td>
+              three tables, two migrations; the second migration is not yet
+              applied locally
+            </td>
+          </tr>
+          <tr>
+            <td>ingestion</td>
+            <td><strong>done</strong></td>
+            <td>
+              upserts, transcript preservation, failed-feed report, live row
+              counts verified
+            </td>
+          </tr>
+          <tr>
+            <td>transcript retrieval</td>
+            <td><strong>done · no proxy layer</strong></td>
+            <td>
+              caption fetch and description fallback; cloud-IP blocking is not
+              handled
+            </td>
+          </tr>
+          <tr>
+            <td>digest generation</td>
+            <td><strong>done · live gate open</strong></td>
+            <td>
+              24-hour UTC window, 12k/48k bounds, strict JSON and URL allowlist;
+              live quality not evaluated
+            </td>
+          </tr>
+          <tr>
+            <td>email</td>
+            <td><strong>done · live gate open</strong></td>
+            <td>
+              STARTTLS, multipart rendering, status persistence; no successful
+              live send recorded
+            </td>
+          </tr>
+          <tr>
+            <td>scheduler</td>
+            <td><strong>not built</strong></td>
+            <td>
+              no cron entry, overlap lock or alerting; a planned phase in
+              <a href="docs/todo.md">docs/todo.md</a>
+            </td>
+          </tr>
+          <tr>
+            <td>more source kinds</td>
+            <td><strong>not built</strong></td>
+            <td>
+              <code>sources.kind</code> is the seam; only YouTube is implemented
+            </td>
+          </tr>
+          <tr>
+            <td>end-to-end</td>
+            <td><strong>partial</strong></td>
+            <td>
+              Postgres and ingestion verified; migration upgrade, live email and
+              second-run skip open
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Run it</h2>
+      <pre><code># 1. start PostgreSQL
+docker compose -f docker/docker-compose.yml up -d
+
+# 2. create the schema
+uv run python -m app.database.migrate
+uv run alembic -c app/database/alembic.ini current
+
+# 3. ingest (use the fixture to avoid the live RSS endpoint)
+uv run python -m app.ingest.seed
+uv run python -m app.ingest.seed --dummy-data
+
+# 4. preview without sending or persisting
+uv run python main.py run
+uv run python main.py run --raw
+
+# 5. send only when you mean it
+uv run python main.py run --send-email
+uv run python main.py run --send-email --force
+
+# 6. deterministic tests
+uv run python -m unittest discover -s tests -v</code></pre>
+
+      <p>
+        Copy <code>.env.example</code> to <code>.env</code> and fill the
+        DeepSeek key; SMTP settings are needed only for
+        <code>--send-email</code>. For Gmail, <code>SMTP_APPPASSWORD</code> is a
+        16-character app password, not the account password. Secrets stay in
+        <code>.env</code>, which is gitignored.
+      </p>
+
+      <h2>Two fragile sources</h2>
+      <p>
+        <strong>RSS.</strong> The channel feed is not a stable public API. The
+        Google AI forum thread documents intermittent 404s for active channels,
+        clustered around 09:00–12:00 UTC, clearing later. A 404 is not a deleted
+        channel: the pipeline keeps the source active and its existing rows,
+        reports the failed feed, and exits non-zero while other channels still
+        commit. It does not retry yet.
+      </p>
+      <p>
+        <strong>Captions.</strong> <code>youtube-transcript-api</code> uses an
+        undocumented web-client endpoint. Cloud-provider IPs are commonly
+        blocked, and static proxies eventually are too. The documented
+        workaround is a rotating residential proxy (<code
+          >WebshareProxyConfig</code
+        >
+        or <code>GenericProxyConfig</code>). This repository does not ship a
+        proxy layer; it falls back to the RSS description and labels the content
+        source. If every video uses the description, the digest still sends but
+        summarizes less.
+      </p>
+
+      <h2>What the digest guarantees</h2>
+      <ol>
+        <li>
+          The window is the preceding 24 UTC hours, with both bounds included
+          and null publication times excluded.
+        </li>
+        <li>
+          Input prefers a saved transcript, falls back to the RSS description,
+          and is capped at 12,000 characters per video and 48,000 total.
+        </li>
+        <li>Only articles that fit the budget become allowed URLs.</li>
+        <li>
+          Model output must be JSON with a subject and one entry per included
+          article.
+        </li>
+        <li>
+          Every URL must exactly match an allowed article URL; unknown,
+          duplicated or missing URLs fail.
+        </li>
+        <li>
+          HTML is rendered in code with escaped text; the model never emits
+          markup.
+        </li>
+        <li>
+          A failed generation or send is recorded as <code>failed</code>, never
+          <code>sent</code>.
+        </li>
+        <li>
+          An empty window is recorded as <code>empty</code> and sends no email.
+        </li>
+      </ol>
+      <p>
+        The URL check protects link provenance, not truth. A summary can still
+        be inaccurate about a real video; that needs an eval set and human
+        review.
+      </p>
+
+      <h2>Read in this order</h2>
+      <ol>
+        <li>
+          <a href="docs/todo.md"><code>docs/todo.md</code></a> — the build order
+          and the open gates.
+        </li>
+        <li>
+          <a href="docs/daily-youtube-digest-plan.md"
+            ><code>docs/daily-youtube-digest-plan.md</code></a
+          >
+          — scope, flow, layout and data model.
+        </li>
+        <li>
+          <a href="docs/digest-generation-and-email-plan.md"
+            ><code>docs/digest-generation-and-email-plan.md</code></a
+          >
+          — the generation and delivery contract.
+        </li>
+        <li>
+          <a href="app/ingest/sync.py"><code>app/ingest/sync.py</code></a> — the
+          failure-isolated fetch and the upsert that preserves transcripts.
+        </li>
+        <li>
+          <a href="app/digest/run.py"><code>app/digest/run.py</code></a> —
+          persistence, status transitions and the duplicate-send check.
+        </li>
+        <li>
+          <a href="app/agent/service.py"><code>app/agent/service.py</code></a> —
+          the strict parser and URL allowlist.
+        </li>
+      </ol>
+
+      <div class="footer-nav">
+        <div class="ask">
+          <strong>Before you schedule it:</strong> add retries and per-source
+          fetch history, decide how you will detect a persistent caption block,
+          and write down whether a duplicate email is acceptable. Those are
+          operational decisions, not code style.
+        </div>
+        <div class="links">
+          <a href="../../../lessons/0018-project-youtube-digest.html"
+            >← Lesson 18</a
+          >
+          <a href="README.md">README</a>
+          <a href="docs/todo.md">Phase checklist</a>
+          <a href="docs/daily-youtube-digest-plan.md">Pipeline plan</a>
+        </div>
+      </div>
+    </article>
+  </body>
+</html>

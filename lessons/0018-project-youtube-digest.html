@@ -1,0 +1,1767 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>
+      Lesson 18 — Project: AI News Digest — RSS, PostgreSQL, and a Scheduled
+      Email
+    </title>
+    <link rel="stylesheet" href="../assets/course.css" />
+  </head>
+  <body>
+    <article class="page">
+      <p class="meta">
+        Lesson 18 of 18 · ~55 min · Prereq:
+        <a href="0015-ai-coding.html">Lesson 15</a> +
+        <a href="0002-your-first-llm-api-call.html">Lesson 2</a> ·
+        <a
+          href="../assets/examples/0018-ai-coding-youtube-transcript-postgresql/index.html"
+          >Example repo →</a
+        >
+        · <a href="../reference/skill-map.html">Skill Map →</a>
+      </p>
+
+      <h1>
+        Project: AI News Digest — from YouTube RSS to a Scheduled Email
+      </h1>
+
+      <p class="lede">
+        The brief is an AI news aggregator: pull from several sources, store
+        everything in PostgreSQL, and every day email a digest of the last 24
+        hours summarized to your own editorial instructions. The repository
+        implements the first vertical slice — one curated YouTube channel, run by
+        hand — and its <code>todo.md</code> keeps the rest as explicit,
+        unchecked phases. That split is the lesson. A plan that separates what is
+        built from what is next is worth more than a demo that implies both. And
+        two of the sources you cannot control are genuinely hostile: an RSS
+        endpoint that intermittently returns 404, and a caption endpoint that
+        blocks cloud IPs.
+      </p>
+
+      <div class="callout win">
+        <span class="label">Your win this lesson</span>
+        You'll be able to turn a product brief into a phased checklist with
+        acceptance checks, lay out an <code>app/</code> package that keeps
+        ingestion, generation and delivery apart, model sources and articles in
+        SQLAlchemy with Alembic owning the schema, isolate a flaky source instead
+        of letting it abort the run, design a transcript fallback that keeps the
+        digest useful, bound model input by characters, validate model JSON and
+        URLs before rendering, and gate an email side effect with a record and an
+        idempotency check — then decide honestly what a scheduler would change.
+      </div>
+
+      <h2>Part 1 — A batch pipeline, not a chat product</h2>
+
+      <p>
+        The <a href="0017-project-supabase-rag-ai-coding.html">capstone</a> is
+        interactive and read-only: a user asks, retrieval and validation happen
+        inside the request, and the failure mode is a refusal. This project is
+        the opposite shape. It runs on a timer, writes to the database, sends an
+        email, and has to report partial failure honestly. A failed run is not a
+        refused answer; it is a day with no digest. That difference changes
+        almost every design decision.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>dimension</th>
+            <th>capstone (lesson 17)</th>
+            <th>digest (this lesson)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>trigger</td>
+            <td>authenticated request</td>
+            <td>
+              daily scheduler (target); manual CLI (shipped slice)
+            </td>
+          </tr>
+          <tr>
+            <td>state</td>
+            <td>Supabase Postgres with RLS</td>
+            <td>PostgreSQL 16 in Docker</td>
+          </tr>
+          <tr>
+            <td>external inputs</td>
+            <td>one audited filing corpus</td>
+            <td>many channel feeds and caption endpoints</td>
+          </tr>
+          <tr>
+            <td>failure policy</td>
+            <td>fail closed before streaming</td>
+            <td>
+              isolate the failed source, keep last-good state, report and exit
+              non-zero
+            </td>
+          </tr>
+          <tr>
+            <td>side effect</td>
+            <td>none — read-only answers</td>
+            <td>email delivery, which cannot be un-sent</td>
+          </tr>
+          <tr>
+            <td>idempotency</td>
+            <td>one saved turn per request</td>
+            <td>
+              one successful send per UTC date; <code>--force</code> adds an
+              attempt
+            </td>
+          </tr>
+          <tr>
+            <td>test seam</td>
+            <td>fake retrieval, no live providers</td>
+            <td>
+              dummy RSS fixture, injectable clock, temporary SQLite, mocked SMTP
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        The brief is bigger than the repository, and the gap is the point. The
+        brief asks for <strong>multiple sources</strong>, a <strong>daily
+        scheduler</strong>, and summaries shaped by <strong>your own editorial
+        instructions</strong>. The shipped slice is Python 3.12, one curated
+        channel, local Postgres, and a command you run yourself. The scheduler,
+        a second source kind and per-user profiles are named phases in
+        <code>docs/todo.md</code> — unchecked, not features in the code. Keeping
+        them visible as unbuilt is more honest than quietly widening the demo
+        until it looks finished.
+      </p>
+
+      <p>
+        The narrow slice exists for a reason. Scheduling adds duplicate sends,
+        time-zone edge cases, credential rotation and alerting, and it removes
+        the human who can see that today's feed returned 404. You want the
+        failure behavior understood and tested <em>before</em> you take the human
+        out of the loop. That is why this lesson builds the pipeline, proves it
+        by hand, and only then asks what a cron entry would change.
+      </p>
+
+      <figure>
+        <img
+          src="../assets/images/youtube-digest-workflow.svg"
+          alt="Two lanes. Ingest: a trigger — cron at 07:00 UTC (planned) or a manual CLI run (shipped) — reads channels.json, requests one YouTube RSS feed per source where a 404 means retry later, chooses a transcript and falls back to the RSS description, then upserts sources and articles into PostgreSQL. Digest: a query selects the last 24 hours in UTC, builds a bounded input of 12,000 characters per video and 48,000 total, combines it with the digest system prompt, calls DeepSeek deepseek-chat, validates the JSON shape and the exact URL allowlist, and sends over SMTP with escaped HTML. The digests table records sent, failed or empty with one successful send per UTC date, and the mail lands in the personal inbox. A note states that failure is per stage: an RSS 404 keeps last-good rows, a caption block falls back to the description, and bad JSON sends nothing."
+          width="900"
+        />
+        <figcaption>
+          One run in two lanes, and the map for the rest of the lesson. The
+          dashed trigger is the only stage this repository has not built: Parts
+          3–9 walk the pipeline, and Part 10 explains what that box would
+          change.
+        </figcaption>
+      </figure>
+
+      <p>
+        The example's default command is a <strong>preview</strong>. It reads
+        saved rows, calls DeepSeek, prints the digest, and does not send or
+        persist anything. Email is an explicit opt-in. This is the same trust
+        instinct as the capstone's fail-closed validator, applied to a side
+        effect: make the safe action the default, and make the irreversible
+        action a separate decision.
+      </p>
+
+      <h2>Part 2 — The brief becomes <code>todo.md</code></h2>
+
+      <p>
+        The brief is a paragraph of product intent, not a build order. Turning
+        it into a checklist is the first engineering act, and the one most
+        likely to be skipped. Here is the prompt that produces the plan — the
+        product brief, unchanged, plus the rules that make the output
+        verifiable:
+      </p>
+
+      <pre><code>I want to build an AI news aggregator that pulls content from multiple
+sources, such as YouTube channels. The system will scrape these sources
+and store the data into a structured PostgreSQL database containing
+entities like sources and articles.
+
+On a daily basis, a cron job or scheduler will fetch all articles
+collected within the last 24 hours to generate a daily digest. An LLM
+will summarize this content based on custom user insights defined in an
+AI agent system prompt. The final daily digest will consist of short,
+punchy snippets, each accompanied by a link back to the original source.
+
+For data ingestion, the system will track a curated list of YouTube
+channels and fetch their latest videos using their respective YouTube
+RSS feeds.
+
+Add project structure in the plan.
+
+Technical requirements:
+- Backend: fully built in Python.
+- Database: PostgreSQL with SQLAlchemy models for the tables and
+  Alembic migrations for every schema change.
+- Project structure: all application logic in app/; a separate docker/
+  folder for a minimal PostgreSQL container.
+- Delivery: once the digest is generated, email it to my personal inbox.
+
+Now write docs/todo.md. Give me the phases in build order. Say what each
+phase blocks. For every item:
+- name the files or modules it touches
+- give an acceptance check (a command, a row count, a response, or a test)
+- label it implementation, verification, or deployment
+- leave the box unchecked until the acceptance check has actually run
+
+Do not write application code yet.</code></pre>
+
+      <p>
+        Two instructions in that prompt do the real work.
+        <strong>"Add project structure in the plan"</strong> forces the folder
+        layout to be decided before modules start importing each other, and it
+        makes the boundary between <code>app/</code> and <code>docker/</code>
+        explicit. <strong>"Leave the box unchecked until the acceptance check
+        has actually run"</strong> is what stops a checklist from becoming a
+        list of intentions.
+      </p>
+
+      <h3>What comes back</h3>
+
+      <p>
+        A good answer is a build order, not a feature list. Here is the full
+        aggregator plan, annotated with what this repository actually ships:
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>phase</th>
+            <th>what the checklist asks for</th>
+            <th>in this repository</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>0 · setup</td>
+            <td>
+              <code>app/</code>, <code>docker/</code> and <code>docs/</code>
+              layout; a <code>uv</code> project; <code>.env.example</code>
+            </td>
+            <td><strong>done</strong></td>
+          </tr>
+          <tr>
+            <td>1 · data model</td>
+            <td>
+              SQLAlchemy models for <code>sources</code>,
+              <code>articles</code> and <code>digests</code>; Alembic owns every
+              schema change
+            </td>
+            <td><strong>done</strong>, one migration unapplied</td>
+          </tr>
+          <tr>
+            <td>2 · RSS ingestion</td>
+            <td>
+              curated channel list, feed parse, per-feed failure isolation,
+              idempotent upsert
+            </td>
+            <td><strong>done</strong>, YouTube only</td>
+          </tr>
+          <tr>
+            <td>3 · transcripts</td>
+            <td>
+              caption fetch with a description fallback and a recorded content
+              source
+            </td>
+            <td><strong>done</strong>, no proxy layer</td>
+          </tr>
+          <tr>
+            <td>4 · digest window</td>
+            <td>
+              last 24 hours in UTC, bounded prompt input, deterministic
+              ordering
+            </td>
+            <td><strong>done</strong></td>
+          </tr>
+          <tr>
+            <td>5 · agent prompt</td>
+            <td>
+              an editable system prompt, strict output schema, link allowlist
+            </td>
+            <td><strong>done</strong>, one global prompt</td>
+          </tr>
+          <tr>
+            <td>6 · delivery</td>
+            <td>
+              render text and HTML, send by SMTP, record every attempt
+            </td>
+            <td><strong>done</strong>, live send unverified</td>
+          </tr>
+          <tr>
+            <td>7 · scheduler</td>
+            <td>
+              a daily trigger, overlap protection, alerting on failure
+            </td>
+            <td><strong>not built</strong> — see Part 10</td>
+          </tr>
+          <tr>
+            <td>8 · more sources</td>
+            <td>
+              a second <code>kind</code>, a shared article contract, per-kind
+              tests
+            </td>
+            <td><strong>not built</strong> — schema has the seam</td>
+          </tr>
+          <tr>
+            <td>9 · end-to-end</td>
+            <td>
+              a real run from feed to inbox, plus the duplicate-send check
+            </td>
+            <td><strong>partial</strong> — gates open</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>The project structure the plan fixes</h3>
+
+      <p>
+        The brief asked for the structure to be in the plan, so the plan names
+        every folder. The shape is one package with a module per stage, a
+        separate infrastructure folder, and tests that mirror the modules:
+      </p>
+
+      <pre><code>ai-news-digest/
+├── app/
+│   ├── cli.py                 # migrate | seed | run — the only entrypoint
+│   ├── config.py              # one settings object, no scattered getenv
+│   ├── data/
+│   │   ├── channels.json      # curated, versioned source list
+│   │   └── dummy_youtube_feed.xml
+│   ├── database/
+│   │   ├── migrate.py         # upgrade to head
+│   │   ├── session.py         # engine + session factory
+│   │   ├── alembic/
+│   │   │   ├── alembic.ini
+│   │   │   ├── env.py
+│   │   │   └── versions/      # 0001_initial, 0002_...
+│   │   └── models/            # base, source, article, digest
+│   ├── ingest/
+│   │   ├── youtube.py         # RSS fetch + parse
+│   │   ├── transcript.py      # captions, with description fallback
+│   │   ├── sync.py            # failure isolation + upserts
+│   │   └── seed.py            # live or --dummy-data
+│   ├── digest/
+│   │   ├── input.py           # window + character budget
+│   │   ├── generate.py        # prompt assembly
+│   │   ├── preview.py         # print, persist nothing
+│   │   └── run.py             # status transitions, duplicate check
+│   ├── agent/
+│   │   ├── service.py         # DeepSeek call, strict parse, URL allowlist
+│   │   └── prompts/digest_system.md
+│   └── emailer/smtp.py        # text + escaped HTML, STARTTLS
+├── docker/
+│   └── docker-compose.yml     # PostgreSQL 16 only
+├── docs/                      # brief, digest plan, todo
+├── tests/                     # deterministic; no network, no Postgres
+├── main.py
+├── pyproject.toml
+├── uv.lock
+└── .env.example</code></pre>
+
+      <p>
+        Two rules keep that layout honest. Dependencies point one way —
+        <code>ingest</code> and <code>digest</code> may import
+        <code>database</code>, never the reverse — so the model layer has no
+        opinion about YouTube. And infrastructure never leaks into
+        <code>app/</code>: the Postgres container lives in
+        <code>docker/</code>, the schema lives in Alembic, and neither is
+        generated at import time.
+      </p>
+
+      <h3>What a usable item looks like</h3>
+
+      <table>
+        <thead>
+          <tr>
+            <th>weak item</th>
+            <th>usable item</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Add transcripts.</td>
+            <td>
+              Fetch captions with <code>youtube-transcript-api</code>, fall back
+              to the RSS description, and persist the content source. Touches
+              <code>app/ingest/transcript.py</code> and
+              <code>tests/test_transcript.py</code>. Acceptance: the transcript
+              test returns joined text and metadata, and a video with no
+              captions returns the description. Blocks digest input.
+            </td>
+          </tr>
+          <tr>
+            <td>Set up the database.</td>
+            <td>
+              Create <code>sources</code>, <code>articles</code> and
+              <code>digests</code> as SQLAlchemy models plus an Alembic
+              revision. Acceptance:
+              <code>uv run alembic -c app/database/alembic.ini current</code>
+              reports the head revision and <code>\d articles</code> shows the
+              unique video ID and published-at index. Blocks ingestion.
+            </td>
+          </tr>
+          <tr>
+            <td>Send the email.</td>
+            <td>
+              Render text and escaped HTML, send over SMTP STARTTLS, and persist
+              the attempt. Acceptance: a mocked send records <code>sent</code>;
+              a mocked failure records <code>failed</code> and exits non-zero.
+              Blocks the live delivery gate, not the unit suite.
+            </td>
+          </tr>
+          <tr>
+            <td>Add a cron job.</td>
+            <td>
+              Add a daily trigger that runs ingestion, then generation, without
+              overlapping runs. Touches <code>docker/</code> or the host
+              scheduler, plus a lock and an alert. Acceptance: two forced
+              overlapping invocations produce exactly one email, and a failed run
+              leaves a row and a visible alert. Blocks nothing in the current
+              slice — it is deliberately deferred to Part 10.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        The example's checklist is honest about what is still open: the
+        digest-attempt migration has not been applied to local Postgres, live
+        email delivery is not verified, and the second-run skip has not been
+        observed end to end. Those boxes stay unchecked, and the scheduler and
+        multi-source phases are still marked as not built. A checked box that
+        only means "the code exists" is worse than no checklist, because it hides
+        the verification gap.
+      </p>
+
+      <h2>Part 3 — RSS is an undocumented, unstable boundary</h2>
+
+      <p>The discovery source is the public channel feed:</p>
+
+      <pre><code>https://www.youtube.com/feeds/videos.xml?channel_id=UC...</code></pre>
+
+      <p>
+        It is convenient and free, but it is not a contract with a published
+        availability guarantee. A long-running
+        <a
+          href="https://discuss.ai.google.dev/t/youtube-rss-feed-endpoint-returns-404-errors/113379"
+          >Google AI developers forum thread</a
+        >
+        documents intermittent 404 responses from this endpoint starting in
+        December 2025 and still being reported months later. The reported
+        pattern is worth knowing:
+      </p>
+
+      <ul>
+        <li>
+          the channels are active and public, and the same URL works in a
+          browser during the failure;
+        </li>
+        <li>
+          errors cluster around <strong>09:00–12:00 UTC</strong>, then clear;
+        </li>
+        <li>different channels are affected on different days;</li>
+        <li>the response is a 404 HTML page, not a feed with zero entries;</li>
+        <li>
+          no root cause or documented rate limit is published in the thread.
+        </li>
+      </ul>
+
+      <p>
+        So the first rule is interpretive:
+        <strong>a 404 does not mean the channel was deleted.</strong> It does
+        not mean the channel ID is invalid, either. Treating it as either one is
+        how a transient upstream problem turns into deleted data or a
+        deactivated source.
+      </p>
+
+      <h3>What the project does</h3>
+
+      <p>
+        The feed fetch and the database write are deliberately separate.
+        <code>_fetch_feeds</code> calls the fetcher once per channel, catches
+        <code>OSError</code> and <code>ValueError</code>, and records a
+        <code>FeedFailure</code> instead of aborting the run:
+      </p>
+
+      <pre><code>for channel in channels:
+    try:
+        feed = feed_fetcher(channel.channel_id)
+        if feed.channel_id != channel.channel_id:
+            raise ValueError("feed channel ID did not match configuration")
+    except (OSError, ValueError) as error:
+        failures.append(FeedFailure(..., error=f"{type(error).__name__}: {error}"))
+    else:
+        feeds.append((channel, feed))</code></pre>
+
+      <p>
+        Only the successful feeds reach the upsert. The transaction still
+        refreshes every configured channel, marks channels removed from
+        <code>channels.json</code> inactive, and writes the videos it did
+        receive. A channel whose feed failed stays <strong>active</strong> and
+        keeps its existing rows. The CLI then prints each failure to stderr and
+        exits non-zero if there was any failure, even when other channels
+        succeeded. That is the correct partial-success contract: the run did
+        useful work, and it did not pretend the work was complete.
+      </p>
+
+      <p>
+        The parser validates more than the HTTP status. It requires a channel ID
+        matching <code>UC[A-Za-z0-9_-]{22}</code>, rejects a feed whose channel
+        ID does not match the configured one, rejects an entry with no video ID,
+        and converts the published tuple to an aware UTC timestamp. A 404 HTML
+        page will fail parsing rather than being stored as an empty feed.
+      </p>
+
+      <h3>The fixture is part of the design</h3>
+
+      <p>
+        <code>uv run python -m app.ingest.seed --dummy-data</code> reads
+        <code>app/data/dummy_youtube_feed.xml</code> instead of requesting
+        YouTube. It prints that no RSS requests were made, and it rejects a
+        channel configuration that does not match the fixture. The unit tests
+        use the same parser against the fixture and a temporary SQLite database.
+        This is how the project stays testable while the real endpoint is
+        unreliable: the parser and upsert contract are deterministic, and the
+        network is a separate, replaceable input.
+      </p>
+
+      <h3>What is still missing</h3>
+
+      <p>
+        The example does not retry, back off, or remember a per-source
+        <code>last_success</code> and <code>last_error</code>. For a manual run
+        that is a defensible scope cut. Before you put this on a schedule, add
+        the missing operational layer:
+      </p>
+
+      <ol>
+        <li>
+          <strong>Retry the fetch</strong> a small number of times with jittered
+          backoff. A 404 in the reported window is a reason to try later, not a
+          reason to delete anything.
+        </li>
+        <li>
+          <strong>Persist fetch outcomes</strong> per source, so "no new videos"
+          is distinguishable from "the feed has failed for three days."
+        </li>
+        <li>
+          <strong>Keep last-good state.</strong> A failed feed must never
+          cascade into deleting articles or deactivating a channel.
+        </li>
+        <li>
+          <strong>Have a fallback discovery path</strong> if the feed stays
+          down: the YouTube Data API has a quota cost, and PubSubHubbub can push
+          notifications, but neither is free of operational work. Choose one
+          deliberately.
+        </li>
+      </ol>
+
+      <p>
+        None of these belong in the first vertical slice. The first slice should
+        prove the parse-and-upsert contract against a fixture; the retry policy
+        is a second decision, made when the run is actually scheduled.
+      </p>
+
+      <h2>Part 4 — Captions have a different failure mode: your IP</h2>
+
+      <p>
+        <code>youtube-transcript-api</code> does not use an official captions
+        API. Its own documentation warns that it uses an undocumented part of
+        the YouTube web client and that there is no guarantee it will keep
+        working. The more immediate problem is network identity: YouTube blocks
+        many IP ranges belonging to cloud providers, and a self-hosted machine
+        making too many requests can be blocked too. The library surfaces this
+        as <code>RequestBlocked</code> or <code>IpBlocked</code>.
+      </p>
+
+      <p>
+        The documented workaround is a
+        <strong>rotating residential proxy</strong>. Static proxies get banned
+        after extended use, so a static proxy is not a fix; it is a delay. The
+        library exposes <code>WebshareProxyConfig</code> for a Webshare
+        residential package and <code>GenericProxyConfig</code> for any HTTP,
+        HTTPS or SOCKS proxy. That is a paid dependency and an operational
+        decision, not something to hide inside a retry loop.
+      </p>
+
+      <h3>What the project does</h3>
+
+      <p>
+        The project treats a transcript as an enhancement, never a requirement.
+        <code>fetch_transcript</code> catches
+        <code>CouldNotRetrieveTranscript</code> — the base class of
+        <code>RequestBlocked</code> and <code>IpBlocked</code> — and returns
+        <code>None</code>. Then <code>get_video_content</code> chooses the best
+        available content and labels where it came from:
+      </p>
+
+      <pre><code>transcript = fetch_transcript(video_url, languages=languages)
+if transcript and transcript.text:
+    return VideoContent(text=transcript.text, source="transcript", transcript=transcript)
+if description.strip():
+    return VideoContent(text=description.strip(), source="description")
+return VideoContent(text="", source="unavailable")</code></pre>
+
+      <p>
+        The label travels with the content. The article row stores the
+        transcript text, its language and whether it was generated, while the
+        RSS description remains in its own column. Re-running ingestion
+        refreshes RSS metadata but deliberately does not overwrite a transcript
+        that is already stored. The digest input then prefers the transcript and
+        falls back to the description. A failed caption fetch degrades the
+        summary; it does not fail the run.
+      </p>
+
+      <p>
+        That is the right user-facing behavior for a personal digest. It is not
+        sufficient observability. The current seam returns
+        <code>None</code> without recording <em>why</em>, so a permanent IP
+        block looks exactly like "this video has no captions." If every video
+        falls back to its description, the digest still sends, but it is
+        summarizing marketing copy instead of the talk. Log the exception class
+        and count transcript-versus-description fallbacks before you trust the
+        output at scale.
+      </p>
+
+      <h3>Where a proxy would go</h3>
+
+      <p>
+        The example does not ship a proxy layer. If you deploy it to a cloud IP,
+        the change belongs at the transcript seam, not scattered through the
+        pipeline. Keep credentials in the settings module, never in code:
+      </p>
+
+      <pre><code>from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api.proxies import WebshareProxyConfig
+
+api = YouTubeTranscriptApi(
+    proxy_config=WebshareProxyConfig(
+        proxy_username=settings.proxy_username,
+        proxy_password=settings.proxy_password,
+    )
+)
+fetched = api.fetch(video_id, languages=languages)</code></pre>
+
+      <p>
+        Two constraints make this safe. First, the proxy is an explicit
+        configuration choice; a missing credential should fail loudly, not
+        silently fall back to a direct request that will be blocked. Second, the
+        fallback still exists. A proxy reduces the chance of a block; it does
+        not make the external dependency reliable.
+      </p>
+
+      <h2>Part 5 — PostgreSQL, SQLAlchemy, and Alembic</h2>
+
+      <p>
+        Three tables carry the product. The names are boring on purpose; the
+        constraints are where the behavior lives.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>table</th>
+            <th>what it holds</th>
+            <th>constraint that matters</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>sources</code></td>
+            <td>channel identity, feed URL, active flag</td>
+            <td>
+              <code>channel_id</code> unique, so a channel is upserted rather
+              than duplicated
+            </td>
+          </tr>
+          <tr>
+            <td><code>articles</code></td>
+            <td>
+              video metadata, RSS description, optional transcript and caption
+              metadata, publication time
+            </td>
+            <td>
+              <code>video_id</code> unique; <code>source_id</code> cascades on
+              delete; index on <code>published_at</code>
+            </td>
+          </tr>
+          <tr>
+            <td><code>digests</code></td>
+            <td>
+              UTC window, subject, text and HTML bodies, model, article count,
+              status, recipient, send time
+            </td>
+            <td>
+              <code>status</code> restricted to <code>sent</code>,
+              <code>failed</code>, <code>empty</code>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        SQLAlchemy models describe the tables, and Alembic owns the schema
+        history. There is no <code>create_all</code> in the application path.
+        <code>uv run python -m app.database.migrate</code> upgrades to head;
+        <code>run</code> assumes the schema is already there. The initial
+        revision creates the three tables, the foreign key, the unique
+        constraints, the status check and the publication index. A second
+        revision drops the unique constraint on <code>digests.run_date</code>:
+      </p>
+
+      <pre><code>def upgrade() -&gt; None:
+    op.drop_constraint("uq_digests_run_date", "digests", type_="unique")
+
+def downgrade() -&gt; None:
+    op.create_unique_constraint("uq_digests_run_date", "digests", ["run_date"])</code></pre>
+
+      <p>
+        That migration is not cosmetic. The first schema enforced one digest row
+        per UTC date, which made <code>--force</code> impossible to record
+        without overwriting history. Dropping the constraint is the schema
+        change that lets an intentional second attempt coexist with the first.
+        The application-level check for "already sent today" still prevents a
+        normal duplicate; the database no longer makes a forced attempt illegal.
+        Product behavior and schema changed together, in a reviewed revision.
+      </p>
+
+      <h3>The models themselves</h3>
+
+      <p>
+        The brief asks for SQLAlchemy models, and the models are where the
+        product's rules stop being prose. These are the real definitions, with
+        imports and docstrings trimmed:
+      </p>
+
+      <pre><code>class Source(Base):
+    __tablename__ = "sources"
+    __table_args__ = (UniqueConstraint("channel_id", name="uq_sources_channel_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False, default="youtube")
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    channel_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    feed_url: Mapped[str] = mapped_column(Text, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, server_default=func.now()
+    )
+
+    articles: Mapped[list["Article"]] = relationship(back_populates="source")
+
+
+class Article(Base):
+    __tablename__ = "articles"
+    __table_args__ = (
+        UniqueConstraint("video_id", name="uq_articles_video_id"),
+        Index("ix_articles_published_at", "published_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_id: Mapped[int] = mapped_column(
+        ForeignKey("sources.id", ondelete="CASCADE"), nullable=False
+    )
+    video_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    transcript: Mapped[str | None] = mapped_column(Text)
+    transcript_language: Mapped[str | None] = mapped_column(String(32))
+    transcript_is_generated: Mapped[bool | None] = mapped_column(Boolean)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, server_default=func.now()
+    )
+
+    source: Mapped["Source"] = relationship(back_populates="articles")
+
+
+class Digest(Base):
+    __tablename__ = "digests"
+    __table_args__ = (
+        CheckConstraint("status IN ('sent', 'failed', 'empty')", name="ck_digests_status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_date: Mapped[date] = mapped_column(Date, nullable=False)
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    subject: Mapped[str] = mapped_column(Text, nullable=False)
+    text_body: Mapped[str] = mapped_column(Text, nullable=False)
+    html_body: Mapped[str] = mapped_column(Text, nullable=False)
+    model_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    article_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    recipient: Mapped[str] = mapped_column(String(320), nullable=False)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))</code></pre>
+
+      <p>
+        Read the constraints as decisions. <code>channel_id</code> unique makes
+        ingestion an upsert instead of a duplicate factory.
+        <code>video_id</code> unique plus <code>ondelete="CASCADE"</code> ties an
+        article to exactly one source and removes it with that source.
+        <code>published_at</code> is nullable because a feed can omit it, and
+        indexed because every digest query filters on it. The
+        <code>status</code> check constraint is the product rule that a digest is
+        <code>sent</code>, <code>failed</code> or <code>empty</code> — never
+        "maybe".
+      </p>
+
+      <div class="callout">
+        <span class="label">The multi-source seam, and its cost</span>
+        <code>sources.kind</code> is the field the aggregator brief needs: a
+        YouTube channel and, later, a blog or newsletter are both sources. But
+        <code>articles.video_id</code> is YouTube-specific naming, and the only
+        collector implemented is YouTube. Ship one kind first; when the second
+        lands, rename to a generic <code>external_id</code> and key the
+        uniqueness constraint on <code>(source_id, external_id)</code>. Do that
+        in a migration, and say in the plan that the rename is coming — that is
+        cheaper than pretending the schema is already general.
+      </div>
+
+      <p>The local workflow is short enough to run before every phase:</p>
+
+      <pre><code>docker compose -f docker/docker-compose.yml up -d
+uv run python -m app.database.migrate
+uv run alembic -c app/database/alembic.ini current
+
+# ingestion
+uv run python -m app.ingest.seed
+
+# digest
+uv run python main.py run
+uv run python main.py run --send-email
+uv run python main.py run --send-email --force</code></pre>
+
+      <p>
+        <strong>Gate:</strong> <code>alembic current</code> reports the head
+        revision, and a query against <code>sources</code>,
+        <code>articles</code> and <code>digests</code> succeeds. The example's
+        own checklist still has the second migration unapplied to its local
+        database, so the upgraded schema is an open verification gate, not a
+        claim. Unit tests use a temporary SQLite database through the same
+        SQLAlchemy models; that proves the model contract without Docker, but it
+        does not prove the PostgreSQL migration.
+      </p>
+
+      <h2>Part 6 — Ingestion is an upsert, not an append</h2>
+
+      <p>
+        The ingestion job is deliberately boring: load and validate
+        <code>app/data/channels.json</code>, fetch each feed, then write in one
+        transaction. The details are the lesson.
+      </p>
+
+      <ol>
+        <li>
+          <strong
+            >Validate the curated list before touching the network.</strong
+          >
+          Every entry needs a non-empty name and a valid
+          <code>UC...</code> channel ID. Duplicate IDs and an empty list are
+          rejected. A bad configuration should fail before it makes requests or
+          writes rows.
+        </li>
+        <li>
+          <strong>Fetch outside the transaction.</strong> A slow or failed feed
+          should not hold a database transaction open. The fetches produce a
+          list of successes and a list of failures.
+        </li>
+        <li>
+          <strong>Upsert channels by <code>channel_id</code>.</strong> The
+          configured name and feed URL are refreshed and the channel is marked
+          active. Channels no longer present in the file are marked inactive,
+          not deleted.
+        </li>
+        <li>
+          <strong>Upsert articles by <code>video_id</code>.</strong> Title, URL,
+          description and publication time are refreshed. The
+          <code>set_</code> list deliberately omits <code>transcript</code>,
+          <code>transcript_language</code> and
+          <code>transcript_is_generated</code>, so a later RSS refresh cannot
+          erase them.
+        </li>
+        <li>
+          <strong>Report counts and failures.</strong> The report distinguishes
+          channels synced, feeds succeeded, videos upserted and failed feeds.
+          The CLI exits non-zero if any feed failed, while still committing the
+          channels that worked.
+        </li>
+      </ol>
+
+      <p>
+        The dialect switch is a small but useful test seam.
+        <code>_insert_for_dialect</code> selects PostgreSQL or SQLite
+        <code>insert</code>, so the same upsert logic can run against a
+        temporary SQLite database in unit tests and against Postgres in the real
+        run. The tests cover channel upserts, article inserts and updates,
+        duplicate video IDs, inactive channels, a failed feed, and the
+        dummy-feed path that writes and reads rows back from SQLite.
+      </p>
+
+      <p>
+        <strong>Product limit:</strong> a channel RSS feed returns roughly the
+        latest fifteen videos, not the archive. The 24-hour digest window is a
+        subset of that. If you stop running for a week, you do not get the week
+        back. A daily digest is not a backfill, and a "missing" old video is not
+        a retrieval bug.
+      </p>
+
+      <h2>Part 7 — From rows to a bounded prompt</h2>
+
+      <p>
+        Generation starts with a time window, not with the whole table.
+        <code>get_digest_window</code> requires an aware datetime, converts it
+        to UTC, and returns <code>[now - 24 hours, now]</code>. The query
+        includes both bounds, excludes rows with a null
+        <code>published_at</code>, and orders by publication time and ID for
+        deterministic tests. The tests cover the inclusive boundary, a naive
+        timestamp rejection, and the empty case.
+      </p>
+
+      <p>Then the input builder applies a character budget:</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>limit</th>
+            <th>value</th>
+            <th>why</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>per-video content</td>
+            <td>12,000 characters</td>
+            <td>one long transcript cannot crowd out every other video</td>
+          </tr>
+          <tr>
+            <td>total input</td>
+            <td>48,000 characters</td>
+            <td>
+              the prompt stays inside a predictable context and cost envelope
+            </td>
+          </tr>
+          <tr>
+            <td>content preference</td>
+            <td>
+              transcript, then RSS description, then an explicit unavailable
+              marker
+            </td>
+            <td>the model is told what it actually has</td>
+          </tr>
+          <tr>
+            <td>truncation</td>
+            <td>marked with <code>[Content truncated.]</code></td>
+            <td>the model is not handed a silent cut</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        Only articles whose blocks fit become part of the prompt, and the
+        allowed URLs are exactly the URLs of those included articles. If the
+        total budget is exhausted, later articles are left out of both the
+        prompt and the allowlist. That coupling is what makes the next
+        validation step meaningful: the model cannot cite an article it never
+        saw.
+      </p>
+
+      <p>
+        The plan mentions an article-count cap; the implementation's real bound
+        is characters. That is the behavior to test. It also bounds the
+        prompt-injection surface: article text is untrusted input, so less of it
+        is easier to reason about, and the system prompt explicitly says to
+        treat it as source material rather than instructions.
+      </p>
+
+      <h3>Custom insights are a prompt file, not a setting</h3>
+
+      <p>
+        The brief says the LLM summarizes "based on custom user insights defined
+        in an AI agent system prompt." In the repository that is literal:
+        <code>app/agent/prompts/digest_system.md</code> holds the editorial
+        instructions — what to prioritize, how blunt to be, how long a snippet
+        may run — and <code>load_system_prompt()</code> reads it at call time.
+        Change the file, run again, and the digest changes. No code edit, no
+        redeploy.
+      </p>
+
+      <p>
+        That is the cheapest possible version of the feature, and it is worth
+        being precise about its limits. The prompt is <strong>global</strong>:
+        one file, one editorial voice, one recipient. The "user" in "custom user
+        insights" is you, the operator. A product with real users needs a
+        <code>digest_profiles</code> table, a profile-to-recipient relation, and
+        a test that each profile produces its own prompt — which is a schema
+        change and a scheduler change, not a prompt tweak. Say that in the plan
+        rather than calling the file a personalization feature.
+      </p>
+
+      <p>
+        The other half of "short, punchy snippets" is enforced structurally, not
+        editorially: the parser caps each summary at 600 characters and each
+        title at 200. The prompt asks for brevity; the validator guarantees an
+        upper bound. When you want a different tone, edit the prompt. When you
+        want a different <em>contract</em>, change the code and its tests.
+      </p>
+
+      <p>
+        <code>uv run python main.py run --raw</code> prints the saved article
+        records in the window as JSON without calling DeepSeek, sending email,
+        or recording an attempt. Use it when the digest looks wrong: first prove
+        the window and the stored content, then prove the model contract. Mixing
+        those two debugging steps is how a data problem gets misdiagnosed as a
+        prompt problem.
+      </p>
+
+      <h2>Part 8 — One strict model contract</h2>
+
+      <p>
+        The model call is intentionally small. DeepSeek
+        <code>deepseek-chat</code> is reached through the
+        <code>openai</code> SDK pointed at
+        <code>https://api.deepseek.com</code>. The package is a transport
+        detail; the provider is DeepSeek.
+        <code>app/agent/prompts/digest_system.md</code> is loaded at runtime by
+        <code>load_system_prompt()</code>, so the editorial voice is editable
+        without touching Python. There is no per-run override flag yet: the file
+        path is a function argument with a fixed default, which is enough for one
+        operator and one digest.
+      </p>
+
+      <p>The system prompt defines the only acceptable shape:</p>
+
+      <pre><code>{
+  "subject": "A concise email subject",
+  "entries": [
+    {
+      "title": "A concise title",
+      "summary": "A useful, factual summary",
+      "url": "An exact URL copied from one of the provided article records"
+    }
+  ]
+}</code></pre>
+
+      <p>
+        The parser is the enforcement, not the prompt. It checks all of the
+        following before anything is rendered:
+      </p>
+
+      <ul>
+        <li>the response is a JSON object, not prose wrapped around JSON;</li>
+        <li>
+          <code>subject</code> is a non-empty single line of at most 120
+          characters;
+        </li>
+        <li><code>entries</code> is a non-empty array;</li>
+        <li>
+          each title is at most 200 characters and each summary at most 600;
+        </li>
+        <li>
+          each URL is an exact member of the input allowlist, not a normalized
+          or shortened variant;
+        </li>
+        <li>no URL is repeated, and every allowed URL appears exactly once;</li>
+        <li>
+          every allowlisted URL is HTTPS on a known YouTube host, with no
+          credentials and no unusual port.
+        </li>
+      </ul>
+
+      <p>
+        The renderer then builds the plain-text and HTML bodies in code. Every
+        article- and model-provided string is passed through
+        <code>html.escape</code>, and the only value inserted into an
+        <code>href</code> is a URL that already passed the allowlist. The model
+        never emits HTML. That separation is the whole defense: a summary
+        containing markup is text, not structure.
+      </p>
+
+      <div class="callout">
+        <span class="label">One drift worth noticing</span>
+        The design document mentions
+        <code>response_format: json_object</code> on the DeepSeek call. The
+        current service asks for JSON in the system prompt and relies on the
+        strict parser instead. That is not unsafe — malformed output raises, the
+        attempt is recorded as <code>failed</code>, and no email is sent — but
+        adding the parameter is a cheap hardening. The lesson is to compare the
+        plan with the code, not to assume the plan is what runs.
+      </div>
+
+      <p>
+        <strong>What this contract does not prove:</strong> a URL allowlist
+        protects link integrity, not truth. The model can still write an
+        inaccurate summary about a real video. The digest is a summary product,
+        not a citation-backed analyst, and the right next check is an eval set
+        of representative videos with human-scored summaries. The parser
+        guarantees shape and provenance of links; it does not guarantee semantic
+        accuracy.
+      </p>
+
+      <h2>Part 9 — Email is a side effect: gate it, record it, key it</h2>
+
+      <p>
+        Email is the first action in the course that cannot be taken back. The
+        project treats it accordingly. <code>run</code> without flags prints a
+        preview and writes nothing. <code>--send-email</code> opts into
+        delivery. <code>--force</code> is rejected unless
+        <code>--send-email</code> is present, and <code>--raw</code> cannot be
+        combined with sending. Those argument checks are not pedantry; they
+        prevent a debugging invocation from becoming a real send.
+      </p>
+
+      <p>
+        The delivery attempt is persisted before the work starts, as
+        <code>failed</code>. That row is then updated with the generated subject
+        and bodies. Only after SMTP returns without raising does the status
+        become <code>sent</code> and <code>sent_at</code> get a timestamp. If
+        generation or delivery raises, the row stays <code>failed</code> and the
+        CLI exits non-zero. An empty window is recorded as
+        <code>empty</code> and does not call DeepSeek or send mail. A failed or
+        empty attempt does not block a later retry that day.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>status</th>
+            <th>meaning</th>
+            <th>what the operator should do</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>sent</code></td>
+            <td>SMTP accepted the message</td>
+            <td>nothing; a normal rerun on the same UTC date skips</td>
+          </tr>
+          <tr>
+            <td><code>failed</code></td>
+            <td>generation or delivery raised</td>
+            <td>
+              read the error, fix it, retry; <code>--force</code> is not needed
+              for a failed row
+            </td>
+          </tr>
+          <tr>
+            <td><code>empty</code></td>
+            <td>no articles in the window</td>
+            <td>nothing; no mail was sent</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        The idempotency check is simple: before a normal run, look for a
+        <code>sent</code> row with the same UTC <code>run_date</code>; if one
+        exists, skip. <code>--force</code> bypasses the check and creates a new
+        attempt. This is the right shape for a personal digest, but be precise
+        about what it guarantees. It is a check-then-send, not a distributed
+        lock. Two concurrent runs can both pass the check, and a crash after
+        SMTP accepts the message but before the <code>sent</code> commit can
+        produce a duplicate on the next run. For customer mail or money, you
+        would need an outbox, a unique claim or a provider idempotency key. For
+        a daily digest to yourself, the record plus a single trigger is a
+        reasonable trade — and when that trigger becomes cron, add the lock.
+      </p>
+
+      <p>
+        The SMTP details are ordinary but easy to get wrong. The connection uses
+        STARTTLS on port 587, authenticates, and sends a multipart message with
+        both plain text and HTML alternatives. The authentication error path
+        explicitly explains the Gmail app-password mistake, because a server
+        disconnect during login is more often a credential format problem than a
+        network problem. Unit tests mock the SMTP client, so the suite never
+        sends real mail and never needs credentials.
+      </p>
+
+      <p>
+        <strong>Gate:</strong> with local Postgres migrated and credentials
+        configured, run <code>uv run python main.py run --send-email</code>,
+        confirm the inbox and the <code>sent</code> row, then run it again and
+        confirm it skips. The example's checklist still marks live delivery and
+        the second-run observation as open, so the lesson does not claim them.
+      </p>
+
+      <h2>Part 10 — Scheduling: the phase that changes the contract</h2>
+
+      <p>
+        The brief says "a cron job or scheduler." The repository ships neither,
+        and that is a decision, not an omission. While a human runs the command,
+        the human is the retry policy, the alerting system and the duplicate
+        check. A cron entry removes all three at once. Everything that was
+        acceptable interactively becomes a production requirement.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>concern</th>
+            <th>manual run</th>
+            <th>scheduled run</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>duplicate send</td>
+            <td>you see the skip and stop</td>
+            <td>
+              two overlapping triggers both pass the check — you need a lock, not
+              just a lookup
+            </td>
+          </tr>
+          <tr>
+            <td>failure visibility</td>
+            <td>non-zero exit in your terminal</td>
+            <td>nobody is watching; you need an alert or a dead-man check</td>
+          </tr>
+          <tr>
+            <td>time zone</td>
+            <td>you pick the moment</td>
+            <td>
+              cron fires in the host's zone; the digest window is UTC — state
+              both, explicitly
+            </td>
+          </tr>
+          <tr>
+            <td>partial ingestion</td>
+            <td>you notice a 404 and rerun later</td>
+            <td>
+              a silent 404 becomes a thin digest; persist per-source outcomes
+            </td>
+          </tr>
+          <tr>
+            <td>secrets</td>
+            <td><code>.env</code> on your laptop</td>
+            <td>a secret store or an environment file with tight permissions</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        The minimum honest scheduler is two lines and a log. Run ingestion, then
+        generation, and keep the two exit codes separate so a partial ingestion
+        does not look like a clean run:
+      </p>
+
+      <pre><code># 07:00 UTC daily — the host must run in UTC, or set CRON_TZ
+0 7 * * * cd /srv/ai-news-digest &amp;&amp; \
+  uv run python -m app.ingest.seed; \
+  uv run python main.py run --send-email >> /var/log/digest.log 2&gt;&amp;1</code></pre>
+
+      <p>
+        The <code>;</code> is deliberate. If one feed 404s, ingestion exits
+        non-zero but the transaction has already committed the other channels and
+        preserved last-good state; you still want the digest built from what
+        landed. Using <code>&amp;&amp;</code> instead gives you "no digest when
+        any feed fails", which is a defensible but different product decision.
+        Write the choice down, because it is the same last-good-state rule from
+        Part 3 expressed as a shell operator.
+      </p>
+
+      <p>
+        Equivalents: a systemd timer with <code>OnCalendar</code> and
+        <code>Persistent=true</code> (it catches up after downtime), Windows Task
+        Scheduler, or a hosted cron. A GitHub Actions schedule is convenient but
+        puts your database credentials and SMTP password in a third party and
+        gives you a shared runner IP — which is exactly what the caption endpoint
+        in Part 4 dislikes. A small always-on VM next to the Postgres volume is
+        the least surprising home for this pipeline.
+      </p>
+
+      <div class="callout">
+        <span class="label">What is still missing</span>
+        No cron file, no lock, no alerting and no per-source fetch history exist
+        in the repository. Before you add the trigger, add the three things that
+        make an unattended failure visible: a <code>flock</code> (or an advisory
+        lock) around the run, a persisted <code>last_success</code> and
+        <code>last_error</code> per source, and a way to hear about a failed or
+        empty digest. A scheduler without those is a machine that fails quietly
+        at 07:00 and takes you a week to notice.
+      </div>
+
+      <h2>Part 11 — AI coding: phases are prompts with gates</h2>
+
+      <p>
+        This repository does not have the capstone's multi-service instruction
+        hierarchy. It has two design documents, a todo list and a single Python
+        package. That is enough. The working prompt for a phase is narrow and
+        evidence-based:
+      </p>
+
+      <pre><code>Work only on the transcript phase. Before writing code, restate the files
+and interfaces you will touch, the acceptance checks, and what this phase
+must not include. Implement the smallest change, then run:
+
+uv run python -m unittest discover -s tests -p test_transcript.py -v
+
+Do not mark the phase complete until you can show the output that passes
+each check. Do not add a scheduler or a frontend in this phase.</code></pre>
+
+      <p>
+        The more interesting AI-coding habit is how the project makes a flaky
+        dependency testable without faking the product:
+      </p>
+
+      <ul>
+        <li>
+          <code>feed_fetcher</code> is a parameter, so
+          <code>--dummy-data</code> can substitute the fixture and tests can
+          inject a failure.
+        </li>
+        <li>
+          <code>now</code> is injectable, so the 24-hour window and its
+          boundaries are deterministic.
+        </li>
+        <li>
+          The database tests use a temporary SQLite engine through the same
+          models, so no Docker or Postgres is required.
+        </li>
+        <li>
+          SMTP is a callable dependency, so success and failure are both
+          testable without a mailbox.
+        </li>
+        <li>
+          The digest generator is injectable, so window selection and input
+          bounds can be tested without DeepSeek.
+        </li>
+      </ul>
+
+      <p>
+        That is the transferable pattern: put a seam at the boundary, then test
+        the deterministic side. Do not "mock the world" inside business logic,
+        and do not replace the live model in the running app. The suite is
+        credential-free by design, which is why it can run on every change.
+      </p>
+
+      <p>
+        The current suite reports <strong>54 passing tests</strong> in well
+        under a second. That is evidence for the schema, window, input bounds,
+        parser, renderer, CLI guards, persistence and mocked delivery. It is not
+        evidence that the RSS endpoint is reachable, that DeepSeek returns a
+        good summary, or that Gmail accepts the message. Those are live gates,
+        and the todo keeps them separate.
+      </p>
+
+      <h2>Part 12 — The honest scorecard</h2>
+
+      <table>
+        <thead>
+          <tr>
+            <th>area</th>
+            <th>state</th>
+            <th>evidence or remaining work</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>project setup</td>
+            <td><strong>done</strong></td>
+            <td>
+              Python 3.12 <code>uv</code> project; SQLAlchemy, Alembic, psycopg,
+              feedparser, openai, python-dotenv, youtube-transcript-api
+            </td>
+          </tr>
+          <tr>
+            <td>RSS discovery</td>
+            <td><strong>done, external risk</strong></td>
+            <td>
+              live feed inspected and parsed; 404 windows are an upstream
+              behavior, not a code path
+            </td>
+          </tr>
+          <tr>
+            <td>database</td>
+            <td><strong>done, one gate open</strong></td>
+            <td>
+              three tables and two revisions; the second migration is not yet
+              applied and verified locally
+            </td>
+          </tr>
+          <tr>
+            <td>ingestion</td>
+            <td><strong>done</strong></td>
+            <td>
+              channel and article upserts, transcript preservation, failed-feed
+              reporting, live row counts verified
+            </td>
+          </tr>
+          <tr>
+            <td>transcript retrieval</td>
+            <td><strong>done, no proxy layer</strong></td>
+            <td>
+              caption fetch and description fallback tested; cloud-IP blocking
+              is documented but not handled
+            </td>
+          </tr>
+          <tr>
+            <td>digest generation</td>
+            <td><strong>done, live gate open</strong></td>
+            <td>
+              24-hour window, 12k/48k bounds, strict JSON and URL allowlist;
+              live DeepSeek quality not evaluated
+            </td>
+          </tr>
+          <tr>
+            <td>email</td>
+            <td><strong>done, live gate open</strong></td>
+            <td>
+              STARTTLS, multipart render, status persistence and mocked failure;
+              no successful live delivery recorded
+            </td>
+          </tr>
+          <tr>
+            <td>CLI and docs</td>
+            <td><strong>done</strong></td>
+            <td>
+              <code>migrate</code>, <code>seed</code>, <code>run</code>,
+              <code>--raw</code>, <code>--send-email</code>,
+              <code>--force</code>; README and plan documents
+            </td>
+          </tr>
+          <tr>
+            <td>local environment</td>
+            <td><strong>done</strong></td>
+            <td>
+              Docker Compose for PostgreSQL 16, <code>.env.example</code>,
+              secrets ignored
+            </td>
+          </tr>
+          <tr>
+            <td>custom insights</td>
+            <td><strong>done, single profile</strong></td>
+            <td>
+              one editable system prompt read at runtime; no per-user profiles
+              table
+            </td>
+          </tr>
+          <tr>
+            <td>multi-source ingestion</td>
+            <td><strong>not built</strong></td>
+            <td>
+              <code>sources.kind</code> is the seam; only the YouTube collector
+              exists
+            </td>
+          </tr>
+          <tr>
+            <td>scheduler</td>
+            <td><strong>not built</strong></td>
+            <td>
+              no cron entry, no overlap lock, no alerting; see Part 10
+            </td>
+          </tr>
+          <tr>
+            <td>end-to-end</td>
+            <td><strong>partial</strong></td>
+            <td>
+              Postgres started and ingestion verified; migration upgrade, live
+              email and the second-run skip remain open
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        Three live gates remain: apply the digest-attempt migration and verify
+        the upgraded schema; deliver a real email and confirm the saved
+        <code>sent</code> row; run again the same UTC day and confirm the skip,
+        then confirm <code>--force</code> records a second attempt. Two external
+        risks are not gates you can close once: the RSS endpoint can return 404
+        again next week, and a cloud IP can start being blocked. The design
+        response is not "make the network reliable"; it is "keep the failure
+        local, keep last-good state, and report what happened."
+      </p>
+
+      <p>
+        And two phases from the brief are simply not code yet. The scheduler and
+        the second source kind are the difference between "a pipeline I run" and
+        "an aggregator that runs itself." Leaving them on the scorecard as
+        <strong>not built</strong> is what makes the finished rows credible.
+      </p>
+
+      <p>
+        What this project demonstrates is different from the capstone and worth
+        having in a portfolio for that reason. It shows that you can build a
+        batch data product with a real side effect, bound an LLM prompt,
+        validate model output, keep ingestion idempotent, and distinguish a
+        failed send from a successful one. The code is small; the honesty about
+        the two fragile sources is the senior part.
+      </p>
+
+      <h2>Part 13 — The project checklist</h2>
+
+      <ol>
+        <li>
+          Write the checklist first, and put the <em>deferrals</em> in it: the
+          scheduler, extra source kinds and per-user profiles are named phases
+          with acceptance checks, not silent omissions.
+        </li>
+        <li>
+          Fix the project structure before writing modules: all logic in
+          <code>app/</code>, infrastructure in <code>docker/</code>, and
+          dependencies pointing one way.
+        </li>
+        <li>
+          Treat RSS 404 as transient: isolate the channel, keep its rows, keep
+          it active, report the failure, exit non-zero.
+        </li>
+        <li>
+          Build against a fixture before the live feed. The parser and upsert
+          contract should be testable with no network.
+        </li>
+        <li>
+          Make transcripts optional. Prefer them, fall back to the RSS
+          description, and store which one was used.
+        </li>
+        <li>
+          Let Alembic own the schema. Change a constraint in a reviewed revision
+          when product behavior requires it.
+        </li>
+        <li>
+          Upsert by stable external IDs, and whitelist the columns a refresh may
+          overwrite. Never erase a transcript with RSS metadata.
+        </li>
+        <li>
+          Bound the prompt by characters, label truncation, and derive the URL
+          allowlist from exactly the articles that fit.
+        </li>
+        <li>
+          Parse model output strictly. Reject unknown URLs, duplicate entries
+          and missing articles before rendering.
+        </li>
+        <li>
+          Escape all model- and article-provided text; never let the model emit
+          HTML.
+        </li>
+        <li>
+          Gate email behind an explicit flag, record every attempt, and know the
+          difference between at-most-once and exactly-once.
+        </li>
+        <li>
+          Schedule last. Add a lock, per-source fetch history and an alert
+          before you hand the run to cron.
+        </li>
+      </ol>
+
+      <h2>Check yourself</h2>
+
+      <div class="quiz">
+        <script type="application/json">
+          {
+            "questions": [
+              {
+                "q": "A channel's RSS feed returns 404 during the morning window, while the same URL works in a browser. What is the correct response?",
+                "options": [
+                  "Mark the channel inactive and delete its articles",
+                  "Treat the feed as temporarily unavailable, keep existing rows, report the failure, and retry later",
+                  "Change the channel ID",
+                  "Assume the channel deleted all its videos"
+                ],
+                "correct": 1,
+                "explain": "The forum reports describe intermittent 404s for active public channels, clustered around a time window and clearing later. A 404 is not evidence of deletion or a bad ID, so the source and its rows must survive."
+              },
+              {
+                "q": "What does the repository's --dummy-data flag actually replace?",
+                "options": [
+                  "The PostgreSQL database",
+                  "The DeepSeek call",
+                  "The RSS network fetch, using a bundled feed fixture parsed by the same code",
+                  "The SMTP send"
+                ],
+                "correct": 2,
+                "explain": "The fixture feeds the same parser and upsert path without requesting YouTube. It is explicitly reported, and a fixture that does not match the configured channel is rejected."
+              },
+              {
+                "q": "Why does the article upsert leave transcript columns out of its update set?",
+                "options": [
+                  "Transcripts are too large for PostgreSQL",
+                  "A later RSS refresh must not overwrite a transcript already stored for that video",
+                  "SQLAlchemy cannot update nullable text columns",
+                  "The transcript is stored in the sources table"
+                ],
+                "correct": 1,
+                "explain": "RSS metadata is refreshed on every run, but the transcript is more expensive and may have come from a separate fetch. Omitting those columns preserves it."
+              },
+              {
+                "q": "What changed when the second Alembic migration dropped the unique constraint on digests.run_date?",
+                "options": [
+                  "It allowed multiple recorded attempts for the same UTC date, including --force attempts, without overwriting history",
+                  "It made every run send an email",
+                  "It removed the status check",
+                  "It moved the digest table into Supabase"
+                ],
+                "correct": 0,
+                "explain": "The application still skips a normal rerun after a successful send. The schema change exists so an intentional forced attempt can be recorded as a separate row."
+              },
+              {
+                "q": "What does the URL allowlist prove about a generated digest?",
+                "options": [
+                  "Every factual claim is correct",
+                  "Every link came from an article that was actually in the prompt, but the summary can still be inaccurate",
+                  "The model did not hallucinate any text",
+                  "The email was delivered"
+                ],
+                "correct": 1,
+                "explain": "The validator enforces shape and link provenance. It cannot prove that a summary semantically matches the video; that needs an eval set and human review."
+              },
+              {
+                "q": "The digest send checks for a sent row before calling SMTP. What does that check not guarantee?",
+                "options": [
+                  "That a failed row can be retried",
+                  "That a second normal run will skip",
+                  "Exactly-once delivery across concurrent runs or a crash after SMTP accepts but before the sent commit",
+                  "That the status is one of sent, failed or empty"
+                ],
+                "correct": 2,
+                "explain": "It is a check-then-send, not a lock or an outbox. A concurrent run can pass the check, and a crash between send and commit can cause a duplicate on the next run."
+              },
+              {
+                "q": "Why does the project treat the RSS endpoint and the caption endpoint as different failure modes?",
+                "options": [
+                  "RSS is free and captions are paid",
+                  "RSS fails by returning an empty feed, while captions always work",
+                  "RSS 404s are upstream availability windows; caption failures are often IP blocks, and transcripts can fall back to descriptions",
+                  "Both are handled by the same retry loop"
+                ],
+                "correct": 2,
+                "explain": "An RSS failure threatens discovery of new videos, so it must be isolated and reported. A caption failure only degrades content quality, so the digest can fall back to the RSS description and still run."
+              },
+              {
+                "q": "Where do the brief's \"custom user insights\" live in this repository?",
+                "options": [
+                  "A per-user row in the digests table",
+                  "An editable system prompt file read at call time and shared by every run",
+                  "A CLI flag on the --raw command",
+                  "The RSS description of each video"
+                ],
+                "correct": 1,
+                "explain": "app/agent/prompts/digest_system.md holds the editorial instructions and is read when the digest is generated. It is global: one file, one voice. Per-user profiles would need a table, a relation to recipients, and scheduler changes."
+              },
+              {
+                "q": "You add a daily cron trigger but keep the existing \"look for a sent row, then send\" logic. What does scheduling newly make possible?",
+                "options": [
+                  "The 24-hour window silently becomes 48 hours",
+                  "Two overlapping runs both pass the check and send twice; a crash between SMTP accepting and the sent commit can also duplicate",
+                  "Alembic stops owning the schema",
+                  "The RSS endpoint stops returning 404"
+                ],
+                "correct": 1,
+                "explain": "The manual run made the human the lock and the alert. A timer removes both, so overlap protection and a durable send record become requirements, not nice-to-haves."
+              }
+            ]
+          }
+        </script>
+      </div>
+
+      <h2>Primary sources for this lesson</h2>
+
+      <p>
+        The RSS instability is documented in the
+        <a
+          href="https://discuss.ai.google.dev/t/youtube-rss-feed-endpoint-returns-404-errors/113379"
+          >YouTube RSS 404 thread</a
+        >
+        on the Google AI developers forum. The caption library's warning and the
+        rotating-proxy workaround are in
+        <a href="https://pypi.org/project/youtube-transcript-api/"
+          >youtube-transcript-api on PyPI</a
+        >; the underlying web-client endpoint is undocumented and can change.
+        For alternatives, see the YouTube Data API
+        <a href="https://developers.google.com/youtube/v3/determine_quota_cost"
+          >quota costs</a
+        >
+        and the
+        <a
+          href="https://developers.google.com/youtube/v3/guides/push_notifications"
+          >PubSubHubbub push-notification guide</a
+        >.
+      </p>
+
+      <p>
+        For the database layer, read the SQLAlchemy
+        <a
+          href="https://docs.sqlalchemy.org/en/20/dialects/postgresql.html#insert-on-conflict-upsert"
+          >PostgreSQL insert-on-conflict documentation</a
+        >
+        and the <a href="https://alembic.sqlalchemy.org/">Alembic tutorial</a>.
+        The model call uses the
+        <a href="https://api-docs.deepseek.com/">DeepSeek API</a> through the
+        <a href="https://github.com/openai/openai-python">OpenAI Python SDK</a>;
+        the email path uses Python's
+        <a href="https://docs.python.org/3/library/smtplib.html"
+          ><code>smtplib</code></a
+        >
+        and
+        <a href="https://docs.python.org/3/library/email.message.html"
+          ><code>email.message</code></a
+        >. RSS parsing is
+        <a href="https://feedparser.readthedocs.io/">feedparser</a>.
+      </p>
+
+      <p>
+        In the example repository, read
+        <a
+          href="../assets/examples/0018-ai-coding-youtube-transcript-postgresql/docs/daily-youtube-digest-plan.md"
+          >the pipeline plan</a
+        >,
+        <a
+          href="../assets/examples/0018-ai-coding-youtube-transcript-postgresql/docs/digest-generation-and-email-plan.md"
+          >the digest and email plan</a
+        >,
+        <a
+          href="../assets/examples/0018-ai-coding-youtube-transcript-postgresql/docs/todo.md"
+          >the phase checklist</a
+        >
+        and
+        <a
+          href="../assets/examples/0018-ai-coding-youtube-transcript-postgresql/README.md"
+          >the run instructions</a
+        >. Then compare the plan with the code — the differences are part of the
+        lesson.
+      </p>
+
+      <h2>What's next</h2>
+
+      <p>
+        This is the last lesson. The course arc is complete: primitives,
+        streaming, evals, RAG, MCP, graph agents, typed contracts, a local
+        model, the AI-coding workflow, delivery, the grounded capstone, and now
+        a batch aggregator with a real side effect. What comes next is yours —
+        the two phases this lesson deliberately left unbuilt are the best place
+        to start. Take the two habits that survive every stack change: keep a
+        truthful scorecard, and put a seam at every boundary you do not control.
+        The <a href="../reference/skill-map.html">skill map</a> compresses the
+        whole course into one page, the
+        <a
+          href="../assets/examples/0018-ai-coding-youtube-transcript-postgresql/index.html"
+          >example page</a
+        >
+        is the repository's entry point, and
+        <a href="0001-ai-engineering-landscape-2026.html">lesson 1</a> is the
+        way back to the start.
+      </p>
+
+      <div class="footer-nav">
+        <div class="ask">
+          <strong>Before you schedule it:</strong> add retries and per-source
+          fetch history, decide how you will detect a persistent caption block,
+          and write down whether a duplicate email is acceptable. Those are
+          operational decisions, not code style.
+        </div>
+        <div class="links">
+          <a href="0017-project-supabase-rag-ai-coding.html">← Lesson 17</a>
+          <a href="../reference/skill-map.html">Skill Map &amp; Glossary</a>
+          <a
+            href="../assets/examples/0018-ai-coding-youtube-transcript-postgresql/index.html"
+            >Example repo</a
+          >
+        </div>
+      </div>
+
+      <script src="../assets/quiz.js"></script>
+    </article>
+  </body>
+</html>

@@ -56,6 +56,12 @@ uv run python -m app.ingest.seed --dummy-data
 
 The fixture represents the sample channel in `app/data/channels.json`. The option explicitly reports that dummy data was used and rejects a channel configuration that does not match the fixture.
 
+## Known fragility
+
+The RSS endpoint is not a stable public API. The Google AI developers forum documents intermittent 404 responses for active public channels, clustered around 09:00–12:00 UTC and clearing later (<https://discuss.ai.google.dev/t/youtube-rss-feed-endpoint-returns-404-errors/113379>). A 404 is not a deleted channel: this project keeps the source active and its existing rows, reports the failed feed, and exits non-zero while other channels still commit. It does not retry or remember per-source fetch history yet.
+
+Caption retrieval can be blocked by YouTube depending on the network. `youtube-transcript-api` uses an undocumented web-client endpoint; cloud-provider IPs are commonly blocked, and static proxies eventually are too. The documented workaround is a rotating residential proxy (`WebshareProxyConfig` or `GenericProxyConfig`). This repository does not ship a proxy layer. It falls back to the RSS description and labels the content source, so a blocked caption lowers summary quality rather than failing the run. If every video uses its description, the digest is still sent but is summarizing less.
+
 ## Digest input
 
 `app.digest.input.build_digest_input` formats saved articles for digest generation. It uses a saved transcript when present and falls back to the RSS description; content is limited to 12,000 characters per video and 48,000 characters total, including article metadata. Content that exceeds a limit is marked as truncated.
@@ -68,7 +74,7 @@ Create a local environment file from the example:
 Copy-Item .env.example .env
 ```
 
-Configure `DEEPSEEK_API_KEY` for preview generation. SMTP settings (`SMTP_HOST`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `EMAIL_SENDER`, and `EMAIL_RECIPIENT`) are needed only when you opt in to email delivery. The DeepSeek base URL, model, SMTP port, and database URL have local-development defaults in `.env.example`. Do not commit `.env`; it is ignored by Git.
+Configure `DEEPSEEK_API_KEY` for preview generation. SMTP settings (`SMTP_HOST`, `SMTP_USERNAME`, `SMTP_APPPASSWORD`, `EMAIL_SENDER`, and `EMAIL_RECIPIENT`) are needed only when you opt in to email delivery. For Gmail, `SMTP_APPPASSWORD` should be your Google app password. The DeepSeek base URL, model, SMTP port, and database URL have local-development defaults in `.env.example`. Do not commit `.env`; it is ignored by Git.
 
 Apply database migrations (including the migration that allows multiple recorded attempts per UTC date):
 

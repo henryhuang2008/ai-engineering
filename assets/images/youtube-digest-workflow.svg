@@ -1,0 +1,161 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 540" role="img" aria-labelledby="title desc">
+  <title id="title">Daily AI news digest workflow: trigger, ingest, digest, validate, send, record</title>
+  <desc>Top row, ingest: a scheduled or manual trigger reads the curated channels file, fetches one YouTube RSS feed per source, chooses a transcript or falls back to the RSS description, and upserts sources and articles into PostgreSQL. Bottom row, digest: a query selects the last 24 hours in UTC, builds a bounded input of 12,000 characters per video and 48,000 total, combines it with the editable digest system prompt, calls DeepSeek deepseek-chat, validates the JSON shape and the exact URL allowlist, and sends over SMTP STARTTLS with escaped HTML. Outcomes: the digests table records sent, failed or empty, with at most one successful send per UTC date, and the message lands in the personal inbox. Annotations state that an RSS 404 keeps the source active and its last-good rows, that a blocked caption falls back to the description, and that a validation error records failed and sends nothing.</desc>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#3d3d56"/>
+    </marker>
+    <marker id="arrow-gold" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#b08a2e"/>
+    </marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#c1666b"/>
+    </marker>
+    <style>
+      .card { fill: #ffffff; stroke: #0f4c5c; stroke-width: 1.5; }
+      .card-store { fill: #eef6f7; stroke: #0f4c5c; stroke-width: 1.5; }
+      .card-warn { fill: #fdf6e8; stroke: #c1666b; stroke-width: 1.5; }
+      .card-planned { fill: #fdf8ec; stroke: #b08a2e; stroke-width: 1.5; stroke-dasharray: 6 4; }
+      .title { font: 600 19px "Segoe UI", Helvetica, Arial, sans-serif; fill: #1a1a2e; }
+      .subtitle { font: 12px "Segoe UI", Helvetica, Arial, sans-serif; fill: #3d3d56; }
+      .section { font: 600 12px "Segoe UI", Helvetica, Arial, sans-serif; fill: #0f4c5c; letter-spacing: 0.14em; }
+      .section-note { font: 10px "Segoe UI", Helvetica, Arial, sans-serif; fill: #6b6b80; letter-spacing: 0.06em; }
+      .stage { font: 600 12.5px "Segoe UI", Helvetica, Arial, sans-serif; fill: #1a1a2e; }
+      .detail { font: 10.5px "Segoe UI", Helvetica, Arial, sans-serif; fill: #3d3d56; }
+      .num { font: 600 10px "Segoe UI", Helvetica, Arial, sans-serif; fill: #ffffff; }
+      .edge { stroke: #3d3d56; stroke-width: 1.5; fill: none; marker-end: url(#arrow); }
+      .edge-gold { stroke: #b08a2e; stroke-width: 1.5; fill: none; stroke-dasharray: 6 5; marker-end: url(#arrow-gold); }
+      .label { font: 10px "Segoe UI", Helvetica, Arial, sans-serif; fill: #6b6b80; }
+      .label-warn { font: 9.5px "Segoe UI", Helvetica, Arial, sans-serif; fill: #a14f54; }
+      .legend { font: 10px "Segoe UI", Helvetica, Arial, sans-serif; fill: #3d3d56; }
+    </style>
+  </defs>
+
+  <rect width="960" height="540" fill="#fdfdfc"/>
+
+  <text x="40" y="36" class="title">One run: trigger → ingest → digest → inbox</text>
+  <text x="40" y="56" class="subtitle">Every stage fails locally. Nothing is marked sent until SMTP accepts the message.</text>
+
+  <!-- ingest -->
+  <text x="40" y="96" class="section">INGEST</text>
+  <text x="920" y="96" class="section-note" text-anchor="end">FETCH · CHOOSE CONTENT · UPSERT</text>
+
+  <rect x="40" y="108" width="160" height="88" rx="8" class="card-planned"/>
+  <circle cx="56" cy="128" r="9" fill="#b08a2e"/>
+  <text x="52" y="132" class="num">1</text>
+  <text x="70" y="132" class="stage">Trigger</text>
+  <text x="52" y="158" class="detail">cron 07:00 UTC · planned</text>
+  <text x="52" y="172" class="detail">or manual CLI · shipped</text>
+
+  <rect x="220" y="108" width="160" height="88" rx="8" class="card"/>
+  <circle cx="236" cy="128" r="9" fill="#0f4c5c"/>
+  <text x="232" y="132" class="num">2</text>
+  <text x="250" y="132" class="stage">channels.json</text>
+  <text x="232" y="158" class="detail">curated source list</text>
+  <text x="232" y="172" class="detail">channel_id per entry</text>
+
+  <rect x="400" y="108" width="160" height="88" rx="8" class="card-warn"/>
+  <circle cx="416" cy="128" r="9" fill="#c1666b"/>
+  <text x="412" y="132" class="num">3</text>
+  <text x="430" y="132" class="stage">YouTube RSS</text>
+  <text x="412" y="158" class="detail">one request per source</text>
+  <text x="412" y="172" class="detail">404 → retry later</text>
+
+  <rect x="580" y="108" width="160" height="88" rx="8" class="card"/>
+  <circle cx="596" cy="128" r="9" fill="#0f4c5c"/>
+  <text x="592" y="132" class="num">4</text>
+  <text x="610" y="132" class="stage">Content</text>
+  <text x="592" y="158" class="detail">transcript → description</text>
+  <text x="592" y="172" class="detail">label where it came from</text>
+
+  <rect x="760" y="108" width="160" height="88" rx="8" class="card-store"/>
+  <circle cx="776" cy="128" r="9" fill="#0f4c5c"/>
+  <text x="772" y="132" class="num">5</text>
+  <text x="790" y="132" class="stage">PostgreSQL</text>
+  <text x="772" y="158" class="detail">upsert by stable ID</text>
+  <text x="772" y="172" class="detail">keep last-good rows</text>
+
+  <line x1="200" y1="152" x2="217" y2="152" class="edge"/>
+  <line x1="380" y1="152" x2="397" y2="152" class="edge"/>
+  <line x1="560" y1="152" x2="577" y2="152" class="edge"/>
+  <line x1="740" y1="152" x2="757" y2="152" class="edge"/>
+
+  <!-- cross-lane connector -->
+  <path d="M 840 196 L 840 214 L 120 214 L 120 241" class="edge"/>
+  <text x="480" y="208" class="label" text-anchor="middle">the digest reads these rows</text>
+
+  <!-- digest -->
+  <text x="40" y="232" class="section">DIGEST</text>
+  <text x="920" y="232" class="section-note" text-anchor="end">SELECT · BOUND · GENERATE · VALIDATE · SEND</text>
+
+  <rect x="40" y="244" width="160" height="88" rx="8" class="card"/>
+  <circle cx="56" cy="264" r="9" fill="#0f4c5c"/>
+  <text x="52" y="268" class="num">6</text>
+  <text x="70" y="268" class="stage">24h window</text>
+  <text x="52" y="294" class="detail">UTC [now-24h, now]</text>
+  <text x="52" y="308" class="detail">null published_at out</text>
+
+  <rect x="220" y="244" width="160" height="88" rx="8" class="card"/>
+  <circle cx="236" cy="264" r="9" fill="#0f4c5c"/>
+  <text x="232" y="268" class="num">7</text>
+  <text x="250" y="268" class="stage">Bounded input</text>
+  <text x="232" y="294" class="detail">12k per video</text>
+  <text x="232" y="308" class="detail">48k total chars</text>
+
+  <rect x="400" y="244" width="160" height="88" rx="8" class="card"/>
+  <circle cx="416" cy="264" r="9" fill="#0f4c5c"/>
+  <text x="412" y="268" class="num">8</text>
+  <text x="430" y="268" class="stage">Insights + model</text>
+  <text x="412" y="294" class="detail">digest_system.md</text>
+  <text x="412" y="308" class="detail">deepseek-chat</text>
+
+  <rect x="580" y="244" width="160" height="88" rx="8" class="card-warn"/>
+  <circle cx="596" cy="264" r="9" fill="#c1666b"/>
+  <text x="592" y="268" class="num">9</text>
+  <text x="610" y="268" class="stage">Validate</text>
+  <text x="592" y="294" class="detail">strict JSON shape</text>
+  <text x="592" y="308" class="detail">exact URL allowlist</text>
+
+  <rect x="760" y="244" width="160" height="88" rx="8" class="card"/>
+  <circle cx="776" cy="264" r="9" fill="#0f4c5c"/>
+  <text x="772" y="268" class="num">10</text>
+  <text x="790" y="268" class="stage">Email</text>
+  <text x="772" y="294" class="detail">STARTTLS 587</text>
+  <text x="772" y="308" class="detail">text + escaped HTML</text>
+
+  <line x1="200" y1="288" x2="217" y2="288" class="edge"/>
+  <line x1="380" y1="288" x2="397" y2="288" class="edge"/>
+  <line x1="560" y1="288" x2="577" y2="288" class="edge"/>
+  <line x1="740" y1="288" x2="757" y2="288" class="edge"/>
+
+  <!-- outcomes -->
+  <path d="M 850 332 L 850 385" class="edge"/>
+  <path d="M 850 364 L 660 364 L 660 385" class="edge"/>
+  <text x="676" y="358" class="label">write the attempt</text>
+
+  <rect x="40" y="388" width="520" height="88" rx="8" class="card-warn"/>
+  <text x="58" y="412" class="stage">Failure is per stage, not per run</text>
+  <text x="58" y="436" class="detail">RSS 404 → keep the source active and its last-good rows, report, exit non-zero</text>
+  <text x="58" y="452" class="detail">Caption block → fall back to the RSS description and label the content source</text>
+  <text x="58" y="468" class="detail">Bad JSON or unknown URL → record the attempt as failed and send nothing</text>
+
+  <rect x="580" y="388" width="180" height="88" rx="8" class="card-store"/>
+  <text x="598" y="412" class="stage">digests table</text>
+  <text x="598" y="436" class="detail">sent · failed · empty</text>
+  <text x="598" y="452" class="detail">one send per UTC date</text>
+
+  <rect x="780" y="388" width="140" height="88" rx="8" class="card"/>
+  <text x="798" y="412" class="stage">Inbox</text>
+  <text x="798" y="436" class="detail">your personal</text>
+  <text x="798" y="452" class="detail">address</text>
+
+  <!-- legend -->
+  <line x1="40" y1="508" x2="72" y2="508" class="edge"/>
+  <text x="80" y="512" class="legend">shipped path</text>
+  <line x1="190" y1="508" x2="222" y2="508" class="edge-gold"/>
+  <text x="230" y="512" class="legend">planned trigger (not built)</text>
+  <rect x="400" y="500" width="16" height="14" rx="3" class="card-warn" stroke-dasharray="none"/>
+  <text x="424" y="512" class="legend">a boundary that must fail closed</text>
+  <text x="920" y="512" class="legend" text-anchor="end">last-good state in, one recorded attempt out</text>
+</svg>

@@ -17,7 +17,7 @@
 
 <div class="callout win">
   <span class="label">Your win this lesson</span>
-  By the end, you can name the six layers of the AI application stack, explain how AI engineering differs from ML engineering, point to the exact layers your existing skills cover — and name the toolchain and the two projects you build here, plus the capstone they lead to.
+  By the end, you can name the six layers of the AI application stack, explain how AI engineering differs from ML engineering, point to the exact layers your existing skills cover — and name the toolchain, the two projects you build here, the capstone they lead to, and the batch pipeline that follows it.
 </div>
 
 <h2>First: AI engineer ≠ ML engineer</h2>
@@ -76,12 +76,13 @@
 
 <h2>Where this course lands you</h2>
 
-<p>Two warm-up projects here, plus the capstone in lesson 17 — each a prerequisite for the next — because portfolio work, not certificates, is what product teams hire on:</p>
+<p>Two warm-up projects here, plus the capstone in lesson 17 and an applied batch project in lesson 18 — each a prerequisite for the next — because portfolio work, not certificates, is what product teams hire on:</p>
 
 <ol>
   <li><strong>Chat assistant</strong> — FastAPI service, streaming React UI, structured output, an evals harness. Proves layers 2–3.</li>
   <li><strong>Docs RAG service</strong> — chunking, embeddings, hybrid retrieval, grounded citations. Proves layer 4, the most-requested skill in postings.</li>
   <li><strong>Capstone (lesson 17): a grounded SEC-filing analyst</strong> — Supabase Postgres with pgvector and full-text search, a cost-capped ingestion pipeline, hybrid retrieval fused with RRF, a PydanticAI agent that may only search and read retrieved chunks, a validator that refuses unsupported claims, and a citation UI that opens the exact passage. Built in phases through the AI-coding workflow, with the pilot and deployment gates left honestly open.</li>
+  <li><strong>Applied batch project (lesson 18): an AI news digest, YouTube first</strong> — a manual CLI that ingests RSS and transcripts into PostgreSQL through SQLAlchemy models and Alembic, bounds a DeepSeek prompt driven by your own editorial brief, validates JSON and link provenance, and gates an SMTP send behind a record and an idempotency check. The multi-source and scheduler phases are named in its checklist, not pretended. It is the course's clearest exercise in isolating unreliable sources and treating an irreversible side effect as a decision.</li>
 </ol>
 
 <h2>Check yourself</h2>
@@ -165,7 +166,7 @@
 <p>Read the <a href="https://www.deeplearning.ai/resources/ai-engineering-skills/">DeepLearning.AI AI Engineering Skills Map</a> (~20 min). It's the highest-signal overview of what employers actually hire for, and it's the backbone of this course's structure. Bookmark it; we'll return to its four pillars as we progress.</p>
 
 <h2>What's next</h2>
-<p>Next lesson: <a href="0002-your-first-llm-api-call.html"><strong>your first LLM call</strong></a> — messages, streamed tokens, one tool round trip, and pydantic-typed output, driven through LangChain against DeepSeek. It's the doorway to layers 2–3; the FastAPI + React service arrives in lesson 4, when project 1 — the chat assistant — starts. Milestones after that: function calling (3) → streaming UI (4) → evals (5) → RAG (6–8) → MCP (9) → LangGraph (10–11) → libraries and Pydantic (12–13) → a local model (14) → AI coding (15) → GitOps delivery (16) → the Supabase RAG capstone (17). Full rationale in the <a href="../reference/skill-map.html">SDK decision guide</a>.</p>
+<p>Next lesson: <a href="0002-your-first-llm-api-call.html"><strong>your first LLM call</strong></a> — messages, streamed tokens, one tool round trip, and pydantic-typed output, driven through LangChain against DeepSeek. It's the doorway to layers 2–3; the FastAPI + React service arrives in lesson 4, when project 1 — the chat assistant — starts. Milestones after that: function calling (3) → streaming UI (4) → evals (5) → RAG (6–8) → MCP (9) → LangGraph (10–11) → libraries and Pydantic (12–13) → a local model (14) → AI coding (15) → GitOps delivery (16) → the Supabase RAG capstone (17) → a batch AI news digest with a real send (18). Full rationale in the <a href="../reference/skill-map.html">SDK decision guide</a>.</p>
 
 <div class="footer-nav">
   <div class="ask"><strong>Stuck or curious?</strong> Ask me anything about this lesson — I'm your teacher across sessions. Questions like "wait, how does that fit with my .NET job?" or "should I learn Microsoft Agent Framework instead?" are exactly right.</div>

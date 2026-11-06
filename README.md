@@ -1,12 +1,12 @@
 # AI Engineering — From First LLM Call to a Grounded RAG Product
 
-A 17-lesson, build-first course for experienced software engineers moving into AI engineering. It starts with a single chat-completion call and ends with a capstone: a Supabase + pgvector filing analyst whose answers are cited, validated and allowed to refuse.
+An 18-lesson, build-first course for experienced software engineers moving into AI engineering. It starts with a single chat-completion call, builds toward a Supabase + pgvector filing analyst whose answers are cited, validated and allowed to refuse, and closes with a batch pipeline that turns YouTube RSS and transcripts into a daily email.
 
 **Start here → [Lesson 1: What an AI Engineer Is in 2026](lessons/0001-ai-engineering-landscape-2026.html)**
 
 ---
 
-## The 17 lessons
+## The 18 lessons
 
 | # | Lesson | What it covers | Time |
 |---|--------|----------------|------|
@@ -27,6 +27,7 @@ A 17-lesson, build-first course for experienced software engineers moving into A
 | 15 | [AI Coding: The Tools, the Models, and the Loop That Ships](lessons/0015-ai-coding.html) | The nine-stage loop: repository rules, skills, TODO.md, gates and model choice. | ~55 min |
 | 16 | [Kubernetes GitOps: Jenkins Builds, Git Declares, Argo CD Reconciles](lessons/0016-kubernetes-gitops.html) | Jenkins owns CI; Git owns desired state; Argo CD is the only cluster writer. | ~55 min |
 | 17 | [Project: Supabase + RAG + AI Coding — A Grounded Filing Analyst](lessons/0017-project-supabase-rag-ai-coding.html) | Capstone: Supabase pgvector, hybrid retrieval, a grounded PydanticAI agent, a trust UI, and an honest scorecard. | ~60 min |
+| 18 | [Project: AI News Digest — YouTube First](lessons/0018-project-youtube-digest.html) | Batch aggregator: unstable RSS, transcript fallbacks and IP bans, SQLAlchemy models with Alembic, a bounded DeepSeek prompt from your own editorial brief, strict JSON, gated email, and the scheduler phase left honestly open. | ~60 min |
 
 
 ---
@@ -51,6 +52,7 @@ Every Python example is a `uv` project; every frontend uses `pnpm`. Run commands
 | [0014-ollama-local-rag](assets/examples/0014-ollama-local-rag/index.html) | Lesson 14 | Local LlamaIndex RAG |
 | [0015-document-copilot](assets/examples/0015-document-copilot/index.html) | Lesson 15 | Client brief and skeleton for the AI-coding workflow |
 | [0017-ai-coding-rag-supabase](assets/examples/0017-ai-coding-rag-supabase/index.html) | Lesson 17 | The capstone repository |
+| [0018-ai-coding-youtube-transcript-postgresql](assets/examples/0018-ai-coding-youtube-transcript-postgresql/index.html) | Lesson 18 | AI news digest, YouTube collector first: RSS, transcripts, PostgreSQL and email |
 
 ---
 
@@ -61,4 +63,5 @@ Every Python example is a `uv` project; every frontend uses `pnpm`. Run commands
 - **Node.js 20+** and `pnpm` for the frontend examples.
 - **DeepSeek API key** for the hosted-model lessons. Some lessons also use **Qwen/DashScope** embeddings.
 - **Ollama** for lesson 14; no API key is needed there.
-- **Docker** and a local Kubernetes cluster (`kind`) for lesson 16 if you run the rehearsal.
+- **Docker** for lesson 16's cluster rehearsal and lesson 18's local PostgreSQL container.
+- **SMTP credentials** for lesson 18's optional email send; a Gmail app password works, and the lab previews without sending by default.
