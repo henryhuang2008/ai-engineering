@@ -24,17 +24,33 @@ SMTP (`smtplib`), CLI parsing (`argparse`), and JSON handling (`json`) use the P
 
 ## Database
 
-- [ ] Define the database models based on the source and digest data we need to persist.
-- [ ] Add environment-based application configuration.
-- [ ] Configure the SQLAlchemy engine and session.
-- [ ] Set up Alembic under `app/database/alembic/`.
-- [ ] Add `app/database/migrate.py` and the initial schema migration.
+- [x] Define the database models based on the source and digest data we need to persist.
+- [x] Add environment-based application configuration.
+- [x] Configure the SQLAlchemy engine and session.
+- [x] Set up Alembic under `app/database/alembic/`.
+- [x] Add `app/database/migrate.py` and the initial schema migration.
 - [ ] Verify migrations can be applied to the local PostgreSQL database.
+
+After PostgreSQL is running, apply the schema from the project root:
+
+```shell
+uv run python -m app.database.migrate
+```
+
+Confirm the applied revision with `uv run alembic -c app/database/alembic.ini current`.
 
 ## YouTube ingestion
 
-- [ ] Implement channel upserts and store parsed feed articles.
-- [ ] Store articles and deduplicate them by video ID.
+Implementation plan:
+
+1. [ ] Confirm PostgreSQL is running and the initial Alembic migration is applied.
+2. [ ] Load and validate `app/data/channels.json` entries (`name`, `channel_id`).
+3. [ ] Upsert each configured channel into `sources` by `channel_id`; refresh its name and feed URL, mark it active, and mark removed channels inactive.
+4. [ ] Fetch each active channel's RSS feed and map its channel/video fields into the existing data models.
+5. [ ] Upsert articles by unique `video_id`; refresh RSS metadata without overwriting any transcript already stored for that video.
+6. [ ] Report feed/database failures explicitly, and verify one failed channel does not silently appear successful.
+7. [ ] Add tests for channel upserts, article inserts/updates, duplicate video IDs, inactive channels, and failed feeds.
+8. [ ] Run ingestion against local PostgreSQL and verify source/article row counts and representative field values.
 
 ## Transcript retrieval
 

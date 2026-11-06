@@ -43,7 +43,12 @@ Application code stays in `app/`. The database container stays in `docker/`. `ma
 │   ├── pipeline.py            # ingest, then digest, then email
 │   ├── database/
 │   │   ├── __init__.py
-│   │   ├── models.py          # Source, Article, Digest
+│   │   ├── models/
+│   │   │   ├── __init__.py
+│   │   │   ├── base.py
+│   │   │   ├── source.py
+│   │   │   ├── article.py
+│   │   │   └── digest.py
 │   │   ├── session.py         # engine and session
 │   │   ├── migrate.py         # upgrade head and revision check
 │   │   ├── alembic.ini
@@ -83,7 +88,7 @@ Application code stays in `app/`. The database container stays in `docker/`. `ma
 ## Layout
 
 - [app/config.py](../app/config.py) — env settings. `DATABASE_URL` points at the local Docker Postgres.
-- [app/database/models.py](../app/database/models.py) and [app/database/session.py](../app/database/session.py) — SQLAlchemy 2 models and the engine. Tables are created only by Alembic.
+- [app/database/models/](../app/database/models/) and [app/database/session.py](../app/database/session.py) — SQLAlchemy 2 models, one class per model file, and the engine. Tables are created only by Alembic.
 - [app/data/channels.json](../app/data/channels.json) — curated `{name, channel_id}` list. Edit this to change sources; the pipeline upserts it every run and marks channels removed from the file as inactive.
 - [app/ingest/youtube.py](../app/ingest/youtube.py) — `https://www.youtube.com/feeds/videos.xml?channel_id=...` via `feedparser`. Stores video id, title, URL, description, and `published_at`. Dedupes on video id.
 - [app/agent/service.py](../app/agent/service.py) — the agent service. It loads the system prompt, sends the article JSON to DeepSeek, parses the snippet JSON, and drops any URL that was not in the input set.
@@ -98,7 +103,7 @@ Application code stays in `app/`. The database container stays in `docker/`. `ma
 ## Data model
 
 - **sources** — `kind` (`youtube`), name, channel id (unique), feed URL, `active`.
-- **articles** — source FK, video id (unique), title, canonical URL, RSS description, `published_at`, `fetched_at`.
+- **articles** — source FK, video id (unique), title, canonical URL, RSS description, optional transcript text and caption metadata, `published_at`, `fetched_at`.
 - **digests** — UTC window, subject, text and HTML bodies, model name, article count, status (`sent` / `failed` / `empty`), recipient, `sent_at`. Unique on the UTC run date so running the command twice the same day does not mail again. A `--force` flag sends again on purpose.
 
 YouTube RSS returns the latest videos (about 15), not a full archive. Older items are stored, but only `published_at` within the last 24 hours is sent to the model. Descriptions are truncated before the prompt, and the batch is capped (about 40) so a backlog cannot blow the context window. If that window is empty, the job still emails one line that nothing new arrived, and records an `empty` digest.
