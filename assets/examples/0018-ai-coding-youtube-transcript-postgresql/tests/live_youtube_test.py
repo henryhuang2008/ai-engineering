@@ -8,6 +8,7 @@ from urllib.error import HTTPError
 
 from app.ingest.youtube import (
     YouTubeChannelFeed,
+    fetch_video_content,
     fetch_channel_feed,
     parse_channel_feed,
 )
@@ -67,13 +68,21 @@ class LatestYouTubeVideosTests(unittest.TestCase):
             f"\nMatching videos: {len(recent_videos)}"
         )
         for video in recent_videos:
+            content = fetch_video_content(video)
             print(
                 f"\n{video.title}"
                 f"\n  Published: {video.published_at.isoformat()}"
                 f"\n  Video ID:  {video.video_id}"
                 f"\n  URL:       {video.url}"
-                f"\n  Summary:   {video.description}"
+                f"\n  Content source: {content.source}"
+                f"\n  Content:   {content.text}"
             )
+            if content.transcript:
+                print(
+                    f"  Transcript language: {content.transcript.language} "
+                    f"({content.transcript.language_code})"
+                    f"\n  Generated captions: {content.transcript.is_generated}"
+                )
 
 
 if __name__ == "__main__":

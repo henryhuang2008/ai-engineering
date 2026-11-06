@@ -14,6 +14,39 @@ To run only the YouTube RSS tests:
 uv run python -m unittest discover -s tests -p test_youtube.py -v
 ```
 
+To run only the transcript tests:
+
+```shell
+uv run python -m unittest discover -s tests -p test_transcript.py -v
+```
+
+To fetch recent channel videos and print each video's available transcript (or RSS description fallback):
+
+```shell
+uv run python -m unittest discover -s tests -p live_youtube_test.py -v
+```
+
+The test uses `YOUTUBE_LOOKBACK_HOURS` as its look-back window (default: 180). For example, in Git Bash:
+
+```shell
+YOUTUBE_LOOKBACK_HOURS=24 uv run python -m unittest discover -s tests -p live_youtube_test.py -v
+```
+
+To fetch a transcript from a YouTube video URL:
+
+```shell
+uv run python -m app.ingest.transcript "https://www.youtube.com/watch?v=VIDEO_ID"
+```
+
+By default, the tool looks for English captions. Request preferred languages in order by repeating `--language`, and provide an RSS description to use when captions are unavailable:
+
+```shell
+uv run python -m app.ingest.transcript "https://youtu.be/VIDEO_ID" --language en --language ja
+uv run python -m app.ingest.transcript "https://youtu.be/VIDEO_ID" --description "RSS video description"
+```
+
+Caption retrieval can fail when a video has no available captions or YouTube blocks the request. In that case the command uses the supplied description; otherwise it reports that no content is available. `get_video_content` in `app.ingest.transcript` provides the same behavior to application code.
+
 If your terminal is currently in the `tests` directory, return to the project root first:
 
 ```shell

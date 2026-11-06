@@ -3,9 +3,16 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Iterable
 from urllib.request import Request, urlopen
 
 import feedparser
+
+from app.ingest.transcript import (
+    DEFAULT_LANGUAGES,
+    VideoContent,
+    get_video_content,
+)
 
 YOUTUBE_FEED_URL = "https://www.youtube.com/feeds/videos.xml"
 CHANNEL_ID_PATTERN = re.compile(r"UC[A-Za-z0-9_-]{22}")
@@ -25,6 +32,18 @@ class YouTubeChannelFeed:
     channel_id: str
     title: str
     videos: tuple[YouTubeVideo, ...]
+
+
+def fetch_video_content(
+    video: YouTubeVideo,
+    *,
+    languages: Iterable[str] = DEFAULT_LANGUAGES,
+) -> VideoContent:
+    return get_video_content(
+        video.url,
+        description=video.description,
+        languages=languages,
+    )
 
 
 def parse_channel_feed(channel_id: str, content: bytes) -> YouTubeChannelFeed:

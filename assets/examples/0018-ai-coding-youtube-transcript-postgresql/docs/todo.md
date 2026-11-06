@@ -12,6 +12,7 @@ Completed items are checked (`[x]`); open items are unchecked (`[ ]`).
   - `feedparser` for YouTube RSS feeds.
   - `openai` for the OpenAI-compatible DeepSeek API.
   - `python-dotenv` for loading local `.env` configuration.
+  - `youtube-transcript-api` for YouTube captions.
 
 SMTP (`smtplib`), CLI parsing (`argparse`), and JSON handling (`json`) use the Python standard library, so they do not need to be installed.
 
@@ -34,6 +35,12 @@ SMTP (`smtplib`), CLI parsing (`argparse`), and JSON handling (`json`) use the P
 
 - [ ] Implement channel upserts and store parsed feed articles.
 - [ ] Store articles and deduplicate them by video ID.
+
+## Transcript retrieval
+
+- [x] Fetch captions from a YouTube URL and fall back to the RSS description when unavailable.
+- [x] Connect RSS video records to transcript lookup and show the selected content for each video in the live test.
+- [ ] Integrate transcript content into the digest input and set an appropriate length limit.
 
 ## Digest generation and email
 
