@@ -73,7 +73,7 @@ Implementation plan:
 5. [x] Render a readable plain-text and HTML email, escaping article-provided text in HTML.
 6. [x] Configure SMTP settings and send the rendered email using STARTTLS; surface send failures rather than reporting success.
 7. [x] Persist each digest attempt and its outcome (`sent`, `failed`, or `empty`), including its UTC run date, window, content, model, recipient, and send time. Add a migration to replace the current unique-per-run-date constraint so intentional forced attempts can also be recorded.
-8. [x] Make the `run` command print a database-backed preview by default; require `--send-email` for delivery, skip if a digest was already sent for that UTC date, and let `--force` record another attempt. An empty or failed attempt must not be reported as sent.
+8. [x] Make `run` print a database-backed preview by default; `--raw` prints saved article records without DeepSeek, `--send-email` opts into delivery, and `--force` records another attempt. Skip delivery if already sent that UTC date; empty or failed attempts must not appear sent.
 9. [x] Test article-window selection, transcript/description input, response and URL validation, email rendering, mocked SMTP success/failure, persistence, duplicate-run prevention, and `--force`.
 10. [x] Document configuration and manual run instructions in `README.md`.
 11. [ ] After applying migrations and configuring credentials, verify a successful local email delivery and the saved digest record.

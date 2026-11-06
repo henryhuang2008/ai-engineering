@@ -1,12 +1,13 @@
 import unittest
 from datetime import UTC, datetime
+import json
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from app.agent.service import DigestEntry, GeneratedDigest
 from app.database.models import Article, Base, Digest, Source
-from app.digest.preview import preview_daily_digest
+from app.digest.preview import preview_daily_digest, saved_articles_json
 
 
 class DigestPreviewTests(unittest.TestCase):
@@ -89,6 +90,31 @@ class DigestPreviewTests(unittest.TestCase):
         self.assertEqual(preview.status, "empty")
         self.assertIn("No videos", preview.text_body)
         self.assertEqual(self.session.scalars(select(Digest)).all(), [])
+
+    def test_raw_json_contains_saved_fields_without_generating_content(self) -> None:
+        article = self.session.scalar(select(Article))
+        article.transcript = "Transcript saved in database."
+        article.transcript_language = "en"
+        article.transcript_is_generated = False
+        self.session.commit()
+
+        records = json.loads(saved_articles_json(self.session, now=self.now))
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["title"], "Saved video")
+        self.assertEqual(records[0]["description"], "Saved description")
+        self.assertEqual(records[0]["transcript"], "Transcript saved in database.")
+        self.assertEqual(records[0]["transcript_language"], "en")
+        self.assertFalse(records[0]["transcript_is_generated"])
+        self.assertEqual(records[0]["source_name"], "Example channel")
+        self.assertEqual(self.session.scalars(select(Digest)).all(), [])
+
+    def test_raw_json_is_empty_array_when_no_saved_article_in_window(self) -> None:
+        article = self.session.scalar(select(Article))
+        article.published_at = datetime(2026, 11, 4, tzinfo=UTC)
+        self.session.commit()
+
+        self.assertEqual(saved_articles_json(self.session, now=self.now), "[]")
 
 
 if __name__ == "__main__":

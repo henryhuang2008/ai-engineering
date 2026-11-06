@@ -82,7 +82,13 @@ By default, `run` reads already-ingested records from PostgreSQL, generates a pr
 uv run python main.py run
 ```
 
-Generating the preview still calls DeepSeek, so the model response time depends on the API. To refresh saved articles first, run ingestion separately with `uv run python main.py seed`.
+To print the saved article fields as JSON without calling DeepSeek, use:
+
+```shell
+uv run python main.py run --raw
+```
+
+Raw output includes saved article metadata, description, transcript fields, and source name for records published in the last 24 hours. An empty result prints `[]`. To refresh saved articles first, run ingestion separately with `uv run python main.py seed`.
 
 To explicitly send the digest instead of printing a preview, add `--send-email`. A successful send is recorded in PostgreSQL. Re-running on the same UTC date skips after a successful send; `--force` records and sends another attempt:
 

@@ -59,6 +59,7 @@ The workflow is manually invoked. It does not add a scheduler.
 
 - Add the `run` command and optional `--force` flag; keep `main.py` as a thin entrypoint.
 - Make `run` preview database records by default; require an explicit `--send-email` flag for SMTP delivery. Keep feed ingestion separate in `seed`.
+- Provide `run --raw` to print saved database article fields as JSON without calling DeepSeek, sending email, or recording a digest attempt.
 - Keep migration and ingestion behavior available through the CLI as planned.
 - Add unit tests for UTC window boundaries, missing publication times, empty input, input limits, response validation, URL allowlisting, HTML escaping, SMTP success/failure, persistence, duplicate-run skipping, failed retries, and forced attempts.
 - Document configuration and manual commands in `README.md`.
