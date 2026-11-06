@@ -17,8 +17,9 @@ SMTP (`smtplib`), CLI parsing (`argparse`), and JSON handling (`json`) use the P
 
 ## YouTube RSS discovery
 
-- [ ] Add the curated channel list at `app/data/channels.json`.
-- [ ] Fetch and parse YouTube RSS feeds; inspect the available fields and sample entries.
+- [x] Add Dave Ebbelaar to `app/data/channels.json` as the first channel to follow.
+- [x] Implement RSS fetching and parsing for channel metadata and video ID, title, URL, description, and publication time.
+- [ ] Inspect a live feed and confirm the parsed fields against real entries.
 
 ## Database
 

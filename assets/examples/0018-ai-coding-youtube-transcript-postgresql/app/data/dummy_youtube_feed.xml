@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom"
+      xmlns:yt="http://www.youtube.com/xml/schemas/2015"
+      xmlns:media="http://search.yahoo.com/mrss/">
+  <title>Sample YouTube Channel (Dummy Data)</title>
+  <yt:channelId>n8ujwUInbJkBhffxqAPBVQ</yt:channelId>
+  <entry>
+    <id>yt:video:dummy-video-001</id>
+    <yt:videoId>dummy-video-001</yt:videoId>
+    <title>Sample video for offline testing</title>
+    <link rel="alternate" href="https://www.youtube.com/watch?v=dummy-video-001"/>
+    <published>2026-11-06T09:00:00+00:00</published>
+    <media:group>
+      <media:description>This is dummy RSS data for testing only.</media:description>
+    </media:group>
+  </entry>
+  <entry>
+    <id>yt:video:dummy-video-002</id>
+    <yt:videoId>dummy-video-002</yt:videoId>
+    <title>Another sample video for offline testing</title>
+    <link rel="alternate" href="https://www.youtube.com/watch?v=dummy-video-002"/>
+    <published>2026-11-05T09:00:00+00:00</published>
+    <media:group>
+      <media:description>Another dummy RSS entry; not a real channel upload.</media:description>
+    </media:group>
+  </entry>
+</feed>
