@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Example 0019 - Memory in agents: STM and LTM with LangGraph</title>
+    <link rel="stylesheet" href="../../course.css" />
+  </head>
+  <body>
+    <article class="page">
+      <p class="meta">
+        Example 0019 · <a href="README.md">README</a> ·
+        <a href="docs/article-notes.md">Article notes</a>
+      </p>
+
+      <h1>Memory in agents — short-term and long-term, rebuilt</h1>
+
+      <p class="lede">
+        A runnable implementation of the article's architecture: a checkpointer
+        for thread-scoped short-term memory, a namespace store for cross-thread
+        long-term memory, trimming and summarization, and one combined agent.
+        The structure is the article's. The code paths that do not run as
+        written are corrected, and every correction is listed below.
+      </p>
+
+      <div class="callout win">
+        <span class="label">The one-line model</span>
+        <strong>STM is the thread. LTM is the user.</strong> A checkpointer
+        stores everything that happened in one conversation; a store keeps facts
+        that survive the conversation. Mixing the two scopes is how agents
+        forget the right things and remember the wrong ones.
+      </div>
+
+      <h2>The two memories</h2>
+      <table>
+        <thead>
+          <tr>
+            <th></th>
+            <th>Short-term</th>
+            <th>Long-term</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>scope</td>
+            <td>one <code>thread_id</code></td>
+            <td>one <code>user_id</code>, across threads</td>
+          </tr>
+          <tr>
+            <td>mechanism</td>
+            <td><code>InMemorySaver</code> / <code>PostgresSaver</code></td>
+            <td><code>InMemoryStore</code> / <code>PostgresStore</code></td>
+          </tr>
+          <tr>
+            <td>holds</td>
+            <td>messages and state keys</td>
+            <td>facts extracted from turns</td>
+          </tr>
+          <tr>
+            <td>bounded by</td>
+            <td>trimming and summarization</td>
+            <td>namespace and recall limit</td>
+          </tr>
+          <tr>
+            <td>survives restart</td>
+            <td>only with Postgres</td>
+            <td>only with Postgres</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>What is in the tree</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>path</th>
+            <th>role</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>
+              <a href="app/stm.py"><code>app/stm.py</code></a>
+            </td>
+            <td>message graph plus checkpointer; thread isolation</td>
+          </tr>
+          <tr>
+            <td>
+              <a href="app/history.py"><code>app/history.py</code></a>
+            </td>
+            <td>
+              trim, summarize with <code>RemoveMessage</code>, delete, summary
+              key
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <a href="app/ltm.py"><code>app/ltm.py</code></a>
+            </td>
+            <td>namespace store, fact extraction, dedupe, recall, forget</td>
+          </tr>
+          <tr>
+            <td>
+              <a href="app/graph.py"><code>app/graph.py</code></a>
+            </td>
+            <td>compress → retrieve → agent → extract</td>
+          </tr>
+          <tr>
+            <td>
+              <a href="app/postgres.py"><code>app/postgres.py</code></a>
+            </td>
+            <td>
+              <code>PostgresSaver</code> + <code>PostgresStore</code> over one
+              pool
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <a href="app/cli.py"><code>app/cli.py</code></a>
+            </td>
+            <td>
+              <code>demo</code> · <code>facts</code> · <code>chat</code> ·
+              <code>forget</code>
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <a href="tests/"><code>tests/</code></a>
+            </td>
+            <td>19 tests, no network, no database</td>
+          </tr>
+          <tr>
+            <td>
+              <a href="docs/article-notes.md"
+                ><code>docs/article-notes.md</code></a
+              >
+            </td>
+            <td>section-by-section notes and exact deviations</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Run it</h2>
+      <pre><code>cp .env.example .env      # set OPENAI_API_KEY
+uv sync
+
+uv run python main.py demo        # STM: two threads, separate state
+uv run python main.py facts       # LTM: same user, new thread
+uv run python main.py chat        # both, interactive
+uv run pytest -q</code></pre>
+
+      <p>
+        <code>demo</code> needs no database. <code>facts</code> and
+        <code>chat</code> use in-memory stores unless you pass
+        <code>--postgres</code> (before the subcommand) with
+        <code>DATABASE_URL</code> set to the pgvector container in
+        <code>docker/</code>.
+      </p>
+
+      <h2>What changed from the article</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>article</th>
+            <th>here</th>
+            <th>why</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>MessagesState</code> includes <code>user_input</code></td>
+            <td>only <code>messages</code></td>
+            <td>
+              Current LangGraph defines just the message list; extra keys need a
+              subclass.
+            </td>
+          </tr>
+          <tr>
+            <td>Nodes return <code>{"context": ...}</code></td>
+            <td><code>memory_context</code> is declared</td>
+            <td>
+              Undeclared keys are silently dropped, so the retrieval node has no
+              effect.
+            </td>
+          </tr>
+          <tr>
+            <td><code>store.search(query=...)</code> on a plain store</td>
+            <td>query passed only when an index exists</td>
+            <td>
+              Without embeddings the query is ignored and <code>score</code> is
+              <code>None</code>.
+            </td>
+          </tr>
+          <tr>
+            <td>delete helper uses <code>msgs[-keep_count:]</code></td>
+            <td><code>delete_messages(ids)</code></td>
+            <td>
+              The original deletes the newest messages and references an
+              undefined <code>msg</code>.
+            </td>
+          </tr>
+          <tr>
+            <td><code>[summary] + recent</code> appended to messages</td>
+            <td>summary in its own state key</td>
+            <td>
+              <code>add_messages</code> keeps existing ids, so the append
+              duplicates the recent window.
+            </td>
+          </tr>
+          <tr>
+            <td>two nodes re-read the store</td>
+            <td>
+              one <code>retrieve</code> node, <code>compile(store=...)</code>
+            </td>
+            <td>Duplication hides which node owns retrieval.</td>
+          </tr>
+          <tr>
+            <td>random UUID per fact</td>
+            <td>hash of normalized text</td>
+            <td>
+              Re-extracting the same fact should overwrite, not duplicate.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>What the tests prove</h2>
+      <ul>
+        <li>
+          two threads keep separate histories, and a returning thread reloads
+          its own;
+        </li>
+        <li>trimming keeps the recent window and starts on a human message;</li>
+        <li>
+          summarization removes old messages instead of appending duplicates;
+        </li>
+        <li>
+          fact extraction survives a non-JSON reply and caps count and length;
+        </li>
+        <li>storing the same fact twice writes one row;</li>
+        <li>facts do not cross user namespaces;</li>
+        <li>
+          <code>memory_context</code> is declared state, not a dropped key;
+        </li>
+        <li>
+          <code>search(query=...)</code> without an index returns
+          <code>score=None</code>.
+        </li>
+      </ul>
+
+      <h2>Known limits</h2>
+      <ul>
+        <li>
+          The PostgreSQL path needs Docker and pgvector; no daemon was available
+          here, so it remains a documented gate.
+        </li>
+        <li>
+          Verified live against DeepSeek <code>deepseek-chat</code> and Qwen
+          <code>text-embedding-v4</code>: thread isolation, fact extraction,
+          cross-thread recall and ranked search with real scores. One run, not a
+          benchmark.
+        </li>
+        <li>
+          No eval for "is this fact worth remembering", no TTL, no conflict
+          resolution between contradictory facts.
+        </li>
+        <li>
+          DeepSeek does not serve embeddings; semantic recall needs a second
+          provider (Qwen here).
+        </li>
+      </ul>
+
+      <p>
+        The companion lesson is
+        <a href="../../../lessons/0019-memory-agents-langgraph.html"
+          >Lesson 19 — Memory That Survives the Conversation</a
+        >. For the graph mechanics underneath, read
+        <a href="../../../lessons/0010-langgraph.html">Lesson 10</a>; for the
+        retrieval contract,
+        <a href="../../../lessons/0007-rag-service.html">Lesson 7</a>.
+      </p>
+
+      <div class="footer-nav">
+        <div class="ask">
+          <strong>Before you store a fact:</strong> decide its namespace, its
+          key, its expiry, and how it gets deleted. A memory without a delete
+          path is a privacy incident waiting for a support ticket.
+        </div>
+        <div class="links">
+          <a href="README.md">README</a>
+          <a href="docs/article-notes.md">Article notes</a>
+          <a href="app/ltm.py">Long-term memory</a>
+          <a href="../../../lessons/0019-memory-agents-langgraph.html"
+            >Lesson 19</a
+          >
+        </div>
+      </div>
+    </article>
+  </body>
+</html>

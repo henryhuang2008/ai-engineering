@@ -195,7 +195,7 @@
 
 User challenged "Where is real LLM or model in the example?" — answered honestly (nowhere; lab was deterministic-on-purpose) and they chose the **Real router classifier** scope: the classifier slot filled by an actual model call, NOT the full generate+judge loop.
 
-- router.py: added sk_json (stdlib urllib -> OpenAI-compatible /chat/completions, env OPENAI_API_KEY / OPENAI_BASE_URL / ROUTER_MODEL, default gpt-4o-mini), parse_score (strict `{"score": 0..1}` contract; tolerates fences/prose, rejects out-of-range/garbage/wrong-key), model_score,
+- router.py: added ask_json (stdlib urllib -> OpenAI-compatible /chat/completions, env OPENAI_API_KEY / OPENAI_BASE_URL / ROUTER_MODEL, default gpt-4o-mini), parse_score (strict `{"score": 0..1}` contract; tolerates fences/prose, rejects out-of-range/garbage/wrong-key), model_score,
   eal_scores (per-query try/except -> lexical fallback, **recorded never silent**), stage_real (stage 8, agreement table model-vs-lexical at the floor pick alpha=0.40, no-key -> message + exit 1). main(argv) hooks stage 8 only under --real, so the default transcript stays byte-identical (lesson quotes stay valid).
 - Four verified paths: (1) default run exit 0 unchanged; (2) --real no key -> exit 1; (3) --real against local mock OpenAI server on 127.0.0.1:8899 -> 20 calls, agreement 19/20, sole DISAGREE q18 "MODEL SEES IT" (lexical 0.30 weak vs mock 0.62 strong); (4) dead port -> all 20 URLError recorded fallbacks, exit 0. Mock was temp-only, not shipped (repo has no key; api.openai.com unreachable here).
 - evals.py: +4 seam tests (parse accept/reject shapes, fallback recorded via injected flaky fn, stage_real(has_key=False) -> 1) => 21/21 PASS (was 17/17).
@@ -878,4 +878,24 @@ User pushback: "we have made things complicated. A developer chose a few LLMs (C
 - Corrected an existing error: the lesson said the digest prompt could be overridden with `DIGEST_SYSTEM_PROMPT_PATH`. That variable does not exist in the code; `load_system_prompt()` takes a path argument with a fixed default. The text now says so.
 - Renamed the lesson and example-page labels to "AI News Digest" (YouTube first); file slugs unchanged so no links break. Updated README, skill map, L1, L16 and L17 to match.
 - Quiz grew from 7 to 9 questions (custom-insights location, scheduler-overlap failure). Validation pending re-run.
-- Added ssets/images/youtube-digest-workflow.svg (two lanes: trigger/ingest and digest/send, with the planned cron trigger dashed and the failure contract in a callout) and embedded it in Part 1 with a caption. Removed the earlier unused youtube-digest-pipeline.svg.
+- Added assets/images/youtube-digest-workflow.svg (two lanes: trigger/ingest and digest/send, with the planned cron trigger dashed and the failure contract in a callout) and embedded it in Part 1 with a caption. Removed the earlier unused youtube-digest-pipeline.svg.
+
+## 2026-11-06 (61) - Lesson 19: memory in agents (STM + LTM with LangGraph)
+
+- User supplied "Memory in Agents" guide as a text file; Medium and every mirror/proxy were unreachable from this environment, so the lesson was built from the pasted copy.
+- Added `assets/examples/0019-memory-agents-langgraph`: LangGraph 0.6 project with `InMemorySaver`/`PostgresSaver` short-term memory, `InMemoryStore`/`PostgresStore` long-term memory, trimming, summarization via `RemoveMessage`, hash-keyed facts, a combined `compress -> retrieve -> agent -> extract` graph, and 19 pytest tests.
+- Corrected the article's code rather than reproducing it, and documented each deviation: `MessagesState` has only `messages` (not `user_input`); undeclared `context` keys are silently dropped; `search(query=...)` without an embedding index returns `score=None`; the delete helper removes the newest messages and references an undefined `msg`; `[summary] + recent` duplicates messages because `add_messages` merges by id; the combined graph compiled without `store=` and re-read the store in two nodes; facts used random UUIDs and had no delete path.
+- Added `lessons/0019-memory-agents-langgraph.html` (12 parts, 7-question quiz) around the two scopes: thread-scoped checkpointing vs user-scoped store, bounding the prompt, semantic-search caveats, fact curation, and the combined graph.
+- Course wiring: L18 meta is "of 19", its What's next and footer point at L19; L17 meta is "of 19"; README is 19 lessons with the new row and example; L1's milestone chain and win sentence mention it; `skill-map.html` gains a closing note after the ladder; `boundary-map.html` moves to nineteen lessons, adds a **Memory scope** row, extends the test list, and points its companion link at L19.
+- Honest gates kept: PostgreSQL path not run (no Docker daemon), no live model run (no provider key), semantic recall optional because DeepSeek serves no embeddings.
+- Validation: 19 pytest tests pass; `check_links.py` -> 36 pages, 19 lessons link forward; `check_uv.py` -> 15 uv projects; `validate_html.py` -> clean; L19 quiz 7 questions / 4 options / valid indices; lessons and README LF no BOM, example page CRLF no BOM.
+
+## 2026-11-06 (62) - Lesson 19 verified live with DeepSeek + Qwen
+
+- User confirmed DeepSeek and DashScope keys are already in the local environment; wired them into the example's gitignored `.env` and ran the paths that were previously marked unverified.
+- Embeddings: added `app/embeddings.py`, a small `Embeddings` adapter using the OpenAI SDK directly (raw strings, explicit `dimensions`), because LangChain's `OpenAIEmbeddings` tokenises locally by default and DashScope rejects that. Model `text-embedding-v4`, 1536 dims.
+- Verified: ranked search returned scores (0.5021 vs 0.2899 for the matching vs non-matching fact); `main.py facts` extracted three facts on thread A and recalled them on a new thread for the same user; `main.py demo` kept Alice and Bob in separate threads with the live model.
+- Two portability fixes found by the live run: `main.py` now reconfigures stdout/stderr to UTF-8 (the Windows console raised on an emoji in a model reply), and the demo's second thread now introduces Bob rather than reusing Alice's line.
+- Added `numpy` to the example so `InMemoryStore` uses its vectorised path instead of the pure-Python fallback.
+- Updated the claims that the run changed: README known limits, the example page, and the lesson's scorecard now say semantic recall and the live model run are **verified**, while the PostgreSQL path stays **not verified** (no Docker daemon).
+- Validation: 19 pytest tests pass; `check_links.py` -> 36 pages, 19 lessons; `check_uv.py` -> 15 uv projects; `validate_html.py` -> clean; lessons/README LF no BOM, example page CRLF no BOM.

@@ -1,0 +1,758 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>
+      Lesson 19 — Memory That Survives the Conversation — Short-Term, Long-Term,
+      and the Scope Mistake
+    </title>
+    <link rel="stylesheet" href="../assets/course.css" />
+  </head>
+  <body>
+    <article class="page">
+      <p class="meta">
+        Lesson 19 of 19 · ~50 min · Prereq:
+        <a href="0010-langgraph.html">Lesson 10</a> +
+        <a href="0007-rag-service.html">Lesson 7</a> ·
+        <a href="../assets/examples/0019-memory-agents-langgraph/index.html"
+          >Example repo →</a
+        >
+        · <a href="../reference/skill-map.html">Skill Map →</a>
+      </p>
+
+      <h1>
+        Memory That Survives the Conversation — Short-Term, Long-Term, and the
+        Scope Mistake
+      </h1>
+
+      <p class="lede">
+        “Memory” is two different systems wearing one word. Short-term memory is
+        the conversation: a message list tied to a thread, bounded by tokens,
+        forgotten when the thread ends unless something checkpoints it.
+        Long-term memory is the user: facts in a store, retrieved by meaning,
+        shared across every thread. Build the first and call it the second — or
+        the reverse — and the agent fails in ways that look like model problems.
+        This lesson takes a popular LangGraph memory guide, runs its
+        architecture, and fixes the five places where its code does not do what
+        its prose says.
+      </p>
+
+      <div class="callout win">
+        <span class="label">Your win this lesson</span>
+        You'll be able to separate thread scope from user scope, wire a
+        checkpointer and a store into one graph, bound a growing conversation
+        with trimming and summarization, write long-term facts idempotently and
+        delete them on request, and tell the difference between a semantic
+        search and a prefix listing that happens to accept a query.
+      </div>
+
+      <h2>Part 1 — Two memories, two scopes</h2>
+
+      <p>
+        The article's central distinction is correct and worth stating before
+        any code:
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th></th>
+            <th>Short-term memory</th>
+            <th>Long-term memory</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>scope</td>
+            <td>one <code>thread_id</code></td>
+            <td>one <code>user_id</code>, across threads</td>
+          </tr>
+          <tr>
+            <td>mechanism</td>
+            <td>checkpointer</td>
+            <td>store with namespaces</td>
+          </tr>
+          <tr>
+            <td>holds</td>
+            <td>messages, intermediate state</td>
+            <td>facts, preferences, history</td>
+          </tr>
+          <tr>
+            <td>retrieval</td>
+            <td>load the thread</td>
+            <td>lookup or similarity search</td>
+          </tr>
+          <tr>
+            <td>growth</td>
+            <td>unbounded unless managed</td>
+            <td>unbounded by design; curated</td>
+          </tr>
+          <tr>
+            <td>lifetime</td>
+            <td>the conversation</td>
+            <td>until deleted</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        The failure mode is a scope mistake. Store the conversation in the user
+        scope and every thread inherits every other thread's small talk. Store
+        facts in the thread scope and the agent forgets your name the moment you
+        open a new chat. The two systems need different identifiers, different
+        lifetimes and different deletion rules.
+      </p>
+
+      <p>
+        Everything below is implemented in
+        <a href="../assets/examples/0019-memory-agents-langgraph/index.html"
+          >Example 0019</a
+        >, The
+        <a
+          href="../assets/examples/0019-memory-agents-langgraph/docs/article-notes.md"
+          >section-by-section notes</a
+        >
+        list every deviation.
+      </p>
+
+      <h2>Part 2 — Short-term memory is the checkpointer</h2>
+
+      <p>
+        LangGraph does not give you a memory object for conversations. It gives
+        you a checkpointer: a component that saves the graph state after every
+        step and reloads it for a given thread. The identifier is not the user;
+        it is the conversation.
+      </p>
+
+      <pre><code>config = {"configurable": {"thread_id": "thread-1"}}
+
+builder = StateGraph(MessagesState)
+builder.add_node("agent", agent)
+builder.add_edge(START, "agent")
+builder.add_edge("agent", END)
+
+graph = builder.compile(checkpointer=InMemorySaver())</code></pre>
+
+      <p>
+        <code>MessagesState</code> is smaller than the article claims. It
+        contains one field, <code>messages</code>, annotated with the
+        <code>add_messages</code> reducer:
+      </p>
+
+      <pre><code>class MessagesState(TypedDict):
+    messages: Annotated[list[AnyMessage], add_messages]</code></pre>
+
+      <p>
+        The article's comment says it also includes
+        <code>user_input: Optional[str]</code>. It does not. That matters,
+        because the same article later adds <code>user_id</code> by subclassing
+        — which is exactly the right move, and the earlier comment hides it.
+      </p>
+
+      <p>
+        The reducer is the other half. <code>add_messages</code> appends new
+        messages, updates existing ones by id, and honours
+        <code>RemoveMessage</code> deletions. You never manually rebuild the
+        list.
+      </p>
+
+      <h2>Part 3 — Thread isolation, demonstrated</h2>
+
+      <p>
+        The article's Alice and Bob demo is a good test because it fails loudly
+        if the scope leaks. Two threads, same graph, nothing shared:
+      </p>
+
+      <pre><code>send(graph, "thread-1", "Hi! My name is Alice")
+send(graph, "thread-2", "Hi! My name is Bob")
+send(graph, "thread-1", "What's my name?")   # Alice, not Bob</code></pre>
+
+      <p>
+        Under the hood, the second call on <code>thread-1</code> reloads the
+        first two messages plus the new one. The example asserts the exact
+        counts: the model sees 1 message on the first call, 3 on the second, 5
+        on the third. If those numbers drift, the checkpointer is not doing its
+        job.
+      </p>
+
+      <div class="callout">
+        <span class="label">What the checkpointer does not do</span>
+        It does not summarise, trim or rank. It faithfully stores a growing
+        list. That is the next problem.
+      </div>
+
+      <h2>Part 4 — Persistence: the same contract, a different backend</h2>
+
+      <p>
+        <code>InMemorySaver</code> loses everything when the process exits.
+        <code>PostgresSaver</code> keeps it, and the graph code does not change
+        — only the checkpointer does:
+      </p>
+
+      <pre><code>pool = ConnectionPool(conninfo=DATABASE_URL, kwargs={"autocommit": True})
+checkpointer = PostgresSaver(conn=pool)
+checkpointer.setup()          # creates its tables once
+graph = builder.compile(checkpointer=checkpointer)</code></pre>
+
+      <p>
+        Three details decide whether this works in production. The pool is
+        shared, not created per request. <code>setup()</code> runs once, not on
+        every call. And the <code>thread_id</code> must be stable across
+        restarts — if your web app generates a new thread id per session,
+        persistence buys you nothing.
+      </p>
+
+      <p>
+        <strong>Gate:</strong> start the pgvector container in
+        <code>docker/</code>, run the same thread id from a
+        <em>new process</em>, and confirm the history is there. The example
+        marks this unverified: no Docker daemon was available in this build, so
+        the PostgreSQL path is a documented gate, not a claim.
+      </p>
+
+      <h2>Part 5 — Bounding short-term memory</h2>
+
+      <p>
+        A checkpointer stores everything. The prompt cannot. Three strategies,
+        and the article's code gets two of them wrong.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>strategy</th>
+            <th>what it costs</th>
+            <th>when to use</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>trim to a token budget</td>
+            <td>loses old context entirely</td>
+            <td>fast, predictable, most chats</td>
+          </tr>
+          <tr>
+            <td>delete by id</td>
+            <td>fine-grained; easy to over-delete</td>
+            <td>removing noise or a specific turn</td>
+          </tr>
+          <tr>
+            <td>summarize the old window</td>
+            <td>one extra model call; summary loses nuance</td>
+            <td>long, quality-critical conversations</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>Trimming is the safest default:</p>
+
+      <pre><code>trimmed = trim_messages(
+    messages,
+    strategy="last",
+    token_counter=count_tokens_approximately,
+    max_tokens=MAX_CONTEXT_TOKENS,
+    start_on="human",
+)</code></pre>
+
+      <p>
+        The article's delete helper is wrong twice. It computes
+        <code>to_remove = msgs[-keep_count:]</code>, which selects the
+        <em>newest</em> messages, and then returns
+        <code>{"messages": msg}</code>, where <code>msg</code> is undefined. The
+        import is wrong as well: <code>RemoveMessage</code> lives in
+        <code>langchain_core.messages</code>, not
+        <code>langchain.messages</code>. The corrected form is explicit:
+      </p>
+
+      <pre><code>def delete_messages(message_ids):
+    return [RemoveMessage(id=message_id) for message_id in message_ids]</code></pre>
+
+      <p>
+        Summarization has a subtler bug. The article returns
+        <code>{"messages": [summary] + recent}</code> from a node.
+        <code>add_messages</code> does not replace the list — it merges.
+        Messages that already exist are updated in place, and the summary lands
+        wherever the merge puts it, which is not the front. The recent window
+        gets re-added as duplicates. The fix is to remove the old messages and
+        keep the summary in its own state key:
+      </p>
+
+      <pre><code>def summarize_history(messages, model, *, keep_last=6, threshold_tokens=3000):
+    if count_tokens_approximately(messages) &lt; threshold_tokens:
+        return None
+    old, recent = messages[:-keep_last], messages[-keep_last:]
+    transcript = "\n".join(f"{m.type}: {m.content}" for m in old)
+    summary = model.invoke([{"role": "user", "content": SUMMARY_PROMPT + transcript}])
+    removals = [RemoveMessage(id=m.id) for m in old if m.id]
+    return str(summary.content), removals</code></pre>
+
+      <p>
+        Then the agent builds its prompt as
+        <em>system + summary + trimmed window</em>. The checkpointer still holds
+        the full thread; only the prompt is compressed. That separation — stored
+        vs visible — is the point.
+      </p>
+
+      <h2>Part 6 — Long-term memory is a store, not a transcript</h2>
+
+      <p>
+        A store is a key-value system with namespaces. The namespace is how you
+        scope by user, and the key is how you make writes idempotent.
+      </p>
+
+      <pre><code>namespace = (user_id, "facts")
+
+store.put(namespace, key, {"fact": "Works as a data scientist", "thread_id": "t1"})
+store.get(namespace, key)
+store.search(namespace, limit=5)
+store.delete(namespace, key)</code></pre>
+
+      <p>Two design choices matter more than the API:</p>
+
+      <ol>
+        <li>
+          <strong>The key.</strong> The article uses
+          <code>str(uuid.uuid4())</code> for every extracted fact. Extract the
+          same fact twice and you store it twice. Hashing the normalised text
+          makes the write idempotent:
+          <code>sha256("works as a data scientist")[:16]</code> is the same key
+          forever.
+        </li>
+        <li>
+          <strong>The delete path.</strong> Personal facts need an erase route
+          from day one. The example ships <code>forget_user</code> and a CLI
+          command; the article has no deletion story at all.
+        </li>
+      </ol>
+
+      <h2>Part 7 — Semantic search is a property of the index</h2>
+
+      <p>
+        This is the most expensive misunderstanding in the article. It creates a
+        plain <code>InMemoryStore</code>, calls
+        <code>store.search(query=...)</code>, and describes the result as
+        semantic retrieval. Without an embedding index, LangGraph accepts the
+        query and ignores it. Every item comes back with
+        <code>score=None</code>.
+      </p>
+
+      <pre><code>&gt;&gt;&gt; store.search(("user", "facts"), query="what is their job", limit=5)
+[Item(..., score=None)]</code></pre>
+
+      <p>
+        That is not a bug; it is the documented contract. To get ranking, build
+        the store with an index and an embedder:
+      </p>
+
+      <pre><code>store = InMemoryStore(index={
+    "dims": 1536,
+    "embed": embeddings,
+    "fields": ["fact"],
+})</code></pre>
+
+      <p>
+        Which raises the practical problem the article never mentions: the model
+        you use for chat may not serve embeddings. DeepSeek does not. A working
+        setup needs a second provider, a second key and a dimension that matches
+        the model. The example makes this optional and reports which mode it is
+        in rather than pretending.
+      </p>
+
+      <h2>Part 8 — Writing memory: extract, dedupe, delete</h2>
+
+      <p>
+        Long-term memory is not a log. It is a curated set of facts, which means
+        three operations, not one.
+      </p>
+
+      <p>
+        <strong>Extract.</strong> Ask for a JSON array of durable facts and
+        parse it defensively — models wrap JSON in prose. Cap the number and the
+        length. The example allows three facts per turn and 240 characters each.
+      </p>
+
+      <p>
+        <strong>Dedupe.</strong> Normalise case and whitespace, hash the text,
+        use the hash as the key. A repeat becomes a no-op instead of a
+        duplicate.
+      </p>
+
+      <p>
+        <strong>Delete.</strong> Namespace-scoped deletion, exposed to the
+        operator. This is the difference between a demo and something you can
+        run for real people.
+      </p>
+
+      <p>
+        What the example does <em>not</em> do, and the lesson does not pretend:
+        no confidence score, no expiry, no conflict resolution when the user
+        changes jobs. Those are the next three items on its list.
+      </p>
+
+      <h2>Part 9 — The combined graph</h2>
+
+      <p>
+        The article's final finance agent wires retrieval, generation and
+        extraction into one graph. The shape is right and the wiring is not.
+      </p>
+
+      <pre><code>START → compress → retrieve → agent → extract → END</code></pre>
+
+      <ul>
+        <li>
+          <strong>compress</strong> summarises the old window and stores the
+          summary in state.
+        </li>
+        <li>
+          <strong>retrieve</strong> reads the user's facts and writes
+          <code>memory_context</code>.
+        </li>
+        <li>
+          <strong>agent</strong> builds
+          <em>system + summary + trimmed messages</em> and calls the model.
+        </li>
+        <li>
+          <strong>extract</strong> pulls new facts from the human turn and
+          writes them to the store.
+        </li>
+      </ul>
+
+      <p>
+        Two corrections are structural. First, <code>memory_context</code> must
+        be declared on the state class — the article returns an undeclared
+        <code>context</code> key, which LangGraph silently drops, so its
+        retrieval node has no effect and the agent re-reads the store itself.
+        Second, the graph should be compiled with <code>store=store</code>, not
+        close over a module global; the dependency should be visible at the
+        edge.
+      </p>
+
+      <pre><code>class MemoryState(MessagesState):
+    user_id: str
+    memory_context: str
+    summary: str
+
+graph = builder.compile(checkpointer=checkpointer, store=store)</code></pre>
+
+      <p>
+        Notice what stays out of the store: the conversation. The store holds
+        facts; the checkpointer holds the thread. The graph reads both and
+        writes each to the right one.
+      </p>
+
+      <h2>Part 10 — What breaks at scale</h2>
+
+      <p>
+        Memory is the part of an agent that degrades quietly. Four failure modes
+        worth naming:
+      </p>
+
+      <ol>
+        <li>
+          <strong>Token growth</strong> — the stored thread is unbounded. Trim
+          what the model sees, compress what you keep, and measure the prompt
+          size, not the message count.
+        </li>
+        <li>
+          <strong>Cost</strong> — summarization adds a model call per
+          compression. At scale that is a real line item; batch it or run it on
+          a cheap model.
+        </li>
+        <li>
+          <strong>Bad facts</strong> — extraction asks a model what is worth
+          remembering. It will save preferences as facts and guesses as history.
+          There is no eval in the example for fact quality, and that is the
+          honest gap.
+        </li>
+        <li>
+          <strong>Privacy</strong> — a user namespace is not a deletion policy.
+          Decide retention, export and erase before the first real user, not
+          after the first request.
+        </li>
+      </ol>
+
+      <h2>Part 11 — The honest scorecard</h2>
+
+      <table>
+        <thead>
+          <tr>
+            <th>area</th>
+            <th>state</th>
+            <th>evidence or remaining work</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>short-term memory</td>
+            <td><strong>done</strong></td>
+            <td>checkpointer, thread ids, isolation tests</td>
+          </tr>
+          <tr>
+            <td>trimming</td>
+            <td><strong>done</strong></td>
+            <td>token-budgeted, starts on a human message</td>
+          </tr>
+          <tr>
+            <td>summarization</td>
+            <td><strong>done</strong></td>
+            <td>summary in its own key; old messages removed</td>
+          </tr>
+          <tr>
+            <td>long-term memory</td>
+            <td><strong>done</strong></td>
+            <td>namespaced store, hash keys, recall, forget</td>
+          </tr>
+          <tr>
+            <td>semantic recall</td>
+            <td><strong>verified</strong></td>
+            <td>
+              Qwen <code>text-embedding-v4</code>, 1536 dims; ranked results
+              with real scores
+            </td>
+          </tr>
+          <tr>
+            <td>PostgreSQL path</td>
+            <td><strong>not verified</strong></td>
+            <td>
+              compose file and setup code exist; no Docker daemon in this build
+            </td>
+          </tr>
+          <tr>
+            <td>live model run</td>
+            <td><strong>verified</strong></td>
+            <td>
+              DeepSeek <code>deepseek-chat</code>: thread isolation, facts
+              extracted, recalled across threads
+            </td>
+          </tr>
+          <tr>
+            <td>fact-quality eval</td>
+            <td><strong>not built</strong></td>
+            <td>no measure of “was this worth remembering”</td>
+          </tr>
+          <tr>
+            <td>retention and expiry</td>
+            <td><strong>not built</strong></td>
+            <td>delete exists; TTL and conflict resolution do not</td>
+          </tr>
+          <tr>
+            <td>test suite</td>
+            <td><strong>19 pass</strong></td>
+            <td>no network, no database, no key</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        The article is a solid tour of the architecture and a weak source of
+        runnable code. That is normal for a 20-minute guide, and it is why the
+        rebuild matters: the difference between “I read about checkpointer and
+        store” and “I can show you the test that proves thread isolation” is the
+        difference an interviewer hears.
+      </p>
+
+      <h2>Part 12 — The checklist</h2>
+
+      <ol>
+        <li>
+          Name the scope before the mechanism: <code>thread_id</code> for the
+          conversation, <code>user_id</code> for the person.
+        </li>
+        <li>Put the checkpointer on the graph, not in a module global.</li>
+        <li>
+          Treat the stored thread and the visible window as two different
+          things.
+        </li>
+        <li>
+          Trim by tokens, not by message count; start the window on a human
+          turn.
+        </li>
+        <li>
+          Summarize by removing old messages and storing the summary in its own
+          key.
+        </li>
+        <li>
+          Declare every state key a node writes; undeclared keys are dropped
+          silently.
+        </li>
+        <li>Key facts by content hash so extraction is idempotent.</li>
+        <li>
+          Pass a query only when the store has an embedding index; otherwise say
+          “unranked”.
+        </li>
+        <li>Ship a delete path with the first fact you store.</li>
+        <li>
+          Test the failure the demo hides: a second thread, a second user, a
+          restart.
+        </li>
+      </ol>
+
+      <h2>Check yourself</h2>
+
+      <div class="quiz">
+        <script type="application/json">
+          {
+            "questions": [
+              {
+                "q": "What scopes short-term memory in a LangGraph agent?",
+                "options": [
+                  "The user_id in the store namespace",
+                  "The thread_id given to the checkpointer",
+                  "The model's context window",
+                  "The number of messages in the graph state"
+                ],
+                "correct": 1,
+                "explain": "The checkpointer saves state per thread. A different thread_id is a different conversation; a different user_id is the same store, different person."
+              },
+              {
+                "q": "The article says MessagesState includes user_input. What does it actually contain?",
+                "options": [
+                  "messages and user_input",
+                  "Only messages, annotated with add_messages",
+                  "messages, user_id and context",
+                  "Nothing until you define it"
+                ],
+                "correct": 1,
+                "explain": "In current LangGraph, MessagesState declares messages: Annotated[list[AnyMessage], add_messages]. Extra fields require subclassing."
+              },
+              {
+                "q": "A node returns {\"context\": \"...\"} but the state class has no context field. What happens?",
+                "options": [
+                  "LangGraph raises an error",
+                  "The value is stored under a default key",
+                  "The key is silently dropped, so the next node never sees it",
+                  "It replaces the messages list"
+                ],
+                "correct": 2,
+                "explain": "Undeclared keys are ignored. The article's retrieval node has no effect for this reason, which is why its agent re-reads the store itself."
+              },
+              {
+                "q": "Why is store.search(namespace, query=...) not semantic with a plain InMemoryStore?",
+                "options": [
+                  "The query is too short",
+                  "No embedding index is configured, so the query is ignored and score is None",
+                  "InMemoryStore only supports get and put",
+                  "Semantic search requires Postgres"
+                ],
+                "correct": 1,
+                "explain": "Ranking needs an index with an embedder and matching dimensions. Without one, search returns items unranked with score=None."
+              },
+              {
+                "q": "What is wrong with returning {\"messages\": [summary] + recent} from a summarization node?",
+                "options": [
+                  "add_messages merges and preserves ids, so the recent messages are re-added and the summary does not land at the front",
+                  "SystemMessage cannot be appended",
+                  "The summary must be a string",
+                  "Nothing; that is the documented pattern"
+                ],
+                "correct": 0,
+                "explain": "The reducer appends and updates by id; it does not replace the list. Remove the old messages with RemoveMessage and keep the summary in its own state key."
+              },
+              {
+                "q": "Why key long-term facts by a hash of their text instead of a random UUID?",
+                "options": [
+                  "Hashes are shorter",
+                  "A repeated extraction overwrites the same fact instead of duplicating it",
+                  "UUIDs cannot be stored in a namespace",
+                  "The store requires hexadecimal keys"
+                ],
+                "correct": 1,
+                "explain": "Idempotent writes. Normalise case and whitespace, hash, and use the hash as the key so the same fact lands in the same slot."
+              },
+              {
+                "q": "What should be stored in the checkpointer versus the long-term store?",
+                "options": [
+                  "Conversation messages in the store; facts in the checkpointer",
+                  "Both in the checkpointer",
+                  "The thread's messages in the checkpointer; durable user facts in the store",
+                  "Only the final answer in either"
+                ],
+                "correct": 2,
+                "explain": "The checkpointer is per-thread and holds the conversation. The store is per-user and holds facts meant to survive the conversation."
+              }
+            ]
+          }
+        </script>
+      </div>
+
+      <h2>Primary sources for this lesson</h2>
+
+      <p>
+        The guide this example rebuilds: For the APIs, read the LangGraph docs
+        on
+        <a href="https://langchain-ai.github.io/langgraph/concepts/persistence/"
+          >persistence and checkpointers</a
+        >,
+        <a href="https://langchain-ai.github.io/langgraph/concepts/memory/"
+          >memory</a
+        >
+        and the
+        <a href="https://langchain-ai.github.io/langgraph/reference/store/"
+          >store reference</a
+        >. LangChain's
+        <a href="https://python.langchain.com/docs/how_to/trim_messages/"
+          >trim_messages guide</a
+        >
+        covers the token budget, and
+        <a href="https://docs.python.org/3/library/hashlib.html"
+          ><code>hashlib</code></a
+        >
+        explains the keying scheme.
+      </p>
+
+      <p>
+        In the repository, read
+        <a href="../assets/examples/0019-memory-agents-langgraph/app/stm.py"
+          ><code>app/stm.py</code></a
+        >,
+        <a href="../assets/examples/0019-memory-agents-langgraph/app/history.py"
+          ><code>app/history.py</code></a
+        >,
+        <a href="../assets/examples/0019-memory-agents-langgraph/app/ltm.py"
+          ><code>app/ltm.py</code></a
+        >
+        and
+        <a href="../assets/examples/0019-memory-agents-langgraph/app/graph.py"
+          ><code>app/graph.py</code></a
+        >, then run <code>uv run pytest -q</code> and read what the 19 tests
+        assert.
+      </p>
+
+      <h2>What's next</h2>
+
+      <p>
+        This is the last lesson. The course opened with a single message and
+        ends with the two systems that decide what an agent remembers: a thread
+        and a user. If you build one thing from this lesson, build the test that
+        runs the same <code>thread_id</code> from a new process against
+        PostgreSQL — that is the difference between memory and a cache. The
+        <a href="../reference/skill-map.html">skill map</a> compresses the whole
+        course into one page, the
+        <a href="../assets/examples/0019-memory-agents-langgraph/index.html"
+          >example page</a
+        >
+        is the repository's entry point, and
+        <a href="0001-ai-engineering-landscape-2026.html">lesson 1</a> is the
+        way back to the start.
+      </p>
+
+      <div class="footer-nav">
+        <div class="ask">
+          <strong>Before you call it memory:</strong> name the scope, name the
+          key, name the delete path. If any of the three is “we'll figure it
+          out”, you have a cache with a privacy problem.
+        </div>
+        <div class="links">
+          <a href="0018-project-youtube-digest.html">← Lesson 18</a>
+          <a href="../reference/skill-map.html">Skill Map &amp; Glossary</a>
+          <a href="../assets/examples/0019-memory-agents-langgraph/index.html"
+            >Example repo</a
+          >
+        </div>
+      </div>
+
+      <script src="../assets/quiz.js"></script>
+    </article>
+  </body>
+</html>

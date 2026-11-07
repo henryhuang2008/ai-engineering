@@ -1,12 +1,12 @@
 # AI Engineering — From First LLM Call to a Grounded RAG Product
 
-An 18-lesson, build-first course for experienced software engineers moving into AI engineering. It starts with a single chat-completion call, builds toward a Supabase + pgvector filing analyst whose answers are cited, validated and allowed to refuse, and closes with a batch pipeline that turns YouTube RSS and transcripts into a daily email.
+A 19-lesson, build-first course for experienced software engineers moving into AI engineering. It starts with a single chat-completion call, builds toward a Supabase + pgvector filing analyst whose answers are cited, validated and allowed to refuse, closes with a batch pipeline that turns YouTube RSS and transcripts into a daily email, and ends with the two memory systems that decide what an agent remembers.
 
 **Start here → [Lesson 1: What an AI Engineer Is in 2026](lessons/0001-ai-engineering-landscape-2026.html)**
 
 ---
 
-## The 18 lessons
+## The 19 lessons
 
 | # | Lesson | What it covers | Time |
 |---|--------|----------------|------|
@@ -28,6 +28,7 @@ An 18-lesson, build-first course for experienced software engineers moving into 
 | 16 | [Kubernetes GitOps: Jenkins Builds, Git Declares, Argo CD Reconciles](lessons/0016-kubernetes-gitops.html) | Jenkins owns CI; Git owns desired state; Argo CD is the only cluster writer. | ~55 min |
 | 17 | [Project: Supabase + RAG + AI Coding — A Grounded Filing Analyst](lessons/0017-project-supabase-rag-ai-coding.html) | Capstone: Supabase pgvector, hybrid retrieval, a grounded PydanticAI agent, a trust UI, and an honest scorecard. | ~60 min |
 | 18 | [Project: AI News Digest — YouTube First](lessons/0018-project-youtube-digest.html) | Batch aggregator: unstable RSS, transcript fallbacks and IP bans, SQLAlchemy models with Alembic, a bounded DeepSeek prompt from your own editorial brief, strict JSON, gated email, and the scheduler phase left honestly open. | ~60 min |
+| 19 | [Memory That Survives the Conversation](lessons/0019-memory-agents-langgraph.html) | Short-term memory as thread-scoped checkpointing, long-term memory as a namespaced store, trimming and summarization, semantic-search caveats, and the scope mistake that breaks agents. | ~50 min |
 
 
 ---
@@ -53,6 +54,7 @@ Every Python example is a `uv` project; every frontend uses `pnpm`. Run commands
 | [0015-document-copilot](assets/examples/0015-document-copilot/index.html) | Lesson 15 | Client brief and skeleton for the AI-coding workflow |
 | [0017-ai-coding-rag-supabase](assets/examples/0017-ai-coding-rag-supabase/index.html) | Lesson 17 | The capstone repository |
 | [0018-ai-coding-youtube-transcript-postgresql](assets/examples/0018-ai-coding-youtube-transcript-postgresql/index.html) | Lesson 18 | AI news digest, YouTube collector first: RSS, transcripts, PostgreSQL and email |
+| [0019-memory-agents-langgraph](assets/examples/0019-memory-agents-langgraph/index.html) | Lesson 19 | Memory in agents: LangGraph checkpointer and store, trimming and summarization, 19 tests |
 
 ---
 

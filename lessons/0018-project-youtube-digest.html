@@ -12,7 +12,7 @@
   <body>
     <article class="page">
       <p class="meta">
-        Lesson 18 of 18 · ~55 min · Prereq:
+        Lesson 18 of 19 · ~55 min · Prereq:
         <a href="0015-ai-coding.html">Lesson 15</a> +
         <a href="0002-your-first-llm-api-call.html">Lesson 2</a> ·
         <a
@@ -1726,20 +1726,16 @@ each check. Do not add a scheduler or a frontend in this phase.</code></pre>
       <h2>What's next</h2>
 
       <p>
-        This is the last lesson. The course arc is complete: primitives,
-        streaming, evals, RAG, MCP, graph agents, typed contracts, a local
-        model, the AI-coding workflow, delivery, the grounded capstone, and now
-        a batch aggregator with a real side effect. What comes next is yours —
-        the two phases this lesson deliberately left unbuilt are the best place
-        to start. Take the two habits that survive every stack change: keep a
-        truthful scorecard, and put a seam at every boundary you do not control.
-        The <a href="../reference/skill-map.html">skill map</a> compresses the
-        whole course into one page, the
-        <a
-          href="../assets/examples/0018-ai-coding-youtube-transcript-postgresql/index.html"
-          >example page</a
-        >
-        is the repository's entry point, and
+        <a href="0019-memory-agents-langgraph.html">Lesson 19</a> closes the
+        course on the layer this pipeline never had: memory. A checkpointer
+        keeps the conversation per <code>thread_id</code>; a store keeps facts
+        per <code>user_id</code>; trimming and summarization decide what the
+        model actually sees. It rebuilds a popular LangGraph memory guide and
+        fixes the code that does not run — an undeclared state key that is
+        silently dropped, a delete helper that removes the newest messages, and
+        a “semantic” search with no embedding index. The
+        <a href="../reference/skill-map.html">skill map</a> compresses the whole
+        course into one page, and
         <a href="0001-ai-engineering-landscape-2026.html">lesson 1</a> is the
         way back to the start.
       </p>
@@ -1753,6 +1749,7 @@ each check. Do not add a scheduler or a frontend in this phase.</code></pre>
         </div>
         <div class="links">
           <a href="0017-project-supabase-rag-ai-coding.html">← Lesson 17</a>
+          <a href="0019-memory-agents-langgraph.html">Lesson 19 →</a>
           <a href="../reference/skill-map.html">Skill Map &amp; Glossary</a>
           <a
             href="../assets/examples/0018-ai-coding-youtube-transcript-postgresql/index.html"

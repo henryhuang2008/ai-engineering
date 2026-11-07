@@ -1,0 +1,23 @@
+[project]
+name = "0019-memory-agents-langgraph"
+version = "0.1.0"
+description = "Short-term and long-term memory for LangGraph agents"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "langgraph>=0.6,<0.7",
+    "langgraph-checkpoint-postgres>=2.0,<3.0",
+    "langchain-openai>=0.3,<0.4",
+    "numpy>=2.0",
+    "psycopg[binary,pool]>=3.2,<4.0",
+    "python-dotenv>=1.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
