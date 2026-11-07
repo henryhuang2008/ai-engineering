@@ -1,0 +1,26 @@
+[project]
+name = "0020-agent-skills-python"
+version = "0.1.0"
+description = "Author, lint and run Agent Skills in Python: a skill library in the Agent Skills format, a linter ported from langchain-skills, and a Pydantic AI runtime that loads skills on demand."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic-ai-skills>=2.1,<3.0",
+    # From harness 0.52 the capability builds a POSIX-only LocalWorkspaceBackend,
+    # so constructing SkillsCapability raises NotImplementedError on Windows.
+    # 0.36 is the last release before that change; the example pins it so the
+    # runtime works on every platform. See docs/runtime-notes.md.
+    "pydantic-ai-harness>=0.28,<0.52",
+    "pydantic-ai-slim[openai]>=2.44,<3.0",
+    "python-dotenv>=1.0",
+    "pyyaml>=6.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

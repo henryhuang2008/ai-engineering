@@ -899,3 +899,33 @@ User pushback: "we have made things complicated. A developer chose a few LLMs (C
 - Added `numpy` to the example so `InMemoryStore` uses its vectorised path instead of the pure-Python fallback.
 - Updated the claims that the run changed: README known limits, the example page, and the lesson's scorecard now say semantic recall and the live model run are **verified**, while the PostgreSQL path stays **not verified** (no Docker daemon).
 - Validation: 19 pytest tests pass; `check_links.py` -> 36 pages, 19 lessons; `check_uv.py` -> 15 uv projects; `validate_html.py` -> clean; lessons/README LF no BOM, example page CRLF no BOM.
+## 2026-11-07 (63) - Lesson 20: agent skills in Python
+
+- Source material: `langchain-ai/langchain-skills` (authoring reference, 21 skills + `scripts/lint_skills.py` + CI) and `DougTrajano/pydantic-ai-skills` (runtime). Both fetched from GitHub and exercised locally; no article proxy involved.
+- Added `assets/examples/0020-agent-skills-python`: a two-skill library (`csv-insights`, `release-notes`) with references and stdlib scripts, an 18-rule linter ported from the upstream gates, a Pydantic AI runtime using `SkillsCapability`, a broken fixture, and 34 offline tests.
+- Verified live with DeepSeek `deepseek-chat`: the CSV skill loaded, read `references/metrics.md`, ran `profile.py`, and reported 10 rows plus mean 236.1377777777778 with the missing count and the reference's skew caveat; the release-notes skill drafted a note, dropped an internal chore, and ran `lint_notes.py --text` to an empty problem list.
+- Platform findings, documented in `docs/runtime-notes.md`: harness >= 0.52 builds a POSIX-only `LocalWorkspaceBackend`, so `SkillsCapability` cannot be constructed on Windows (pinned `< 0.52`); script cwd is the skill's `scripts/` directory; a `#!/usr/bin/env python3` shebang exits 9009 on Windows; script args are named flags, not positional; `require_loaded` refuses file access before a load with a ModelRetry the model can act on.
+- Design bug found by the live run: the release-notes skill told the model to write a draft file, but the runtime offers no file-write tool. The model refused to pretend, which surfaced the mismatch. Fixed in the skill with an inline `--text` mode; the lesson uses it as the central "workflow must fit the tool surface" example.
+- Added `lessons/0020-agent-skills.html` (12 parts, 8-question quiz) on the format contract, three levels with measured token costs, the upstream lint gates, deferred capabilities, executable scripts, the security boundary, distribution and failure modes.
+- Course wiring: L19 meta `of 20`, its What's next and footer point at L20; L17/L18 meta `of 20`; README is 20 lessons with the new row and example; L1 milestone chain and win sentence; `skill-map.html` gains an L20 closing note; `boundary-map.html` moves to twenty lessons, adds a **Skill boundary** row, extends the test list, and points its companion link at L20.
+- Honest gates kept: current harness on Windows is blocked (pin is a workaround); no sandbox executor exercised; Git/S3 registries not used; no selection-quality eval.
+- Validation: 34 pytest tests pass; `check_links.py` -> 37 pages, 20 lessons link forward; `check_uv.py` -> 16 uv projects; `validate_html.py` -> clean; L20 quiz 8 questions / 4 options / valid indices; lessons/README LF no BOM, example page CRLF no BOM.
+
+## 2026-11-07 (64) - Lesson 20 rewritten as a runbook
+
+- User feedback: the original 12-part lesson was too dense. Rewrote `lessons/0020-agent-skills.html` as a six-part, ~30-minute walkthrough: the folder layout, the five commands with their real output, one question followed through the tool calls, six authoring rules, four failure modes, and a short verified/not-verified list.
+- Quiz reduced from 8 questions to 6, all answerable from the runbook.
+- The example page (`assets/examples/0020-agent-skills-python/index.html`) was rewritten first as a pure runbook: setup, five workflow steps, command summary, failures, file map. No definition of a skill and no explanation of the loading mechanism.
+- Kept factual checks: `catalog` totals (334 / 409 tokens), the live CSV answer (10 rows, mean 236.1377777777778, 1 missing), `run-script` output shape (`columns` is a list, `path` field present), and `lint`'s actual flags (no directory option).
+- Matching text updates: README lesson row, `skill-map.html` closing note, L19 What's next.
+- Validation: `check_links.py` -> 38 pages, 20 lessons link forward; `validate_html.py` -> clean; L20 quiz 6 questions / valid key; lesson LF no BOM, example page CRLF no BOM; 34 tests still pass.
+
+## 2026-11-07 (65) - Lesson 19 rewritten around when/why and the example workflow
+
+- User feedback: the 12-part lesson was hard to follow. Rewrote `lessons/0019-memory-agents-langgraph.html` as seven parts, ~35 minutes: when and why to use short-term memory, when and why to use long-term memory, how to run the example, what happens on one turn, how to persist both in PostgreSQL, what breaks, and what was verified.
+- New example workflow section in `assets/examples/0019-memory-agents-langgraph/index.html`: the four commands in order (demo, facts, chat, tests) with real output, the per-turn graph table (compress/retrieve/agent/extract), and the PostgreSQL construction steps. The same short workflow table was added to the example README.
+- Re-ran the live demos to use measured output: `demo` -> 6 messages on thread-1, 4 on thread-2; `facts` -> three facts (`Works as a data scientist`, `Uses Python for data science work`, `Works with machine learning`) recalled in a second thread.
+- PostgreSQL documentation corrected against the installed package: `checkpoints`, `checkpoint_blobs`, `checkpoint_writes` for the saver; `store` and `store_vectors` for the store; `setup()` on both; one shared `ConnectionPool`. Docker still has no daemon here, so the path remains a documented gate, not a measured claim.
+- Matching text updates: README lesson 19 row, L18 What's next (it still said L19 closed the course).
+- Validation: `check_links.py` -> 38 pages, 20 lessons link forward; `validate_html.py` -> clean; L19 quiz 7 questions / valid key; lesson LF, example page CRLF, no BOMs; 19 tests pass.
+

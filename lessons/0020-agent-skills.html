@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 20 — Agent Skills: Run the Example</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<article class="page">
+
+<p class="meta">Lesson 20 of 20 · ~30 min · Prereq: <a href="0015-ai-coding.html">Lesson 15</a> · <a href="../assets/examples/0020-agent-skills-python/index.html">Example page →</a> · <a href="../reference/skill-map.html">Skill Map →</a></p>
+
+<h1>Agent Skills: Run the Example</h1>
+
+<p class="lede">This lesson walks through the example in <code>assets/examples/0020-agent-skills-python</code>. You run five commands, see what each one prints, follow one question through the agent, and then write down the rules that keep your own skill working.</p>
+
+<div class="callout win">
+  <span class="label">Your win this lesson</span>
+  You can run the example end to end without a key for four of the five steps, read a <code>SKILL.md</code> and know what each part is for, and recognize the four failures that break a skill when you write one.
+</div>
+
+<h2>Part 1 — What is in the folder</h2>
+
+<p>Two skills and a small Python agent:</p>
+
+<pre><code>skills/
+├── csv-insights/
+│   ├── SKILL.md              # the instructions
+│   ├── references/metrics.md # definitions, read only when needed
+│   └── scripts/profile.py    # code, run only when needed
+└── release-notes/
+    ├── SKILL.md
+    ├── references/style.md
+    └── scripts/lint_notes.py
+
+app/       # catalog, linter, agent
+data/sales.csv
+tests/</code></pre>
+
+<p>A skill is a folder whose top level holds <code>SKILL.md</code>. The file opens with two fields:</p>
+
+<pre><code>---
+name: csv-insights
+description: Profile a CSV file and answer questions about its columns,
+  types, missing values and numeric spread. Use when the user points at
+  a .csv file and asks what is in it.
+---
+
+# CSV insights
+
+1. Read `references/metrics.md` before answering.
+2. Run `scripts/profile.py` on the user's file.
+3. Never report a mean without the row count and the missing count.</code></pre>
+
+<p>Two rules for those fields: <code>name</code> must equal the folder name, and <code>description</code> must say <em>when</em> to use the skill, not only what it does. The body is a short numbered procedure; the detail lives in <code>references/</code> and the code in <code>scripts/</code>.</p>
+
+<h2>Part 2 — Run it</h2>
+
+<p>From the repository root:</p>
+
+<pre><code>cd assets/examples/0020-agent-skills-python
+uv sync
+
+# Windows PowerShell
+Copy-Item .env.example .env
+
+# macOS / Linux
+cp .env.example .env</code></pre>
+
+<p>Put your DeepSeek key in <code>OPENAI_API_KEY</code> inside <code>.env</code>. Only the <code>ask</code> command needs it.</p>
+
+<h3>Step 1 — list the catalog (no key)</h3>
+
+<pre><code>uv run python main.py catalog</code></pre>
+
+<pre><code>always-on catalog: ~128 tokens, 2 skills
+
+csv-insights  (41 body lines, ~334 tokens on load)
+  Profile a CSV file and answer questions about its columns...
+release-notes  (42 body lines, ~409 tokens on load)
+  Turn a list of merged changes into release notes...</code></pre>
+
+<p>Two lines. That is what every request carries before a skill is used.</p>
+
+<h3>Step 2 — ask a question (needs a key)</h3>
+
+<pre><code>uv run python main.py ask "Using data/sales.csv, how many rows are there and what is the mean amount?"</code></pre>
+
+<pre><code>Rows: 10
+Mean amount: 236.1377777777778
+Missing: 1  (the mean is over 9 values, not 10 rows)</code></pre>
+
+<p>The agent also repeats a warning that the spread is wide, because <code>references/metrics.md</code> tells it to.</p>
+
+<h3>Step 3 — run a skill script yourself (no key)</h3>
+
+<pre><code>uv run python main.py run-script csv-insights profile.py --set csv=/absolute/path/to/data/sales.csv</code></pre>
+
+<p>This prints the same JSON the agent gets, with <code>"rows": 10</code> and one entry per column. Use an absolute path: the script runs with its working directory inside <code>skills/csv-insights/scripts/</code>.</p>
+
+<h3>Step 4 — lint the library (no key)</h3>
+
+<pre><code>uv run python main.py lint</code></pre>
+
+<pre><code>0 blocking, 0 warnings</code></pre>
+
+<p>The linter checks the format: name versus folder, description size, body size, dead links, stale model ids. <code>fixtures/broken-library/</code> is the failing example the tests use.</p>
+
+<h3>Step 5 — run the tests (no key)</h3>
+
+<pre><code>uv run pytest -q</code></pre>
+
+<pre><code>34 passed</code></pre>
+
+<h2>Part 3 — Follow one question</h2>
+
+<p>When you run <code>ask</code>, the agent does five things. The output shows the tool calls as they happen.</p>
+
+<ol>
+  <li><strong>Reads the catalog.</strong> Two entries, no bodies.</li>
+  <li><strong>Calls <code>load_capability('csv-insights')</code>.</strong> The skill body enters the next request. <code>${SKILL_DIR}</code> is replaced with the real folder, so the script path works from any directory.</li>
+  <li><strong>Calls <code>read_skill_resource(...)</code> for <code>references/metrics.md</code>.</strong> That file is where the rules live: quote the row count, quote the missing count, warn when the spread is wide.</li>
+  <li><strong>Calls <code>run_skill_script(...)</code> for <code>profile.py</code>.</strong> The script returns JSON with <code>rows</code> and a <code>columns</code> list.</li>
+  <li><strong>Answers.</strong> It quotes the numbers exactly and adds the warning the reference asked for.</li>
+</ol>
+
+<p>Three tools serve both skills: <code>load_capability</code>, <code>read_skill_resource</code>, <code>run_skill_script</code>. If the model tries to read a file before loading the skill, the call is refused with a message telling it to load first, and it can correct itself.</p>
+
+<p>The second skill works the same way. Ask it to turn three commits into release notes and it drops the internal <code>chore</code> line, keeps <code>Added</code> and <code>Fixed</code>, and runs <code>lint_notes.py</code> on its draft before returning it.</p>
+
+<h2>Part 4 — Write your own skill</h2>
+
+<p>Six rules, all visible in the two skills above:</p>
+
+<ol>
+  <li><strong><code>name</code> equals the folder name.</strong> Lowercase letters, digits and single hyphens. The name is used as a tool argument, so two names for one skill means a broken call.</li>
+  <li><strong>The description says when to use it.</strong> It is the only text the model reads before deciding. Write “Use when the user …”, not a feature list.</li>
+  <li><strong>The body is a page, not a manual.</strong> Numbered steps, under 500 lines. Long explanations go in <code>references/</code>; long code goes in <code>scripts/</code>.</li>
+  <li><strong>Scripts take named flags.</strong> The runtime passes <code>{"csv": "/path/file.csv"}</code> as <code>--csv /path/file.csv</code>. There are no positional arguments.</li>
+  <li><strong>Scripts get absolute paths.</strong> The working directory is the script's own folder, not the project root.</li>
+  <li><strong>The workflow fits the tools the agent has.</strong> If a step says “write the draft to a file”, the agent needs a file-write tool. This example's agent has none.</li>
+</ol>
+
+<p>Rule 6 is not hypothetical. The release-notes skill first told the model to save a draft and then lint the file. The live run refused to pretend:</p>
+
+<pre><code>I can't complete the "write it to a temp file" step: my available tools are
+`load_capability`, `read_skill_resource`, and `run_skill_script`. None of them
+can create a file.</code></pre>
+
+<p>The fix was in the skill: <code>lint_notes.py</code> gained a <code>--text</code> mode, and the instructions pass the draft inline. The agent gained no new tool.</p>
+
+<h2>Part 5 — What breaks, and what to do</h2>
+
+<table>
+  <thead><tr><th>symptom</th><th>cause</th><th>fix</th></tr></thead>
+  <tbody>
+    <tr><td><code>NotImplementedError</code> mentioning <code>LocalWorkspaceBackend</code></td><td><code>pydantic-ai-harness</code> 0.52+ is POSIX-only and cannot construct on Windows</td><td>keep the <code>&lt; 0.52</code> pin in <code>pyproject.toml</code>; remove it on Linux/macOS</td></tr>
+    <tr><td>script cannot find the CSV</td><td>working directory is <code>skills/…/scripts/</code></td><td>pass an absolute path</td></tr>
+    <tr><td>script exits with code 9009 on Windows</td><td>a <code>#!/usr/bin/env python3</code> shebang resolves to a missing <code>python3</code></td><td>omit the shebang; the executor uses its own interpreter</td></tr>
+    <tr><td>model says it cannot write the file</td><td>the workflow needs a tool the agent does not have</td><td>change the workflow: pass data inline, or add the tool deliberately</td></tr>
+  </tbody>
+</table>
+
+<h2>Part 6 — What was verified</h2>
+
+<ul>
+  <li><strong>Live runs.</strong> Both skills were exercised with DeepSeek <code>deepseek-chat</code>: the CSV answer returned <code>10</code> rows and mean <code>236.1377777777778</code>, and the release-notes answer ended with an empty problem list from the checker.</li>
+  <li><strong>Offline.</strong> <code>34</code> tests pass with no network, no database and no key. <code>lint</code> is clean on the real library and fails on the fixture.</li>
+  <li><strong>Not verified.</strong> The current harness on Windows cannot construct, so the pin is a workaround rather than a fix. Sandboxed script execution, Git/S3 registries, and any measure of “did the model pick the right skill” are not exercised.</li>
+</ul>
+
+<p>Two repositories supply the material: <a href="https://github.com/langchain-ai/langchain-skills">langchain-ai/langchain-skills</a> for the authoring rules and lint gates, and <a href="https://github.com/DougTrajano/pydantic-ai-skills">DougTrajano/pydantic-ai-skills</a> for the runtime. The rule-by-rule table is in <a href="../assets/examples/0020-agent-skills-python/docs/lint-rules.md">lint rules</a>; the platform notes are in <a href="../assets/examples/0020-agent-skills-python/docs/runtime-notes.md">runtime notes</a>.</p>
+
+<h2>Check yourself</h2>
+
+<div class="quiz">
+<script type="application/json">
+{
+  "questions": [
+    {
+      "q": "What does the model see for each skill before it loads one?",
+      "options": [
+        "The full SKILL.md body",
+        "The name and description only",
+        "The name, description and file list",
+        "The scripts' source code"
+      ],
+      "correct": 1,
+      "explain": "The catalog is one line per skill: name plus description. The body and files come later."
+    },
+    {
+      "q": "Which command needs an API key?",
+      "options": [
+        "catalog",
+        "lint",
+        "ask",
+        "pytest"
+      ],
+      "correct": 2,
+      "explain": "Only ask calls a model. catalog, lint, run-script and the tests run offline."
+    },
+    {
+      "q": "Why must the frontmatter name match the folder name?",
+      "options": [
+        "It keeps the file system tidy",
+        "The name is the tool argument used to load and read the skill",
+        "The spec requires lowercase folder names",
+        "Otherwise the body will not parse"
+      ],
+      "correct": 1,
+      "explain": "The runtime uses the name as the capability id and as the skill argument in the file and script tools."
+    },
+    {
+      "q": "Where does a skill script run?",
+      "options": [
+        "In the project root",
+        "In the skill's scripts/ directory",
+        "In a temporary sandbox",
+        "On the model provider's machine"
+      ],
+      "correct": 1,
+      "explain": "The executor sets the working directory to the script's parent, so relative paths break. Pass absolute paths."
+    },
+    {
+      "q": "The release-notes skill told the agent to write a draft file and lint it. Why did that fail?",
+      "options": [
+        "The lint script had a syntax error",
+        "The agent had no file-write tool",
+        "The model ignored the instructions",
+        "The script could not read YAML"
+      ],
+      "correct": 1,
+      "explain": "The agent had only load_capability, read_skill_resource and run_skill_script. The skill was changed to pass the draft inline with --text."
+    },
+    {
+      "q": "Why is pydantic-ai-harness pinned below 0.52?",
+      "options": [
+        "Newer versions dropped SkillsCapability",
+        "From 0.52 it builds a POSIX-only LocalWorkspaceBackend, which raises on Windows",
+        "Newer versions require Python 3.14",
+        "The older version is faster"
+      ],
+      "correct": 1,
+      "explain": "Construction raises NotImplementedError on Windows. The pin is a workaround; the example's own code does not change."
+    }
+  ]
+}
+</script>
+</div>
+
+<h2>What's next</h2>
+
+<p>This is the last lesson. You started with one API call; you end with a library the agent can carry: a folder per procedure, a description that says when to use it, and files that load only when a task gets there. If you write one skill of your own, copy <a href="../assets/examples/0020-agent-skills-python/skills/csv-insights/SKILL.md"><code>csv-insights/SKILL.md</code></a>, run <code>lint</code>, then run <code>ask</code> and read the tool calls. The <a href="../reference/skill-map.html">skill map</a> compresses the course into one page, the <a href="../assets/examples/0020-agent-skills-python/index.html">example page</a> is the runbook, and <a href="0001-ai-engineering-landscape-2026.html">lesson 1</a> is the way back to the start.</p>
+
+<div class="footer-nav">
+  <div class="ask"><strong>One rule to keep:</strong> a skill's steps must fit the tools the agent has. Write the workflow after you know the tool list, not before.</div>
+  <div class="links">
+    <a href="0019-memory-agents-langgraph.html">← Lesson 19</a>
+    <a href="../reference/skill-map.html">Skill Map &amp; Glossary</a>
+    <a href="../assets/examples/0020-agent-skills-python/index.html">Example page</a>
+  </div>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</article>
+</body>
+</html>

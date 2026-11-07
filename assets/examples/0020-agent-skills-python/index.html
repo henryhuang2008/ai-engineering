@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Example 0020 - Run it</title>
+<link rel="stylesheet" href="../../course.css">
+</head>
+<body>
+<article class="page">
+
+<p class="meta">Example 0020 · Companion to <a href="../../../lessons/0020-agent-skills.html">Lesson 20</a> · <a href="README.md">README</a> · <a href="docs/runtime-notes.md">Runtime notes</a></p>
+
+<h1>Run the Agent Skills example</h1>
+
+<p class="lede">Five commands, in order. Each one lists what it needs and the output you should see.</p>
+
+<h2>Setup</h2>
+
+<pre><code>cd assets/examples/0020-agent-skills-python
+uv sync
+
+# Windows PowerShell
+Copy-Item .env.example .env
+
+# macOS / Linux
+cp .env.example .env</code></pre>
+
+<p>Open <code>.env</code> and set <code>OPENAI_API_KEY</code> to your DeepSeek key. Nothing else needs to change.</p>
+
+<h2>The workflow</h2>
+
+<h3>Step 1 — List the catalog (no key)</h3>
+
+<pre><code>uv run python main.py catalog</code></pre>
+
+<pre><code>always-on catalog: ~128 tokens, 2 skills
+
+csv-insights  (41 body lines, ~334 tokens on load)
+  Profile a CSV file and answer questions about its columns, types, missing
+  values and numeric spread. Use when the user points at a .csv file...
+
+release-notes  (42 body lines, ~409 tokens on load)
+  Turn a list of merged changes into release notes for the changelog.
+  Use when the user provides commit messages, a PR list or a raw change log...</code></pre>
+
+<p>Two skills, two entries. This is the starting state of every run.</p>
+
+<h3>Step 2 — Ask a question (needs a key)</h3>
+
+<pre><code>uv run python main.py ask "Using data/sales.csv, how many rows are there and what is the mean amount?"</code></pre>
+
+<p>The agent calls its tools in the output and finishes with the answer:</p>
+
+<pre><code>Rows: 10
+Mean amount: 236.1377777777778
+Missing: 1  (the mean is over 9 values, not 10 rows)</code></pre>
+
+<p>Try the second skill with the same command:</p>
+
+<pre><code>uv run python main.py ask "Turn these into release notes for users: fix: tokenizer split on hyphens; feat: export menu gets CSV; chore: bump ruff to 0.15"</code></pre>
+
+<p>You should get two sections, <code>Added</code> and <code>Fixed</code>, with the <code>chore</code> line dropped, and the checker reporting <code>{"source": "&lt;text&gt;", "problems": []}</code>.</p>
+
+<h3>Step 3 — Run a skill script directly (no key)</h3>
+
+<pre><code>uv run python main.py run-script csv-insights profile.py --set csv=/absolute/path/to/data/sales.csv</code></pre>
+
+<pre><code>{
+  "path": ".../data/sales.csv",
+  "rows": 10,
+  "columns": [
+    {"name": "order_id", "inferred_type": "int", "missing": 0, ...},
+    {"name": "amount", "inferred_type": "float", "missing": 1,
+     "mean": 236.1377777777778, ...}
+  ]
+}</code></pre>
+
+<p>Use an absolute path. The script runs with its working directory inside the skill folder.</p>
+
+<h3>Step 4 — Lint the library (no key)</h3>
+
+<pre><code>uv run python main.py lint</code></pre>
+
+<pre><code>0 blocking, 0 warnings</code></pre>
+
+<p>The broken fixture in <code>fixtures/</code> is what the tests use to prove each rule fires.</p>
+
+<h3>Step 5 — Run the tests (no key)</h3>
+
+<pre><code>uv run pytest -q</code></pre>
+
+<pre><code>34 passed</code></pre>
+
+<h2>Command summary</h2>
+
+<table>
+  <thead><tr><th>command</th><th>needs a key</th><th>what it does</th></tr></thead>
+  <tbody>
+    <tr><td><code>main.py catalog</code></td><td>no</td><td>prints the two skill entries the agent starts with</td></tr>
+    <tr><td><code>main.py verify</code></td><td>no</td><td>prints the tools plus the catalog block</td></tr>
+    <tr><td><code>main.py ask "..."</code></td><td>yes</td><td>runs one question end to end</td></tr>
+    <tr><td><code>main.py run-script ...</code></td><td>no</td><td>runs a bundled script through the same executor</td></tr>
+    <tr><td><code>main.py lint</code></td><td>no</td><td>checks the skill format, exit 1 on a block</td></tr>
+    <tr><td><code>pytest -q</code></td><td>no</td><td>34 tests over parsing, rules, scripts and runtime</td></tr>
+  </tbody>
+</table>
+
+<h2>If a command fails</h2>
+
+<ul>
+  <li><strong>Missing key error on <code>ask</code></strong>: set <code>OPENAI_API_KEY</code> in <code>.env</code>. Every other command still works without it.</li>
+  <li><strong>Script exits with code 9009 on Windows</strong>: a script has a <code>python3</code> shebang. The scripts here do not, by design.</li>
+  <li><strong><code>NotImplementedError</code> naming <code>LocalWorkspaceBackend</code></strong>: <code>pydantic-ai-harness</code> was upgraded past 0.51, which is POSIX-only. Keep the pin in <code>pyproject.toml</code>; see <a href="docs/runtime-notes.md">runtime notes</a>.</li>
+  <li><strong>Script cannot find the CSV</strong>: pass an absolute path, not <code>data/sales.csv</code>.</li>
+</ul>
+
+<h2>Where things are</h2>
+
+<ul>
+  <li><a href="skills/csv-insights/SKILL.md"><code>skills/csv-insights/</code></a> — the CSV skill: instructions, <code>references/metrics.md</code>, two scripts.</li>
+  <li><a href="skills/release-notes/SKILL.md"><code>skills/release-notes/</code></a> — the release-notes skill: instructions, <code>references/style.md</code>, one script.</li>
+  <li><a href="app/cli.py"><code>app/cli.py</code></a> — the six commands above.</li>
+  <li><a href="app/runtime.py"><code>app/runtime.py</code></a> — the agent the <code>ask</code> command runs.</li>
+  <li><a href="tests/"><code>tests/</code></a> — what <code>pytest</code> runs.</li>
+</ul>
+
+<div class="footer-nav">
+  <div class="ask"><strong>Rule for changing a skill:</strong> after editing anything under <code>skills/</code>, run <code>lint</code> and <code>pytest -q</code> before <code>ask</code>.</div>
+  <div class="links">
+    <a href="README.md">README</a>
+    <a href="docs/runtime-notes.md">Runtime notes</a>
+    <a href="docs/lint-rules.md">Lint rules</a>
+    <a href="../../../lessons/0020-agent-skills.html">Lesson 20</a>
+  </div>
+</div>
+
+</article>
+</body>
+</html>

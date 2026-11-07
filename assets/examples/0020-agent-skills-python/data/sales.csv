@@ -1,0 +1,11 @@
+order_id,region,channel,amount,units
+1001,North,web,129.99,2
+1002,South,store,89.50,1
+1003,North,mobile,215.00,3
+1004,East,web,,1
+1005,West,store,410.25,5
+1006,North,web,95.40,1
+1007,South,mobile,150.00,2
+1008,East,store,320.10,4
+1009,West,web,75.00,1
+1010,North,store,640.00,8

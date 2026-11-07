@@ -48,6 +48,26 @@ uv run pytest -q
 `demo` needs no database. `facts` and `chat` use in-memory stores unless you
 pass `--postgres`, which requires the database below.
 
+## Workflow
+
+| step | command | what it shows |
+| ---- | ------- | ------------- |
+| 1 | `demo` | two threads, two histories; the third turn still knows the name |
+| 2 | `facts` | facts stored under one `user_id`, recalled in a new thread |
+| 3 | `chat` | both memories in one session (choose user id and thread id) |
+| 4 | `pytest -q` | 19 tests over the same behavior, with no network |
+
+Every turn in `facts` and `chat` runs `compress → retrieve → agent → extract`:
+
+1. `compress` summarizes the old window and removes those messages.
+2. `retrieve` reads the user's facts into `memory_context`.
+3. `agent` calls the model with system prompt + facts + summary + trimmed window.
+4. `extract` pulls durable facts from the human turn and writes them to the store.
+
+The checkpointer stores the full thread; the model sees the bounded window. That
+separation is the point of the example.
+
+
 ### PostgreSQL (optional)
 
 ```shell

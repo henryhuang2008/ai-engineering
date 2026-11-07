@@ -77,7 +77,9 @@
   <li><strong>Applied batch pipeline: <a href="../lessons/0018-project-youtube-digest.html">AI news digest, YouTube first</a></strong> (lesson 18): curated RSS ingestion with per-source failure isolation, transcript retrieval with description fallback, SQLAlchemy models and Alembic revisions, a 24-hour window with 12k/48k input bounds, an editable editorial prompt, strict JSON and URL validation, and an SMTP send recorded as <code>sent</code>, <code>failed</code> or <code>empty</code>. Proves the operational side that chat demos skip: flaky sources, idempotent writes, and an irreversible side effect behind a deliberate gate. The scheduler and a second source kind are named phases, not shipped features.</li>
 </ol>
 
-<p>The ladder ends with <a href="../lessons/0019-memory-agents-langgraph.html">Lesson 19</a>, the layer every project above quietly assumes: <strong>memory</strong>. Short-term memory is a checkpointer scoped to a thread; long-term memory is a namespaced store scoped to a user. The lesson rebuilds a LangGraph memory guide and fixes the code that does not run — an undeclared state key, a delete helper that removes the newest messages, and a semantic search with no embedding index.</p>
+<p>The ladder then adds <a href="../lessons/0019-memory-agents-langgraph.html">Lesson 19</a>, the layer every project above quietly assumes: <strong>memory</strong>. Short-term memory is a checkpointer scoped to a thread; long-term memory is a namespaced store scoped to a user. The lesson rebuilds a LangGraph memory guide and fixes the code that does not run — an undeclared state key, a delete helper that removes the newest messages, and a semantic search with no embedding index.</p>
+
+<p>It ends with <a href="../lessons/0020-agent-skills.html">Lesson 20</a>, the other thing every project assumes: <strong>instructions</strong>. A skill is a folder with a <code>SKILL.md</code>; the agent sees a name and a description, and loads the body and files only when a task needs them. The lesson runs the example end to end, then shows the six rules for writing a skill and the four failures that break one.</p>
 
 <h2>Role map</h2>
 <table>
