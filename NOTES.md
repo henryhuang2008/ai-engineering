@@ -929,3 +929,10 @@ User pushback: "we have made things complicated. A developer chose a few LLMs (C
 - Matching text updates: README lesson 19 row, L18 What's next (it still said L19 closed the course).
 - Validation: `check_links.py` -> 38 pages, 20 lessons link forward; `validate_html.py` -> clean; L19 quiz 7 questions / valid key; lesson LF, example page CRLF, no BOMs; 19 tests pass.
 
+## 2026-11-08 (66) - Lesson 7 title names the LlamaIndex variant
+
+- User asked to include LlamaIndex in the lesson title. Retitled Lesson 7 to "The RAG Service: Two Lanes, One Table, and a LlamaIndex Variant" in `<title>`, `<h1>` and the README lesson row.
+- The lesson already had a substantial "The same service in LlamaIndex" section and a working `assets/examples/0007-rag-service-llamaindex` project; this change makes the second implementation visible from the title instead of buried after Part 2.
+- Added one sentence to the lede saying the service is rebuilt with LlamaIndex, and added a "LlamaIndex variant" link to the main example page's footer.
+- Validation: `check_links.py` -> 38 pages, all links resolve; `validate_html.py` -> clean; lesson LF no BOM, example page CRLF no BOM.
+

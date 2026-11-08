@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Lesson 7 — The RAG Service: Two Lanes, One Table</title>
+<title>Lesson 7 — The RAG Service: Two Lanes, One Table, and a LlamaIndex Variant</title>
 <link rel="stylesheet" href="../assets/course.css">
 </head>
 <body>
@@ -11,9 +11,9 @@
 
 <p class="meta">Lesson 7 of the AI Engineering course · ~55 min · Prereq: <a href="0006-rag-foundation.html">Lesson 6</a> · <a href="../reference/skill-map.html">Skill Map →</a></p>
 
-<h1>The RAG Service: Two Lanes, One Table</h1>
+<h1>The RAG Service: Two Lanes, One Table, and a LlamaIndex Variant</h1>
 
-<p class="lede">Lesson 6 was the map. This is the build: a real corpus, a real index, and a real answer with citations. The pipeline becomes two commands — one that runs when documents change, one that runs on every question — and the seam between them is a single LanceDB table.</p>
+<p class="lede">Lesson 6 was the map. This is the build: a real corpus, a real index, and a real answer with citations. The pipeline becomes two commands — one that runs when documents change, one that runs on every question — and the seam between them is a single LanceDB table. Then the same service is rebuilt with LlamaIndex, so you can see which parts a framework owns and which parts you keep.</p>
 
 <div class="callout win">
   <span class="label">Your win this lesson</span>

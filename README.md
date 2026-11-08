@@ -16,7 +16,7 @@ A 20-lesson, build-first course for experienced software engineers moving into A
 | 4 | [Streaming Chat: Python Backend, Next.js Shell](lessons/0004-streaming-chat.html) | A streaming Python backend, a thin Next.js route, and a real chat UI instead of a bare input. | ~40 min |
 | 5 | [Your First Evals](lessons/0005-your-first-evals.html) | Build an eval set so "the output looks fine" becomes a measurable answer. | ~35 min |
 | 6 | [RAG: The Pipeline, End to End](lessons/0006-rag-foundation.html) | The eight-stage RAG map: what each stage takes in, produces, and gets wrong. | ~30 min |
-| 7 | [The RAG Service: Two Lanes, One Table](lessons/0007-rag-service.html) | Build it: ingest a corpus, index it in LanceDB, retrieve, and answer with citations. | ~55 min |
+| 7 | [The RAG Service: Two Lanes, One Table, and a LlamaIndex Variant](lessons/0007-rag-service.html) | Build it by hand: ingest a corpus, index it in LanceDB, retrieve, and answer with citations. Then the same service rebuilt with LlamaIndex. | ~55 min |
 | 8 | [RAG Appendix: Chunking Tools and Vector Stores](lessons/0008-rag-appendix.html) | The reference for chunking frameworks and the vector stores you are actually choosing between. | ~30 min |
 | 9 | [MCP: Write the Tool Once, Call It From Any Client](lessons/0009-mcp.html) | Build an MCP server, call it with no model, then let DeepSeek drive it. | ~45 min |
 | 10 | [LangGraph: One Node, Then a Branch](lessons/0010-langgraph.html) | Go from a one-node graph to a program with a visible decision. | ~40 min |
