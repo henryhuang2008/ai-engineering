@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Example 0021 - Text to SQL: run it</title>
+    <link rel="stylesheet" href="../../course.css" />
+  </head>
+  <body>
+    <article class="page">
+      <p class="meta">
+        Example 0021 ·
+        <a href="../../../lessons/0021-text-to-sql.html">Companion to Lesson 21</a>
+        · <a href="README.md">README</a> ·
+        <a href="docs/agent-notes.md">Agent notes</a>
+      </p>
+
+      <h1>Text to SQL — run it</h1>
+
+      <p class="lede">
+        A question in English becomes a SQLite query, a result, and an answer.
+        The graph is LangChain's custom SQL agent, with three additions the
+        tutorial leaves as an exercise: a read-only guard, a retry limit, and a
+        human approval interrupt.
+      </p>
+
+      <div class="callout win">
+        <span class="label">The one-line model</span>
+        <strong>The model proposes. The guard decides. The graph retries.</strong>
+        No model output reaches the database without passing the same checks, and
+        every answer carries the SQL that produced it.
+      </div>
+
+      <h2>Setup</h2>
+
+      <pre><code>cd assets/examples/0021-text-to-sql
+uv sync
+
+# Windows PowerShell
+Copy-Item .env.example .env
+
+# macOS / Linux
+cp .env.example .env</code></pre>
+
+      <p>
+        Set <code>OPENAI_API_KEY</code> in <code>.env</code>. DeepSeek is the
+        default endpoint; any OpenAI-compatible chat model with tool calling
+        works. The database is local, so nothing else is required.
+      </p>
+
+      <h2>The workflow</h2>
+
+      <h3>Step 1 — build the database</h3>
+
+      <pre><code>uv run python main.py build</code></pre>
+
+      <pre><code>built ...\data\northstar.db
+  customers: 8 rows
+  products: 6 rows
+  orders: 12 rows
+  order_items: 19 rows</code></pre>
+
+      <p>
+        Four CSV files become one SQLite file. The data is small on purpose:
+        every expected number fits on a slide, so a wrong query is visible
+        instead of plausible.
+      </p>
+
+      <h3>Step 2 — see what the model sees</h3>
+
+      <pre><code>uv run python main.py schema</code></pre>
+
+      <pre><code>-- customers (8 rows)
+CREATE TABLE customers (
+    customer_id INTEGER PRIMARY KEY,
+    name        TEXT NOT NULL,
+    region      TEXT NOT NULL,
+    signup_date TEXT NOT NULL
+);
+...</code></pre>
+
+      <p>
+        The schema text is the whole context for the SQL step: the DDL, the row
+        counts, and nothing else. There are no sample rows in the prompt, so the
+        model cannot memorize an answer from the data.
+      </p>
+
+      <h3>Step 3 — ask one question</h3>
+
+      <pre><code>uv run python main.py ask "How many orders were completed?"</code></pre>
+
+      <pre><code>10 orders were completed.</code></pre>
+
+      <h3>Step 4 — ask again, with the SQL</h3>
+
+      <pre><code>uv run python main.py ask "How many orders were completed?" --show</code></pre>
+
+      <pre><code>10 orders were completed.
+
+SQL (1 attempt(s)):
+SELECT COUNT(*) AS completed_orders FROM orders WHERE status = 'completed'
+
+Result:
+completed_orders
+1. 10</code></pre>
+
+      <p>
+        <code>--show</code> is the habit worth keeping. An answer is a claim; the
+        SQL and rows are the evidence. Without them you cannot tell a correct
+        count from a query that returned zero rows and a confident sentence.
+      </p>
+
+      <h3>Step 5 — review before executing</h3>
+
+      <pre><code>uv run python main.py ask "How many customers are in the West region?" --review --show
+
+proposed SQL (attempt 1):
+SELECT COUNT(*) AS customer_count FROM customers WHERE region = 'West'
+
+[a]pprove · [e]dit · [r]eject > a
+There are 3 customers in the West region.</code></pre>
+
+      <p>
+        <code>--review</code> pauses the graph on <code>interrupt</code> before
+        the query runs. <code>a</code> approves, <code>e</code> edits the
+        statement, <code>r</code> rejects it and the graph takes the failure
+        path. The pause needs a checkpointer; the example always supplies one.
+      </p>
+
+      <h3>Step 6 — four questions end to end</h3>
+
+      <pre><code>uv run python main.py demo --show</code></pre>
+
+      <pre><code>=== 1. How many orders were completed?
+10 orders were completed.
+
+=== 2. What is total revenue from completed orders?
+The total revenue from completed orders is 3111.0.
+
+=== 3. Which customer placed the most orders, and how many did they place?
+Ava Chen placed the most orders, with 3 orders.
+
+=== 4. What is the refund rate?
+INSUFFICIENT_SCHEMA: refunds table (no refund/refunded column or table exists)</code></pre>
+
+      <p>
+        The fourth question is the one to study. There is no refunds table and no
+        <code>refunded</code> status, so the correct answer is a refusal. A model
+        that writes <code>WHERE status = 'refunded'</code> gets zero rows and
+        still sounds certain; the sentinel is how this example tells the two
+        apart.
+      </p>
+
+      <p>
+        The block above is abridged: <code>--show</code> prints each SQL
+        statement and its rows between the answers. The full run is in the
+        README.
+      </p>
+
+      <h3>Step 7 — the tests</h3>
+
+      <pre><code>uv run pytest -q</code></pre>
+
+      <pre><code>29 passed</code></pre>
+
+      <p>
+        No network, no key, no database server. The graph tests use a scripted
+        model, so the retry and interrupt paths run deterministically.
+      </p>
+
+      <h2>The graph, node by node</h2>
+
+      <pre><code>START → load_schema → generate → (SQL? review : END)
+             ↑                        │
+             │                        ▼
+          execute ←─────────────── review
+             │
+   (error, attempts left) → generate
+   (ok)                    → answer → END
+   (attempts exhausted)    → fail   → END</code></pre>
+
+      <table>
+        <thead>
+          <tr>
+            <th>node</th>
+            <th>reads</th>
+            <th>writes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>load_schema</code></td>
+            <td>the database file</td>
+            <td><code>schema</code>, the system prompt, the question</td>
+          </tr>
+          <tr>
+            <td><code>generate</code></td>
+            <td>messages</td>
+            <td>the reply, <code>sql</code>, <code>tool_call_id</code>, <code>attempts</code></td>
+          </tr>
+          <tr>
+            <td><code>review</code></td>
+            <td><code>sql</code>, <code>attempts</code></td>
+            <td><code>approved</code>, possibly an edited <code>sql</code></td>
+          </tr>
+          <tr>
+            <td><code>execute</code></td>
+            <td><code>sql</code></td>
+            <td><code>result</code> or <code>error</code>, a tool or user message</td>
+          </tr>
+          <tr>
+            <td><code>answer</code></td>
+            <td>question, <code>sql</code>, <code>result</code></td>
+            <td>the final assistant message</td>
+          </tr>
+          <tr>
+            <td><code>fail</code></td>
+            <td><code>error</code>, <code>attempts</code></td>
+            <td>a plain-language failure message</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        <code>execute</code> is a node rather than a <code>ToolNode</code> because
+        it owns three things a tool call should not: the read-only guard, the
+        attempt counter, and the approval result. The <code>run_query</code> tool
+        is still bound to the model — it is the contract that makes the model
+        emit <code>{"query": "…"}</code> instead of prose — but SQL only runs in
+        <code>execute</code>.
+      </p>
+
+      <p>
+        On a failed attempt the node appends the SQLite error and a human message
+        that names the attempt number. The next <code>generate</code> call sees
+        that message, which is the whole retry mechanism:
+      </p>
+
+      <pre><code>That query failed: OperationalError: no such column: nope
+Rewrite it. Attempt 1 of 3.</code></pre>
+
+      <h2>The guard</h2>
+
+      <p>
+        The reference tutorial says its tools are "not intended to be secure".
+        This example makes the missing layers explicit; they run in this order.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>layer</th>
+            <th>what it stops</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>file:…?mode=ro</code></td>
+            <td>any write, even if the SQL gets past the text checks</td>
+          </tr>
+          <tr>
+            <td><code>PRAGMA query_only = ON</code></td>
+            <td>the same, at the connection level</td>
+          </tr>
+          <tr>
+            <td>one statement, <code>SELECT</code>/<code>WITH</code> only</td>
+            <td>stacked statements, DDL, <code>ATTACH</code></td>
+          </tr>
+          <tr>
+            <td>forbidden-keyword scan</td>
+            <td><code>INSERT</code>, <code>UPDATE</code>, <code>DELETE</code>, <code>DROP</code>, <code>PRAGMA</code>, …</td>
+          </tr>
+          <tr>
+            <td>outer <code>LIMIT 50</code></td>
+            <td>unbounded result sets and <code>SELECT *</code></td>
+          </tr>
+          <tr>
+            <td><code>set_progress_handler</code>, 2 s</td>
+            <td>runaway recursive CTEs and cartesian joins</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        The outer limit is applied by the runner, not requested in the prompt, so
+        a model that ignores the instruction is still capped. The cap is a memory
+        and latency bound, not a correctness guarantee: an aggregate query has
+        one row and can still be wrong.
+      </p>
+
+      <h2>What the tests prove</h2>
+
+      <ul>
+        <li>the CSVs rebuild the same 8 / 6 / 12 / 19 rows, twice in a row;</li>
+        <li>the read-only connection rejects a <code>DELETE</code> at the database level;</li>
+        <li>stacked statements, writes and <code>PRAGMA</code> are rejected before execution;</li>
+        <li>a cartesian join is cut at 50 rows and marked truncated;</li>
+        <li>a recursive CTE is interrupted by the 2-second deadline;</li>
+        <li>one good query produces an answer with one attempt;</li>
+        <li>a bad column is retried with the SQLite error in the prompt;</li>
+        <li>three bad queries end in the failure message, not an endless loop;</li>
+        <li><code>INSUFFICIENT_SCHEMA</code> ends the run without executing SQL;</li>
+        <li><code>interrupt</code> pauses before execution, and approve, edit and reject all take the right path.</li>
+      </ul>
+
+      <h2>Known limits</h2>
+
+      <ul>
+        <li>No evaluation set. Five hand-checked questions is a demo, not a benchmark.</li>
+        <li>
+          No <code>check_query</code> node. The tutorial asks a second model to
+          proofread the SQL; this example relies on the guard and the retry loop.
+          A query that runs but answers the wrong question is not caught.
+        </li>
+        <li>
+          SQLite only. The tutorial's Chinook file and a PostgreSQL variant are
+          described in the notes, not run here.
+        </li>
+        <li>
+          The guard is not a sandbox. A read-only connection still sees every row
+          in the file, and a slow query burns CPU until the deadline fires.
+        </li>
+        <li>
+          Model behavior varies. DeepSeek answered four questions on the first
+          attempt; another provider may need the retry path more often. That is
+          what the <code>attempts</code> counter is for.
+        </li>
+      </ul>
+
+      <p>
+        The companion lesson is
+        <a href="../../../lessons/0021-text-to-sql.html">Lesson 21 — Text to SQL</a>.
+        The reference walkthrough, including the tutorial's <code>check_query</code>
+        id trick and the streaming API version difference, is in
+        <a href="docs/agent-notes.md">agent notes</a>. The graph mechanics are in
+        <a href="../../../lessons/0010-langgraph.html">Lesson 10</a>.
+      </p>
+
+      <div class="footer-nav">
+        <div class="ask">
+          <strong>Before you connect a real database:</strong> decide what the
+          agent can read, what it can never write, how many rows it may return,
+          and how long a query may run. The prompt is not a permission system.
+        </div>
+        <div class="links">
+          <a href="README.md">README</a>
+          <a href="docs/agent-notes.md">Agent notes</a>
+          <a href="app/graph.py">The graph</a>
+          <a href="app/db.py">The guard</a>
+          <a href="../../../lessons/0021-text-to-sql.html">Lesson 21</a>
+        </div>
+      </div>
+    </article>
+  </body>
+</html>

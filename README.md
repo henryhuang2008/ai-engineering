@@ -1,12 +1,12 @@
 # AI Engineering — From First LLM Call to a Grounded RAG Product
 
-A 20-lesson, build-first course for experienced software engineers moving into AI engineering. It starts with a single chat-completion call, builds toward a Supabase + pgvector filing analyst whose answers are cited, validated and allowed to refuse, closes with a batch pipeline that turns YouTube RSS and transcripts into a daily email, ends with the two memory systems that decide what an agent remembers, and closes on the skill format that decides what instructions it can carry.
+A 21-lesson, build-first course for experienced software engineers moving into AI engineering. It starts with a single chat-completion call, builds toward a Supabase + pgvector filing analyst whose answers are cited, validated and allowed to refuse, closes with a batch pipeline that turns YouTube RSS and transcripts into a daily email, covers the two memory systems that decide what an agent remembers and the skill format that decides what instructions it can carry, and ends with a text-to-SQL agent that shows what happens when model output is about to touch a real system.
 
 **Start here → [Lesson 1: What an AI Engineer Is in 2026](lessons/0001-ai-engineering-landscape-2026.html)**
 
 ---
 
-## The 20 lessons
+## The 21 lessons
 
 | # | Lesson | What it covers | Time |
 |---|--------|----------------|------|
@@ -30,6 +30,7 @@ A 20-lesson, build-first course for experienced software engineers moving into A
 | 18 | [Project: AI News Digest — YouTube First](lessons/0018-project-youtube-digest.html) | Batch aggregator: unstable RSS, transcript fallbacks and IP bans, SQLAlchemy models with Alembic, a bounded DeepSeek prompt from your own editorial brief, strict JSON, gated email, and the scheduler phase left honestly open. | ~60 min |
 | 19 | [Memory in Agents — Short-Term, Long-Term, and PostgreSQL](lessons/0019-memory-agents-langgraph.html) | When and why to use each memory; the example's demo, facts and chat workflow; trimming and summarization; and PostgresSaver plus PostgresStore with the restart test. | ~35 min |
 | 20 | [Agent Skills — Run the Example](lessons/0020-agent-skills.html) | Run a two-skill library end to end — catalog, ask, script, lint, tests — follow one question through the tool calls, and learn the six rules and four failures that decide whether a skill works. | ~30 min |
+| 21 | [Text to SQL — The Model Proposes, the Guard Decides](lessons/0021-text-to-sql.html) | A custom LangGraph SQL agent over SQLite: a strict query contract, a six-layer read-only guard, a bounded retry loop, human approve/edit/reject, and the questions the schema cannot answer. | ~40 min |
 
 
 ---
@@ -57,6 +58,7 @@ Every Python example is a `uv` project; every frontend uses `pnpm`. Run commands
 | [0018-ai-coding-youtube-transcript-postgresql](assets/examples/0018-ai-coding-youtube-transcript-postgresql/index.html) | Lesson 18 | AI news digest, YouTube collector first: RSS, transcripts, PostgreSQL and email |
 | [0019-memory-agents-langgraph](assets/examples/0019-memory-agents-langgraph/index.html) | Lesson 19 | Memory in agents: LangGraph checkpointer and store, trimming and summarization, 19 tests |
 | [0020-agent-skills-python](assets/examples/0020-agent-skills-python/index.html) | Lesson 20 | Agent Skills in Python: SKILL.md library, 18-rule linter, Pydantic AI deferred capabilities, 34 tests |
+| [0021-text-to-sql](assets/examples/0021-text-to-sql/index.html) | Lesson 21 | Text to SQL: seeded SQLite, guarded LangGraph agent, review interrupt, 29 tests |
 
 ---
 

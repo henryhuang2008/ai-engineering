@@ -1,0 +1,15 @@
+[project]
+name = "whisper-transcribe"
+version = "0.1.0"
+description = "Video/audio to text with faster-whisper, CPU-friendly"
+requires-python = ">=3.11"
+dependencies = [
+    # av must stay below 19: faster-whisper 1.2.1 calls
+    # av.open(metadata_errors=...), which PyAV 19 removed.
+    "faster-whisper==1.2.1",
+    "av==18.1.0",
+]
+
+# This is an application, not a library: `uv sync` installs dependencies only.
+[tool.uv]
+package = false

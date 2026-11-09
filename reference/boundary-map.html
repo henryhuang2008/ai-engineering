@@ -9,11 +9,11 @@
 <body>
 <article class="page">
 
-<p class="meta">Reference document · Draws on <a href="../lessons/0002-your-first-llm-api-call.html">Lesson 2</a> through <a href="../lessons/0020-agent-skills.html">Lesson 20</a> · Prints as a cheat sheet</p>
+<p class="meta">Reference document · Draws on <a href="../lessons/0002-your-first-llm-api-call.html">Lesson 2</a> through <a href="../lessons/0021-text-to-sql.html">Lesson 21</a> · Prints as a cheat sheet</p>
 
 <h1>The Boundary Map</h1>
 
-<p class="lede">"Boundary" is this course's recurring insight — taught in pieces across the twenty lessons, never as one picture. This is the picture: where every boundary sits in an agent, what crosses it, the single rule each enforces, and the lesson to revisit. The claim it compresses: <strong>error handling, security, and safety are the same discipline at different lines</strong> — label what crosses, classify what fails, cap what loops, gate what's irreversible.</p>
+<p class="lede">"Boundary" is this course's recurring insight — taught in pieces across the twenty-one lessons, never as one picture. This is the picture: where every boundary sits in an agent, what crosses it, the single rule each enforces, and the lesson to revisit. The claim it compresses: <strong>error handling, security, and safety are the same discipline at different lines</strong> — label what crosses, classify what fails, cap what loops, gate what's irreversible.</p>
 
 <h2>The agent, drawn as boundaries</h2>
 
@@ -51,6 +51,7 @@ side effects   → (gate)                   budgets   → (cap)
     <tr><td><strong>Persistence</strong></td><td>state ↔ disk</td><td>DB = source of truth (append-only); window = view rebuilt each request</td><td>lost history; forks; stale-cache contradictions</td><td><a href="../lessons/0010-langgraph.html">L10</a></td></tr>
     <tr><td><strong>Memory scope</strong></td><td>thread ↔ user</td><td>Conversation in the checkpointer keyed by <code>thread_id</code>; durable facts in the store keyed by <code>user_id</code></td><td>one thread inherits another's small talk; facts vanish with the chat; unbounded growth</td><td><a href="../lessons/0019-memory-agents-langgraph.html">L19</a></td></tr>
     <tr><td><strong>Skill boundary</strong></td><td>procedure ↔ context</td><td>Only <code>name</code> and <code>description</code> are always on; the body loads on demand, references and scripts after that. Scripts are code, not text.</td><td>a catalog that is a system prompt again; a workflow that needs tools the agent lacks; unsandboxed scripts</td><td><a href="../lessons/0020-agent-skills.html">L20</a></td></tr>
+    <tr><td><strong>SQL execution</strong></td><td>model text → database</td><td>A prompt is not a permission: read-only connection, one <code>SELECT</code>/<code>WITH</code>, keyword whitelist, row cap, deadline, and an approval gate for meaning</td><td>writes; unbounded reads; a cartesian join that pins the process; a valid query that answers the wrong question</td><td><a href="../lessons/0021-text-to-sql.html">L21</a></td></tr>
     <tr><td><strong>Human gate</strong></td><td>side effects → world</td><td>Irreversible actions require approval; deny is a first-class outcome</td><td>rogue refunds; duplicate mail; no audit story</td><td><a href="../lessons/0018-project-youtube-digest.html">L18</a> gates SMTP behind an explicit flag; L17 is read-only</td></tr>
     <tr><td><strong>Output</strong></td><td>answer ↓</td><td>Grounding check: citations must match retrieved blocks, or fail</td><td>hallucination delivered with confidence</td><td><a href="../lessons/0005-your-first-evals.html">L5</a>, <a href="../lessons/0007-rag-service.html">L7</a></td></tr>
   </tbody>
@@ -61,7 +62,7 @@ side effects   → (gate)                   budgets   → (cap)
 <ol>
   <li><strong>What crosses this line?</strong> Name it as one of the three flow types — untrusted text, failure, or side effect. (If nothing crosses, it isn't a boundary; don't add machinery.)</li>
   <li><strong>What's its treatment?</strong> text → <em>label</em> · failure → <em>classify + structure</em> · side effect → <em>gate or idempotency key</em> · loop → <em>cap</em>. One treatment per flow; none of them is "try/except everywhere."</li>
-  <li><strong>What proves it holds?</strong> Every row above has a test: malformed input that must be rejected (L13), a dead source that must degrade instead of raise (L11), a feed failure that must not deactivate the source (L18), a failed SMTP send that must record <code>failed</code> rather than <code>sent</code> (L18), a second thread that must not see another thread's history (L19), a repeated fact that must not duplicate (L19), a skill whose name disagrees with its directory that must fail the lint (L20), a file read before its skill is loaded that must be refused (L20), a citation outside the retrieved set that must fail closed (L7, L17), a re-index that must not change a chunk's provenance (L6). A boundary without an eval is a comment.</li>
+  <li><strong>What proves it holds?</strong> Every row above has a test: malformed input that must be rejected (L13), a dead source that must degrade instead of raise (L11), a feed failure that must not deactivate the source (L18), a failed SMTP send that must record <code>failed</code> rather than <code>sent</code> (L18), a second thread that must not see another thread's history (L19), a repeated fact that must not duplicate (L19), a skill whose name disagrees with its directory that must fail the lint (L20), a file read before its skill is loaded that must be refused (L20), a write that must be rejected by a read-only connection (L21), a cartesian join cut at fifty rows (L21), a recursive CTE stopped by the deadline (L21), a review rejection that must not execute (L21), a citation outside the retrieved set that must fail closed (L7, L17), a re-index that must not change a chunk's provenance (L6). A boundary without an eval is a comment.</li>
 </ol>
 
 <p><strong>The two counting heuristics:</strong> count your <code>try/except</code>s — ideally one per boundary row, zero per business function (an exception is a crash with extra steps; pure functions should fail loudly in tests). And count your receipts — every crossing that failed or was gated leaves a log line or a trace step (L7, L11): boundaries are also where your eval cases come from.</p>
@@ -70,7 +71,7 @@ side effects   → (gate)                   budgets   → (cap)
   <div class="ask"><strong>Not sure where a new feature sits?</strong> Draw its arrows first — what text enters, what fails, what leaves the system — and the boundary (and its lesson) picks itself.</div>
   <div class="links">
     <a href="skill-map.html">← Skill Map &amp; Glossary</a>
-    <a href="../lessons/0020-agent-skills.html">Companion: Lesson 20</a>
+    <a href="../lessons/0021-text-to-sql.html">Companion: Lesson 21</a>
   </div>
 </div>
 
