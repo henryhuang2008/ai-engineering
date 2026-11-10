@@ -225,6 +225,65 @@ async with stdio_client(params) as (read, write):
 request. For resources that live as long as the server — a database pool, a
 loaded model — use FastMCP's `lifespan` instead of opening them per tool call.
 
+## LangChain calls MCP
+
+The official LangChain MCP adapter lives in `langchain-agent/`, a separate small
+uv project. It is separate because `langchain.mcp.MCPAdapter` currently requires
+MCP v2, while this lab pins the v1 SDK so the server and raw clients above keep
+working.
+
+The example follows the LangChain guide at
+<https://docs.langchain.com/oss/python/langchain/mcp>:
+
+```powershell
+cd assets\examples\0009-mcp\langchain-agent
+uv sync
+$env:DEEPSEEK_API_KEY = "sk-..."
+uv run python agent.py "What is 2 + 3?"
+```
+
+`server.py` exposes one `add(a, b)` tool. `agent.py` opens it with
+`MCPAdapter(SERVER)`, converts the tools with `await adapter.list_tools()`, and
+passes them to `create_agent`:
+
+```python
+async with MCPAdapter(SERVER) as adapter:
+    tools = await adapter.list_tools()
+    agent = create_agent(build_model(), tools)
+    result = await agent.ainvoke({"messages": [HumanMessage(question)]})
+```
+
+For SSE, start the server in one terminal and pass it a URL instead of a script
+path:
+
+```powershell
+# terminal 1
+uv run python server.py sse
+
+# terminal 2
+uv run python agent.py --url http://127.0.0.1:8050/sse "What is 2 + 3?"
+```
+
+`MCPAdapter` infers SSE from the `/sse` suffix. Use `server.py http` and
+`http://127.0.0.1:8050/mcp` for Streamable HTTP. Both bind `127.0.0.1:8050`, so
+stop one before starting the other.
+
+Live output:
+
+```
+tools: add
+question: What is 2 + 3?
+  1 human  -> What is 2 + 3?
+  2 ai     -> add({"a": 2, "b": 3})
+  3 tool   -> 5
+  4 ai     -> 2 + 3 = **5**
+answer: 2 + 3 = **5**
+```
+
+That is the same model -> tool -> model loop as `chat.py`, with the adapter and
+`create_agent` owning the wiring. The `langchain.mcp` namespace is beta and
+prints a `LangChainBetaWarning` on import; the API may change.
+
 ## Security defaults
 
 - HTTP transports bind to `127.0.0.1`; there is no authentication in this lab.
@@ -234,7 +293,7 @@ loaded model — use FastMCP's `lifespan` instead of opening them per tool call.
 
 ## Notes
 
-- **Two different FastMCPs.** This lab uses `mcp.server.fastmcp.FastMCP` — the v1 SDK's server class. The standalone `fastmcp` package (v2) is not a dependency. Clients use the SDK transports: `stdio_client`, `sse_client`, `streamablehttp_client`.
+- **Two different FastMCPs.** This lab uses `mcp.server.fastmcp.FastMCP` — the v1 SDK's server class. The `langchain-agent/` subproject separately uses the standalone `fastmcp` 4.x package, which is why it has its own uv environment. Clients here use the SDK transports: `stdio_client`, `sse_client`, `streamablehttp_client`.
 - `mcp[cli]` is pinned to the 1.x SDK (`>=1.30,<2`). The v2 SDK changes these APIs; do not swap the pin without reading the migration notes.
 - The server also runs under `mcp dev server.py` (MCP Inspector, needs Node.js)
   and `mcp install server.py` (Claude Desktop). Neither is required here.

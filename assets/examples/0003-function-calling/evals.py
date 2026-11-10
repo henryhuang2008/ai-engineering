@@ -1,9 +1,10 @@
 """Self-tests for 0003-function-calling.
 
-No fake model: the lab talks to live DeepSeek. Everything here runs offline -
-tool contracts, the catalog, tool execution and error handling, the loop's
-control flow (driven by a test double defined below, not by the lab), the
-missing-key instructions, the uv project - plus one live smoke when a key is set.
+No fake model: both scripts talk to live DeepSeek. Everything here runs offline -
+tool contracts, the catalog, tool execution and error handling, the hand-written
+loop's control flow and the framework-owned agent loop (both driven by a test
+double defined below, not by the scripts), the missing-key instructions, the uv
+project - plus live smoke checks when a key is set.
 """
 
 from __future__ import annotations
@@ -15,9 +16,12 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
+from types import SimpleNamespace
 
+import agent_call
 import function_calling_lab as lab
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langgraph.types import Command
 
 HERE = Path(__file__).resolve().parent
 PY = sys.executable
@@ -83,7 +87,7 @@ class StubModel:
         self.bound = _StubBound(replies)
         self.tools: list = []
 
-    def bind_tools(self, tools):
+    def bind_tools(self, tools, **kwargs):
         self.tools = list(tools)
         return self.bound
 
@@ -201,6 +205,60 @@ def test_loop_budget() -> None:
     check("budget keeps the transcript", len(result.messages) == 8, str(len(result.messages)))
 
 
+def test_agent_graph() -> None:
+    stub = StubModel([])
+    agent = agent_call.build_agent(stub)
+    graph = agent.get_graph()
+    check(
+        "agent graph is start/model/tools/end",
+        set(graph.nodes) == {"__start__", "model", "tools", "__end__"},
+        str(sorted(graph.nodes)),
+    )
+    edges = {(edge.source, edge.target) for edge in graph.edges}
+    check("model routes to tools", ("model", "tools") in edges, str(sorted(edges)))
+    check("tools route back to model", ("tools", "model") in edges, str(sorted(edges)))
+    check("plain agent has no checkpointer", agent.checkpointer is None)
+
+
+def test_agent_loop() -> None:
+    stub = StubModel(
+        [
+            call_message("get_ticket_status", {"ticket_id": "T-1001"}, "call_a"),
+            AIMessage(content="T-1001 is open on the pro plan."),
+        ]
+    )
+    agent = agent_call.build_agent(stub)
+    result = agent.invoke({"messages": [{"role": "user", "content": "status of T-1001?"}]})
+    messages = result["messages"]
+    check(
+        "one invoke produces human/ai/tool/ai",
+        [m.type for m in messages] == ["human", "ai", "tool", "ai"],
+        str([m.type for m in messages]),
+    )
+    check("the graph ran the tool", "open" in str(messages[2].content), str(messages[2].content))
+    check("the answer survives", "open" in str(messages[-1].content), str(messages[-1].content))
+    check("the graph bound both tools", len(stub.tools) == 2, str(len(stub.tools)))
+    check(
+        "the second model turn saw the tool result",
+        any(m.type == "tool" for m in stub.bound.sent[1]),
+        str([m.type for m in stub.bound.sent[1]]),
+    )
+    check("count_turns reads the graph output", agent_call.count_turns(messages) == (2, 1))
+
+
+def test_pending_actions() -> None:
+    interrupt = SimpleNamespace(value={"action_requests": [{"name": "issue_refund", "args": {}}]})
+    actions = agent_call.pending_actions({"__interrupt__": (interrupt,)})
+    check("pending action is surfaced", [a["name"] for a in actions] == ["issue_refund"], str(actions))
+    check("no interrupt means no actions", agent_call.pending_actions({"messages": []}) == [])
+
+
+def test_agent_no_fake_model() -> None:
+    source = (HERE / "agent_call.py").read_text(encoding="utf-8")
+    check("agent script has no scripted branch", "--real" not in source and "scripted" not in source.lower())
+    check("agent script builds the live model", "build_model()" in source)
+
+
 def test_model_config() -> None:
     with with_env({"DEEPSEEK_API_KEY": "test-key"}):
         model = lab.build_model()
@@ -271,7 +329,32 @@ def test_live_smoke() -> tuple[bool, str]:
     check("live reply is an AIMessage", isinstance(reply, AIMessage), type(reply).__name__)
     check("live reply requested the lookup", bool(reply.tool_calls), str(reply.tool_calls))
     check("live call names a declared tool", reply.tool_calls[0]["name"] in lab.REGISTRY)
-    return True, "ran one live tool-calling call"
+
+    gated = agent_call.build_agent(model, require_approval=True)
+    config = {"configurable": {"thread_id": "eval-live-approval"}}
+    paused = gated.invoke({"messages": [HumanMessage(lab.QUESTION_REFUND)]}, config)
+    actions = agent_call.pending_actions(paused)
+    check(
+        "live agent paused on issue_refund",
+        [action["name"] for action in actions] == ["issue_refund"],
+        str(actions),
+    )
+    rejected = gated.invoke(
+        Command(resume={"decisions": [{"type": "reject", "message": "No refund today."}]}),
+        config,
+    )
+    tool_messages = [m for m in rejected["messages"] if m.type == "tool"]
+    check(
+        "live rejection reaches the model as a tool result",
+        any("reject" in str(m.content).lower() for m in tool_messages),
+        str([m.content for m in tool_messages]),
+    )
+    check(
+        "live agent still answers after the rejection",
+        bool(str(rejected["messages"][-1].content).strip()),
+        str(rejected["messages"][-1].content),
+    )
+    return True, "ran one live tool call and one gated agent with a rejection"
 
 
 TESTS = [
@@ -282,6 +365,10 @@ TESTS = [
     ("execute", test_execute),
     ("loop control flow", test_loop_control_flow),
     ("loop budget", test_loop_budget),
+    ("agent graph", test_agent_graph),
+    ("agent loop", test_agent_loop),
+    ("pending actions", test_pending_actions),
+    ("agent has no fake model", test_agent_no_fake_model),
     ("model config", test_model_config),
     ("model overrides", test_model_overrides),
     ("missing key instructions", test_missing_key),
@@ -304,11 +391,11 @@ def main() -> int:
         ran, note = test_live_smoke()
     except Exception as error:  # noqa: BLE001
         failures += 1
-        print(f"FAIL 13 live smoke: {error}")
+        print(f"FAIL {len(TESTS) + 1:02d} live smoke: {error}")
     else:
-        print(f"ok 13 live smoke: {note}")
+        print(f"ok {len(TESTS) + 1:02d} live smoke: {note}")
         if not ran:
-            print("     set DEEPSEEK_API_KEY to include the live call")
+            print("     set DEEPSEEK_API_KEY to include the live calls")
 
     total = len(CHECKS)
     print(f"\n{total} checks passed, {failures} failed")

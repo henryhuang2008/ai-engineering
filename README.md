@@ -4,6 +4,12 @@ A 21-lesson, build-first course for experienced software engineers moving into A
 
 **Start here → [Lesson 1: What an AI Engineer Is in 2026](lessons/0001-ai-engineering-landscape-2026.html)**
 
+**Read the rendered course → <https://henryhuang2008.github.io/ai-engineering/>**
+
+GitHub's file view shows `.html` files as source, not as pages. The Pages site
+serves the same files as a site. If the link 404s, enable it once under
+**Settings → Pages → Deploy from a branch → `main` / (root)**.
+
 ---
 
 ## The 21 lessons
@@ -12,13 +18,13 @@ A 21-lesson, build-first course for experienced software engineers moving into A
 |---|--------|----------------|------|
 | 1 | [What an AI Engineer Is in 2026](lessons/0001-ai-engineering-landscape-2026.html) | The six-layer application stack, the four hiring pillars, and which parts your existing software background already covers. | ~15 min |
 | 2 | [Your First LLM Call](lessons/0002-your-first-llm-api-call.html) | The core atom: messages, streamed tokens, one tool round trip and pydantic-typed output, driven through LangChain against DeepSeek. | ~30 min |
-| 3 | [Function Calling: The Model Asks, Your Code Acts](lessons/0003-function-calling.html) | Close the tool loop by hand — schemas, execution, results — so agent frameworks stop being magic. | ~25 min |
+| 3 | [Function Calling: The Model Asks, Your Code Acts](lessons/0003-function-calling.html) | Close the tool loop by hand — schemas, execution, results — then hand the same loop to `create_agent` and see what the framework does and does not hide. | ~35 min |
 | 4 | [Streaming Chat: Python Backend, Next.js Shell](lessons/0004-streaming-chat.html) | A streaming Python backend, a thin Next.js route, and a real chat UI instead of a bare input. | ~40 min |
 | 5 | [Your First Evals](lessons/0005-your-first-evals.html) | Build an eval set so "the output looks fine" becomes a measurable answer. | ~35 min |
 | 6 | [RAG: The Pipeline, End to End](lessons/0006-rag-foundation.html) | The eight-stage RAG map: what each stage takes in, produces, and gets wrong. | ~30 min |
 | 7 | [The RAG Service: Two Lanes, One Table, and a LlamaIndex Variant](lessons/0007-rag-service.html) | Build it by hand: ingest a corpus, index it in LanceDB, retrieve, and answer with citations. Then the same service rebuilt with LlamaIndex. | ~55 min |
 | 8 | [RAG Appendix: Chunking Tools and Vector Stores](lessons/0008-rag-appendix.html) | The reference for chunking frameworks and the vector stores you are actually choosing between. | ~30 min |
-| 9 | [MCP: Write the Tool Once, Call It From Any Client](lessons/0009-mcp.html) | Build an MCP server, call it with no model, then let DeepSeek drive it. | ~45 min |
+| 9 | [MCP: Write the Tool Once, Call It From Any Client](lessons/0009-mcp.html) | Build an MCP server, call it with no model, then use a hand-written loop and LangChain's MCPAdapter. | ~60 min |
 | 10 | [LangGraph: One Node, Then a Branch](lessons/0010-langgraph.html) | Go from a one-node graph to a program with a visible decision. | ~40 min |
 | 11 | [LangGraph, Advanced: Fan-Out, Fan-In, and the Join That Fires Early](lessons/0011-langgraph-advanced.html) | Parallel branches, early joins, and reconciling results without waiting for the wrong things. | ~50 min |
 | 12 | [Python Libraries Every AI Engineer Should Know](lessons/0012-python-libraries-for-ai.html) | The small contracts — validation, storage, tracing, testing, agents, MCP, evals — that make up a real stack. | ~50 min |
@@ -43,12 +49,12 @@ Every Python example is a `uv` project; every frontend uses `pnpm`. Run commands
 | Example | Companion lesson | What is inside |
 |---------|------------------|----------------|
 | [0002-first-llm-api](assets/examples/0002-first-llm-api/index.html) | Lesson 2 | First API call, streaming and typed output |
-| [0003-function-calling](assets/examples/0003-function-calling/index.html) | Lesson 3 | The hand-written tool loop |
+| [0003-function-calling](assets/examples/0003-function-calling/index.html) | Lesson 3 | The hand-written tool loop and the same task as an agent call |
 | [0004-streaming-chat](assets/examples/0004-streaming-chat/index.html) | Lesson 4 | Streaming backend and chat shell |
 | [0005-first-evals](assets/examples/0005-first-evals/index.html) | Lesson 5 | Eval harness and test cases |
 | [0007-rag-service](assets/examples/0007-rag-service/index.html) | Lesson 7 | LanceDB RAG pipeline |
 | [0007-rag-service-llamaindex](assets/examples/0007-rag-service-llamaindex/index.html) | Lesson 7 | The LlamaIndex variant |
-| [0009-mcp](assets/examples/0009-mcp/index.html) | Lesson 9 | MCP server and client calls |
+| [0009-mcp](assets/examples/0009-mcp/index.html) | Lesson 9 | MCP server, raw clients, and LangChain's MCPAdapter |
 | [0010-langgraph](assets/examples/0010-langgraph/index.html) | Lesson 10 | One node, then a branch |
 | [0011-langgraph-advanced](assets/examples/0011-langgraph-advanced/index.html) | Lesson 11 | Fan-out and fan-in |
 | [0013-pydantic](assets/examples/0013-pydantic/index.html) | Lesson 13 | Validation boundary and typed model output |

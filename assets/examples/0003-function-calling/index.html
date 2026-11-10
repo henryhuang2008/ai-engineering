@@ -13,7 +13,7 @@
 
 <h1>Function calling: the model asks, your code acts</h1>
 
-<p class="lede">One <code>ChatDeepSeek</code> handle, five stages, no fake model. Two <code>@tool</code> functions become the catalog the model reads; one round trip runs <code>get_ticket_status(&#x27;T-1001&#x27;)</code> and grows the thread <strong>3 &rarr; 5</strong>; the refund task needs <strong>2&ndash;3 loop iterations</strong> before plain text arrives; a non-refundable ticket returns <code>{"error": ...}</code> and the model must decline; <code>max_iterations=1</code> on the same task stops with <code>stopped: budget</code>. Self-tests: <strong>54 checks</strong> offline, plus a live smoke when <code>DEEPSEEK_API_KEY</code> is set.</p>
+<p class="lede">Two live scripts share one tool catalog and one <code>ChatDeepSeek</code> handle. <code>function_calling_lab.py</code> writes the loop by hand: two <code>@tool</code> functions, one round trip that grows the thread <strong>3 &rarr; 5</strong>, a refund that needs <strong>2&ndash;3 iterations</strong>, a non-refundable ticket the model must decline, and <code>max_iterations=1</code> stopping with <code>stopped: budget</code>. <code>agent_call.py</code> runs the same refund task through <code>create_agent</code>: the graph is <code>model &rarr; tools &rarr; model</code>, <strong>one <code>invoke()</code> produces 3 model turns and 2 tool results</strong>, <code>stream_mode="updates"</code> shows each step, <code>HumanInTheLoopMiddleware</code> pauses before <code>issue_refund</code>, and <code>recursion_limit=2</code> raises <code>GraphRecursionError</code>. Self-tests: <strong>68 checks</strong> offline, plus 6 live checks when <code>DEEPSEEK_API_KEY</code> is set.</p>
 
 <h2>Key and run (uv)</h2>
 <pre>$env:DEEPSEEK_API_KEY = "sk-..."     # PowerShell, this terminal
@@ -21,17 +21,28 @@ setx DEEPSEEK_API_KEY "sk-..."       # persist, then reopen the terminal
 
 cd assets\examples\0003-function-calling
 uv sync                               # .venv from pyproject.toml + uv.lock
-uv run python function_calling_lab.py # five stages, live DeepSeek
-uv run python evals.py                # 54 checks (+3 live with a key)</pre>
-<p>Key page: <a href="https://platform.deepseek.com/api_keys">platform.deepseek.com/api_keys</a>. No key &rarr; the lab prints those commands and exits 1; there is no canned fallback. Optional overrides: <code>DEEPSEEK_MODEL</code> (default <code>deepseek-flash</code>), <code>DEEPSEEK_BASE_URL</code> (default <code>https://api.deepseek.com</code>), and <code>MAX_ITERATIONS</code> (default <code>10</code>). The lab disables DeepSeek thinking for speed and keeps the raw <code>AIMessage</code> in the thread because rebuilding it drops fields the provider expects. Wording varies between runs; the message shapes, call ids, and stop reasons do not. <code>uv.lock</code> pins the exact dependency graph, so <code>uv sync</code> is the whole install step.</p>
+uv run python function_calling_lab.py # hand-written loop, five stages
+uv run python agent_call.py           # agent call, five stages
+uv run python evals.py                # 68 checks (+6 live with a key)</pre>
+<p>Key page: <a href="https://platform.deepseek.com/api_keys">platform.deepseek.com/api_keys</a>. No key &rarr; each script prints those commands and exits 1; there is no canned fallback. Optional overrides: <code>DEEPSEEK_MODEL</code> (default <code>deepseek-flash</code>), <code>DEEPSEEK_BASE_URL</code> (default <code>https://api.deepseek.com</code>), and <code>MAX_ITERATIONS</code> (default <code>10</code>, hand-written loop only). Both scripts disable DeepSeek thinking for speed and keep the raw <code>AIMessage</code> in the thread because rebuilding it drops fields the provider expects. Wording varies between runs; the message shapes, call ids, graph shape, and stop behaviour do not. <code>uv.lock</code> pins the exact dependency graph, so <code>uv sync</code> is the whole install step.</p>
 
 <h2>README.md</h2>
 <pre># 0003 — Function calling: the model asks, your code acts
 
-One LangChain handle (`ChatDeepSeek`), five stages. The model never runs anything: it
-returns a **request** (`AIMessage.tool_calls`), your code decides whether to run it,
-executes the real function, and reports back with a `ToolMessage`. Repeat until the
-model answers in plain text — that loop is the atom of agency.
+Two scripts, one tool catalog. The model never runs anything: it returns a
+**request** (`AIMessage.tool_calls`), your code decides whether to run it, executes
+the real function, and reports back with a `ToolMessage`. Repeat until the model
+answers in plain text — that loop is the atom of agency.
+
+| script | who owns the loop |
+|---|---|
+| `function_calling_lab.py` | you do: a `for` loop over `bind_tools()`, `execute()`, and `ToolMessage` |
+| `agent_call.py` | LangChain&#x27;s `create_agent` does: a compiled LangGraph graph (`model ⇄ tools`) runs one `invoke()` |
+
+Same `get_ticket_status` and `issue_refund` tools, same `ChatDeepSeek` handle, same
+fixture. Learning the hand-written loop first is what makes the framework legible.
+
+## function_calling_lab.py — five hand-written stages
 
 | stage | what it shows | stable result |
 |---|---|---|
@@ -41,12 +52,22 @@ model answers in plain text — that loop is the atom of agency.
 | 4. the guard | `T-1002` is not refundable → the tool returns `{&quot;error&quot;: &quot;ticket not refundable&quot;}` and the model must read it | `stopped: answer`, no invented success |
 | 5. the cap | `max_iterations=1` on the same refund task | `stopped: budget`, 1 iteration, empty answer |
 
-Model *wording* varies between runs. Message counts, call ids, and the loop&#x27;s stop
-reason are structural — `evals.py` asserts those, not the sentences.
+## agent_call.py — the same task as an agent call
+
+| stage | what it shows | stable result |
+|---|---|---|
+| 1. graph | `create_agent(model, TOOLS)` returns a graph, not a prompt | nodes `__start__, model, tools, __end__`; edges `model → tools`, `tools → model` |
+| 2. one call | one `agent.invoke(...)` runs the whole refund task | 6 messages: human, ai, tool, ai, tool, ai; **3 model turns, 2 tool results** |
+| 3. stream | `stream_mode=&quot;updates&quot;` exposes each graph step | 3 chunks: `model`, `tools`, `model` for the status question |
+| 4. approval | `HumanInTheLoopMiddleware(interrupt_on={&quot;issue_refund&quot;: True})` + checkpointer | pauses before the refund; `Command(resume={&quot;decisions&quot;: [...]})` approves or rejects |
+| 5. budget | `recursion_limit=2` on a task that needs 3 steps | raises `GraphRecursionError`; the hand-written loop returned `stopped: budget` instead |
+
+Model *wording* varies between runs. Message counts, call ids, graph shape, and
+stop behaviour are structural — `evals.py` asserts those, not the sentences.
 
 ## Run
 
-The lab calls the live DeepSeek API. There is no fake model and no offline mode.
+Both scripts call the live DeepSeek API. There is no fake model and no offline mode.
 
 ```powershell
 # key, this terminal only
@@ -59,8 +80,9 @@ setx DEEPSEEK_API_KEY &quot;sk-...&quot;
 ```powershell
 cd assets\examples\0003-function-calling
 uv sync                              # create .venv from pyproject.toml + uv.lock
-uv run python function_calling_lab.py # five stages against DeepSeek
-uv run python evals.py                # 54 offline checks; +3 live with a key
+uv run python function_calling_lab.py # the hand-written loop, five stages
+uv run python agent_call.py           # the framework-owned loop, five stages
+uv run python evals.py                # 68 offline checks; +6 live with a key
 ```
 
 `uv sync` is the install step: `pyproject.toml` declares the dependencies and
@@ -68,8 +90,8 @@ uv run python evals.py                # 54 offline checks; +3 live with a key
 machines. No uv yet: `winget install --id=astral-sh.uv`, or `pip install uv`.
 
 Get a key at &lt;https://platform.deepseek.com/api_keys&gt;; the account needs a small
-prepaid balance. Without a key the lab prints the two key commands and exits 1 — no
-silent fallback.
+prepaid balance. Without a key both scripts print the two key commands and exit 1 —
+no silent fallback.
 
 Optional overrides:
 
@@ -77,38 +99,41 @@ Optional overrides:
 |---|---|
 | `DEEPSEEK_MODEL` | `deepseek-flash` |
 | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` |
-| `MAX_ITERATIONS` | `10` |
+| `MAX_ITERATIONS` | `10` (hand-written loop only) |
 
 ## What the self-tests cover
 
 Everything that does not need the network: the fixture, both tool contracts
 (required arguments, description text), the tool bodies (refund allowed / refused /
 unknown ticket), the catalog the model receives, `execute()` for good calls, unknown
-tools and invalid arguments, the loop&#x27;s control flow (answer vs budget, message
-shapes, call-id pairing) driven by a test double defined **in `evals.py`**, the
-missing-key instructions, the model wiring, and the uv project. With a key, three
-more checks fire: one live call must return an `AIMessage` that requests
-`get_ticket_status`.
+tools and invalid arguments, the hand-written loop&#x27;s control flow (answer vs budget,
+message shapes, call-id pairing), the agent graph&#x27;s shape, one `create_agent` run
+with a scripted model, and `pending_actions()`. Both the loop double and the agent
+double are defined **in `evals.py`** — the scripts themselves have no fake model.
+Also checked: the missing-key instructions, the model wiring, and the uv project.
+With a key, six more checks fire: one live call must request `get_ticket_status`,
+and a gated agent must pause on `issue_refund` and keep a rejection as a tool result.
 
 ## DeepSeek notes
 
 - `deepseek-flash` supports tool calls; `deepseek-v4-pro` is the larger option. Same
   key, same base URL.
-- The lab disables DeepSeek thinking for speed. If you turn thinking on
+- Both scripts disable DeepSeek thinking for speed. If you turn thinking on
   (`extra_body={&quot;thinking&quot;: {&quot;type&quot;: &quot;enabled&quot;}}`), tool turns require every earlier
   `reasoning_content` to be echoed back or the API answers 400 — which is why the
-  loop keeps the raw `AIMessage` instead of rebuilding messages by hand.
+  hand-written loop keeps the raw `AIMessage` instead of rebuilding messages by hand.
 - `strict` mode (Beta) pins argument shapes to your JSON schema: use the
   `https://api.deepseek.com/beta` base URL and set `strict: true` per function.
 - LangChain maps `AIMessage.tool_calls` and `ToolMessage` onto DeepSeek&#x27;s OpenAI-shaped
-  wire format, so the same loop runs unchanged on other providers.
+  wire format, so the same tools run unchanged on other providers and under either loop.
 
 ## Files
 
 | file | role |
 |---|---|
-| `function_calling_lab.py` | the five stages, the hand-written loop, and the live `ChatDeepSeek` wiring |
-| `evals.py` | 54 offline checks (fixture, tool contracts, catalog, execution, loop control flow, budget, model config, missing-key message, no fake model, uv project) plus a conditional live smoke |
+| `function_calling_lab.py` | the five hand-written stages, `run_loop`, and the live `ChatDeepSeek` wiring |
+| `agent_call.py` | the same tools under `create_agent`: graph, one call, stream, approval, budget |
+| `evals.py` | 68 offline checks (fixture, tool contracts, catalog, execution, both loops, budget, graph, model config, missing-key message, no fake model, uv project) plus conditional live checks |
 | `pyproject.toml` | dependencies and Python floor — the single source of truth |
 | `uv.lock` | the pinned dependency graph `uv sync` installs |
 | `index.html` | this lab rendered for the course |
@@ -122,7 +147,7 @@ Lesson: [lessons/0003-function-calling.html](../../../lessons/0003-function-call
 <pre>[project]
 name = &quot;0003-function-calling&quot;
 version = &quot;0.1.0&quot;
-description = &quot;Lesson 3 lab: the agent loop by hand with LangChain + DeepSeek&quot;
+description = &quot;Lesson 3 lab: the agent loop by hand and through create_agent with LangChain + DeepSeek&quot;
 requires-python = &quot;&gt;=3.11&quot;
 dependencies = [
     &quot;langchain&gt;=1.4,&lt;2&quot;,
@@ -414,13 +439,237 @@ def main() -&gt; int:
 if __name__ == &quot;__main__&quot;:
     raise SystemExit(main())</pre>
 
+<h2>agent_call.py</h2>
+<pre>&quot;&quot;&quot;0003-function-calling - the same tools under a framework-owned loop.
+
+The hand-written lab (function_calling_lab.py) owns the for-loop. This script
+hands the loop to LangChain&#x27;s `create_agent`, which compiles it into a LangGraph
+graph. Same tools, same model, same wire protocol - a different owner.
+
+Five stages:
+
+  1. graph    create_agent(model, TOOLS) -&gt; a compiled graph: model &lt;-&gt; tools
+  2. one call ONE invoke() runs the whole refund task; count the turns it took
+  3. stream   stream_mode=&quot;updates&quot; shows the model/tools steps you wrote by hand
+  4. approval HumanInTheLoopMiddleware pauses before issue_refund; approve/reject
+  5. budget   recursion_limit raises GraphRecursionError instead of returning a
+              stop reason
+
+This script talks to the live DeepSeek API. Set DEEPSEEK_API_KEY first:
+
+  PowerShell (this session):  $env:DEEPSEEK_API_KEY = &quot;sk-...&quot;
+  PowerShell (persist):       setx DEEPSEEK_API_KEY &quot;sk-...&quot;   # reopen the terminal
+
+Get a key at https://platform.deepseek.com/api_keys. No key -&gt; exit 1 with these
+instructions, never a guess.
+&quot;&quot;&quot;
+
+from __future__ import annotations
+
+import sys
+from typing import Any
+
+from langchain.agents import create_agent
+from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langchain_core.messages import BaseMessage, HumanMessage
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.errors import GraphRecursionError
+from langgraph.types import Command
+
+from function_calling_lab import (
+    MODEL,
+    QUESTION_REFUND,
+    QUESTION_STATUS,
+    SYSTEM,
+    TOOLS,
+    build_model,
+    describe,
+)
+
+
+# --- the framework wiring ---------------------------------------------------
+
+
+def build_agent(model: Any, *, require_approval: bool = False):
+    &quot;&quot;&quot;Compile the model + tools into an agent graph.
+
+    Approval needs a checkpointer: the graph saves its state at the interrupt,
+    and resumes from that saved state when a human answers. Without a
+    checkpointer there is nothing to resume.
+    &quot;&quot;&quot;
+    middleware = []
+    checkpointer = None
+    if require_approval:
+        middleware = [HumanInTheLoopMiddleware(interrupt_on={&quot;issue_refund&quot;: True})]
+        checkpointer = InMemorySaver()
+
+    return create_agent(
+        model,
+        TOOLS,
+        system_prompt=SYSTEM,
+        middleware=middleware,
+        checkpointer=checkpointer,
+    )
+
+
+def count_turns(messages: list[BaseMessage]) -&gt; tuple[int, int]:
+    &quot;&quot;&quot;How many model turns and tool results one invoke() produced.&quot;&quot;&quot;
+    model_turns = sum(1 for message in messages if message.type == &quot;ai&quot;)
+    tool_results = sum(1 for message in messages if message.type == &quot;tool&quot;)
+    return model_turns, tool_results
+
+
+def pending_actions(result: dict[str, Any]) -&gt; list[dict[str, Any]]:
+    &quot;&quot;&quot;The tool calls the graph paused on, if any.&quot;&quot;&quot;
+    interrupts = result.get(&quot;__interrupt__&quot;) or []
+    if not interrupts:
+        return []
+    return list(interrupts[0].value.get(&quot;action_requests&quot;, []))
+
+
+# --- stages -----------------------------------------------------------------
+
+
+def stage_graph(agent: Any) -&gt; None:
+    print(&quot;== 1. graph: create_agent compiles the loop you wrote ============&quot;)
+    graph = agent.get_graph()
+    print(&quot;nodes:  &quot; + &quot;, &quot;.join(graph.nodes))
+    for edge in graph.edges:
+        if edge.source in {&quot;__start__&quot;, &quot;__end__&quot;} or edge.target in {&quot;__start__&quot;, &quot;__end__&quot;}:
+            continue
+        marker = &quot; (conditional)&quot; if edge.conditional else &quot;&quot;
+        print(f&quot;edge:   {edge.source} -&gt; {edge.target}{marker}&quot;)
+    print(&quot;  the framework did not remove the loop; it drew it as a graph&quot;)
+    print()
+
+
+def stage_one_call(agent: Any) -&gt; None:
+    print(&quot;== 2. one invoke(): the framework runs the whole loop ============&quot;)
+    result = agent.invoke({&quot;messages&quot;: [HumanMessage(QUESTION_REFUND)]})
+    messages = result[&quot;messages&quot;]
+    for index, message in enumerate(messages, start=1):
+        print(f&quot;  {index} {describe(message)}&quot;)
+    model_turns, tool_results = count_turns(messages)
+    print(f&quot;messages:        {len(messages)}&quot;)
+    print(f&quot;model turns:     {model_turns}; tool results: {tool_results}&quot;)
+    print(f&quot;answer:          {messages[-1].content}&quot;)
+    print(&quot;  one call, three model turns - the same refund task as run_loop&quot;)
+    print()
+
+
+def stage_stream(agent: Any) -&gt; None:
+    print(&quot;== 3. stream: watch the loop the framework hides =================&quot;)
+    step = 0
+    for update in agent.stream(
+        {&quot;messages&quot;: [HumanMessage(QUESTION_STATUS)]},
+        stream_mode=&quot;updates&quot;,
+    ):
+        for node, payload in update.items():
+            if not isinstance(payload, dict):
+                continue
+            for message in payload.get(&quot;messages&quot;, []):
+                step += 1
+                print(f&quot;  {step} {node:&lt;6} {describe(message)}&quot;)
+    print(&quot;  each chunk is one graph step: model -&gt; tools -&gt; model&quot;)
+    print()
+
+
+def stage_approval(model: Any) -&gt; None:
+    print(&quot;== 4. approval: the framework pauses before a side effect ========&quot;)
+    agent = build_agent(model, require_approval=True)
+
+    config = {&quot;configurable&quot;: {&quot;thread_id&quot;: &quot;lesson-3-approve&quot;}}
+    paused = agent.invoke({&quot;messages&quot;: [HumanMessage(QUESTION_REFUND)]}, config)
+    actions = pending_actions(paused)
+    action = actions[0]
+    print(f&quot;paused before:   {action[&#x27;name&#x27;]}({action[&#x27;args&#x27;]})&quot;)
+    print(f&quot;pending actions: {len(actions)}; the refund has not run&quot;)
+
+    approved = agent.invoke(
+        Command(resume={&quot;decisions&quot;: [{&quot;type&quot;: &quot;approve&quot;}]}),
+        config,
+    )
+    print(f&quot;approved -&gt;      {approved[&#x27;messages&#x27;][-1].content}&quot;)
+
+    config = {&quot;configurable&quot;: {&quot;thread_id&quot;: &quot;lesson-3-reject&quot;}}
+    agent.invoke({&quot;messages&quot;: [HumanMessage(QUESTION_REFUND)]}, config)
+    rejected = agent.invoke(
+        Command(resume={&quot;decisions&quot;: [{&quot;type&quot;: &quot;reject&quot;, &quot;message&quot;: &quot;No refunds today.&quot;}]}),
+        config,
+    )
+    print(f&quot;rejected -&gt;      {rejected[&#x27;messages&#x27;][-1].content}&quot;)
+    print(&quot;  same tool, same model: the decision still belongs to your code&quot;)
+    print()
+
+
+def stage_budget(agent: Any) -&gt; None:
+    print(&quot;== 5. budget: recursion_limit raises instead of returning ========&quot;)
+    try:
+        agent.invoke(
+            {&quot;messages&quot;: [HumanMessage(QUESTION_REFUND)]},
+            {&quot;recursion_limit&quot;: 2},
+        )
+    except GraphRecursionError as error:
+        print(f&quot;GraphRecursionError: {str(error).splitlines()[0]}&quot;)
+        print(&quot;  the hand-written loop returned stopped=&#x27;budget&#x27;; the graph raises&quot;)
+    else:
+        print(&quot;  no error: the task fit inside 2 graph steps&quot;)
+    print()
+
+
+def print_comparison() -&gt; None:
+    print(&quot;same tools, same model, same wire protocol:&quot;)
+    print(&quot;  run_loop      you own the for-loop, the error handling, the budget&quot;)
+    print(&quot;  create_agent  LangGraph owns the loop; middleware adds approval and limits&quot;)
+    print()
+
+
+# --- entry point ------------------------------------------------------------
+
+
+def run() -&gt; int:
+    try:
+        model = build_model()
+    except RuntimeError as error:
+        print(f&quot;error: {error}&quot;, file=sys.stderr)
+        return 1
+
+    print(f&quot;DeepSeek via LangChain -- live model ({MODEL}), framework-owned loop&quot;)
+    print()
+    agent = build_agent(model)
+    stage_graph(agent)
+    stage_one_call(agent)
+    stage_stream(agent)
+    stage_approval(model)
+    stage_budget(agent)
+    print_comparison()
+    print(&quot;done: 5 stages, live DeepSeek calls&quot;)
+    return 0
+
+
+def main() -&gt; int:
+    try:
+        return run()
+    except Exception as error:  # noqa: BLE001 - surface the provider error, keep exit codes
+        print(f&quot;error: {type(error).__name__}: {error}&quot;, file=sys.stderr)
+        print(
+            &quot;check DEEPSEEK_API_KEY, account balance, and network access.&quot;,
+            file=sys.stderr,
+        )
+        return 1
+
+
+if __name__ == &quot;__main__&quot;:
+    raise SystemExit(main())</pre>
+
 <h2>evals.py</h2>
 <pre>&quot;&quot;&quot;Self-tests for 0003-function-calling.
 
-No fake model: the lab talks to live DeepSeek. Everything here runs offline -
-tool contracts, the catalog, tool execution and error handling, the loop&#x27;s
-control flow (driven by a test double defined below, not by the lab), the
-missing-key instructions, the uv project - plus one live smoke when a key is set.
+No fake model: both scripts talk to live DeepSeek. Everything here runs offline -
+tool contracts, the catalog, tool execution and error handling, the hand-written
+loop&#x27;s control flow and the framework-owned agent loop (both driven by a test
+double defined below, not by the scripts), the missing-key instructions, the uv
+project - plus live smoke checks when a key is set.
 &quot;&quot;&quot;
 
 from __future__ import annotations
@@ -432,9 +681,12 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
+from types import SimpleNamespace
 
+import agent_call
 import function_calling_lab as lab
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langgraph.types import Command
 
 HERE = Path(__file__).resolve().parent
 PY = sys.executable
@@ -500,7 +752,7 @@ class StubModel:
         self.bound = _StubBound(replies)
         self.tools: list = []
 
-    def bind_tools(self, tools):
+    def bind_tools(self, tools, **kwargs):
         self.tools = list(tools)
         return self.bound
 
@@ -618,6 +870,60 @@ def test_loop_budget() -&gt; None:
     check(&quot;budget keeps the transcript&quot;, len(result.messages) == 8, str(len(result.messages)))
 
 
+def test_agent_graph() -&gt; None:
+    stub = StubModel([])
+    agent = agent_call.build_agent(stub)
+    graph = agent.get_graph()
+    check(
+        &quot;agent graph is start/model/tools/end&quot;,
+        set(graph.nodes) == {&quot;__start__&quot;, &quot;model&quot;, &quot;tools&quot;, &quot;__end__&quot;},
+        str(sorted(graph.nodes)),
+    )
+    edges = {(edge.source, edge.target) for edge in graph.edges}
+    check(&quot;model routes to tools&quot;, (&quot;model&quot;, &quot;tools&quot;) in edges, str(sorted(edges)))
+    check(&quot;tools route back to model&quot;, (&quot;tools&quot;, &quot;model&quot;) in edges, str(sorted(edges)))
+    check(&quot;plain agent has no checkpointer&quot;, agent.checkpointer is None)
+
+
+def test_agent_loop() -&gt; None:
+    stub = StubModel(
+        [
+            call_message(&quot;get_ticket_status&quot;, {&quot;ticket_id&quot;: &quot;T-1001&quot;}, &quot;call_a&quot;),
+            AIMessage(content=&quot;T-1001 is open on the pro plan.&quot;),
+        ]
+    )
+    agent = agent_call.build_agent(stub)
+    result = agent.invoke({&quot;messages&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;status of T-1001?&quot;}]})
+    messages = result[&quot;messages&quot;]
+    check(
+        &quot;one invoke produces human/ai/tool/ai&quot;,
+        [m.type for m in messages] == [&quot;human&quot;, &quot;ai&quot;, &quot;tool&quot;, &quot;ai&quot;],
+        str([m.type for m in messages]),
+    )
+    check(&quot;the graph ran the tool&quot;, &quot;open&quot; in str(messages[2].content), str(messages[2].content))
+    check(&quot;the answer survives&quot;, &quot;open&quot; in str(messages[-1].content), str(messages[-1].content))
+    check(&quot;the graph bound both tools&quot;, len(stub.tools) == 2, str(len(stub.tools)))
+    check(
+        &quot;the second model turn saw the tool result&quot;,
+        any(m.type == &quot;tool&quot; for m in stub.bound.sent[1]),
+        str([m.type for m in stub.bound.sent[1]]),
+    )
+    check(&quot;count_turns reads the graph output&quot;, agent_call.count_turns(messages) == (2, 1))
+
+
+def test_pending_actions() -&gt; None:
+    interrupt = SimpleNamespace(value={&quot;action_requests&quot;: [{&quot;name&quot;: &quot;issue_refund&quot;, &quot;args&quot;: {}}]})
+    actions = agent_call.pending_actions({&quot;__interrupt__&quot;: (interrupt,)})
+    check(&quot;pending action is surfaced&quot;, [a[&quot;name&quot;] for a in actions] == [&quot;issue_refund&quot;], str(actions))
+    check(&quot;no interrupt means no actions&quot;, agent_call.pending_actions({&quot;messages&quot;: []}) == [])
+
+
+def test_agent_no_fake_model() -&gt; None:
+    source = (HERE / &quot;agent_call.py&quot;).read_text(encoding=&quot;utf-8&quot;)
+    check(&quot;agent script has no scripted branch&quot;, &quot;--real&quot; not in source and &quot;scripted&quot; not in source.lower())
+    check(&quot;agent script builds the live model&quot;, &quot;build_model()&quot; in source)
+
+
 def test_model_config() -&gt; None:
     with with_env({&quot;DEEPSEEK_API_KEY&quot;: &quot;test-key&quot;}):
         model = lab.build_model()
@@ -688,7 +994,32 @@ def test_live_smoke() -&gt; tuple[bool, str]:
     check(&quot;live reply is an AIMessage&quot;, isinstance(reply, AIMessage), type(reply).__name__)
     check(&quot;live reply requested the lookup&quot;, bool(reply.tool_calls), str(reply.tool_calls))
     check(&quot;live call names a declared tool&quot;, reply.tool_calls[0][&quot;name&quot;] in lab.REGISTRY)
-    return True, &quot;ran one live tool-calling call&quot;
+
+    gated = agent_call.build_agent(model, require_approval=True)
+    config = {&quot;configurable&quot;: {&quot;thread_id&quot;: &quot;eval-live-approval&quot;}}
+    paused = gated.invoke({&quot;messages&quot;: [HumanMessage(lab.QUESTION_REFUND)]}, config)
+    actions = agent_call.pending_actions(paused)
+    check(
+        &quot;live agent paused on issue_refund&quot;,
+        [action[&quot;name&quot;] for action in actions] == [&quot;issue_refund&quot;],
+        str(actions),
+    )
+    rejected = gated.invoke(
+        Command(resume={&quot;decisions&quot;: [{&quot;type&quot;: &quot;reject&quot;, &quot;message&quot;: &quot;No refund today.&quot;}]}),
+        config,
+    )
+    tool_messages = [m for m in rejected[&quot;messages&quot;] if m.type == &quot;tool&quot;]
+    check(
+        &quot;live rejection reaches the model as a tool result&quot;,
+        any(&quot;reject&quot; in str(m.content).lower() for m in tool_messages),
+        str([m.content for m in tool_messages]),
+    )
+    check(
+        &quot;live agent still answers after the rejection&quot;,
+        bool(str(rejected[&quot;messages&quot;][-1].content).strip()),
+        str(rejected[&quot;messages&quot;][-1].content),
+    )
+    return True, &quot;ran one live tool call and one gated agent with a rejection&quot;
 
 
 TESTS = [
@@ -699,6 +1030,10 @@ TESTS = [
     (&quot;execute&quot;, test_execute),
     (&quot;loop control flow&quot;, test_loop_control_flow),
     (&quot;loop budget&quot;, test_loop_budget),
+    (&quot;agent graph&quot;, test_agent_graph),
+    (&quot;agent loop&quot;, test_agent_loop),
+    (&quot;pending actions&quot;, test_pending_actions),
+    (&quot;agent has no fake model&quot;, test_agent_no_fake_model),
     (&quot;model config&quot;, test_model_config),
     (&quot;model overrides&quot;, test_model_overrides),
     (&quot;missing key instructions&quot;, test_missing_key),
@@ -721,11 +1056,11 @@ def main() -&gt; int:
         ran, note = test_live_smoke()
     except Exception as error:  # noqa: BLE001
         failures += 1
-        print(f&quot;FAIL 13 live smoke: {error}&quot;)
+        print(f&quot;FAIL {len(TESTS) + 1:02d} live smoke: {error}&quot;)
     else:
-        print(f&quot;ok 13 live smoke: {note}&quot;)
+        print(f&quot;ok {len(TESTS) + 1:02d} live smoke: {note}&quot;)
         if not ran:
-            print(&quot;     set DEEPSEEK_API_KEY to include the live call&quot;)
+            print(&quot;     set DEEPSEEK_API_KEY to include the live calls&quot;)
 
     total = len(CHECKS)
     print(f&quot;\n{total} checks passed, {failures} failed&quot;)

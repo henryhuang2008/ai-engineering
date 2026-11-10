@@ -67,6 +67,18 @@ question: What does E-311 mean?
 answer: E-311 means the mailbox storage quota was exceeded. To fix it, archive
 conversations or raise the seat storage limit.</pre>
 
+<h2>LangChain calls MCP</h2>
+<p>The official <code>MCPAdapter</code> example lives in <a href="langchain-agent/README.md"><code>langchain-agent/</code></a>, a separate uv project because it requires MCP v2. <code>server.py</code> exposes one <code>add</code> tool; <code>agent.py</code> follows the <a href="https://docs.langchain.com/oss/python/langchain/mcp">LangChain MCP guide</a>.</p>
+<pre>tools: add
+question: What is 2 + 3?
+  1 human  -&gt; What is 2 + 3?
+  2 ai     -&gt; add({&quot;a&quot;: 2, &quot;b&quot;: 3})
+  3 tool   -&gt; 5
+  4 ai     -&gt; 2 + 3 = **5**
+answer: 2 + 3 = **5**</pre>
+<p>SSE: start <code>server.py sse</code> in one terminal, then run <code>agent.py --url http://127.0.0.1:8050/sse "What is 2 + 3?"</code>. <code>MCPAdapter</code> infers SSE from the <code>/sse</code> suffix; <code>server.py http</code> + <code>/mcp</code> selects Streamable HTTP. Both bind <code>127.0.0.1:8050</code>.</p>
+<p>Files: <a href="langchain-agent/server.py"><code>server.py</code></a> · <a href="langchain-agent/agent.py"><code>agent.py</code></a></p>
+
 <h2>README.md</h2>
 <pre># 0009 — MCP: write the tool once, call it from any client
 
@@ -295,6 +307,65 @@ async with stdio_client(params) as (read, write):
 request. For resources that live as long as the server — a database pool, a
 loaded model — use FastMCP&#x27;s `lifespan` instead of opening them per tool call.
 
+## LangChain calls MCP
+
+The official LangChain MCP adapter lives in `langchain-agent/`, a separate small
+uv project. It is separate because `langchain.mcp.MCPAdapter` currently requires
+MCP v2, while this lab pins the v1 SDK so the server and raw clients above keep
+working.
+
+The example follows the LangChain guide at
+&lt;https://docs.langchain.com/oss/python/langchain/mcp&gt;:
+
+```powershell
+cd assets\examples\0009-mcp\langchain-agent
+uv sync
+$env:DEEPSEEK_API_KEY = &quot;sk-...&quot;
+uv run python agent.py &quot;What is 2 + 3?&quot;
+```
+
+`server.py` exposes one `add(a, b)` tool. `agent.py` opens it with
+`MCPAdapter(SERVER)`, converts the tools with `await adapter.list_tools()`, and
+passes them to `create_agent`:
+
+```python
+async with MCPAdapter(SERVER) as adapter:
+    tools = await adapter.list_tools()
+    agent = create_agent(build_model(), tools)
+    result = await agent.ainvoke({&quot;messages&quot;: [HumanMessage(question)]})
+```
+
+For SSE, start the server in one terminal and pass it a URL instead of a script
+path:
+
+```powershell
+# terminal 1
+uv run python server.py sse
+
+# terminal 2
+uv run python agent.py --url http://127.0.0.1:8050/sse &quot;What is 2 + 3?&quot;
+```
+
+`MCPAdapter` infers SSE from the `/sse` suffix. Use `server.py http` and
+`http://127.0.0.1:8050/mcp` for Streamable HTTP. Both bind `127.0.0.1:8050`, so
+stop one before starting the other.
+
+Live output:
+
+```
+tools: add
+question: What is 2 + 3?
+  1 human  -&gt; What is 2 + 3?
+  2 ai     -&gt; add({&quot;a&quot;: 2, &quot;b&quot;: 3})
+  3 tool   -&gt; 5
+  4 ai     -&gt; 2 + 3 = **5**
+answer: 2 + 3 = **5**
+```
+
+That is the same model -&gt; tool -&gt; model loop as `chat.py`, with the adapter and
+`create_agent` owning the wiring. The `langchain.mcp` namespace is beta and
+prints a `LangChainBetaWarning` on import; the API may change.
+
 ## Security defaults
 
 - HTTP transports bind to `127.0.0.1`; there is no authentication in this lab.
@@ -304,12 +375,11 @@ loaded model — use FastMCP&#x27;s `lifespan` instead of opening them per tool 
 
 ## Notes
 
-- **Two different FastMCPs.** This lab uses `mcp.server.fastmcp.FastMCP` — the v1 SDK&#x27;s server class. The standalone `fastmcp` package (v2) is not a dependency. Clients use the SDK transports: `stdio_client`, `sse_client`, `streamablehttp_client`.
+- **Two different FastMCPs.** This lab uses `mcp.server.fastmcp.FastMCP` — the v1 SDK&#x27;s server class. The `langchain-agent/` subproject separately uses the standalone `fastmcp` 4.x package, which is why it has its own uv environment. Clients here use the SDK transports: `stdio_client`, `sse_client`, `streamablehttp_client`.
 - `mcp[cli]` is pinned to the 1.x SDK (`&gt;=1.30,&lt;2`). The v2 SDK changes these APIs; do not swap the pin without reading the migration notes.
 - The server also runs under `mcp dev server.py` (MCP Inspector, needs Node.js)
   and `mcp install server.py` (Claude Desktop). Neither is required here.
-- `nest-asyncio` is not needed outside Jupyter, so this lab does not install it.
-</pre>
+- `nest-asyncio` is not needed outside Jupyter, so this lab does not install it.</pre>
 
 <h2>server.py</h2>
 <pre>&quot;&quot;&quot;NimbusDesk MCP server: two tools, one resource, one prompt.

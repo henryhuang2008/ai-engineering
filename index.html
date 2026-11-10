@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Engineering — A 21-Lesson Build-First Course</title>
+    <link rel="stylesheet" href="assets/course.css" />
+  </head>
+  <body>
+    <article class="page">
+      <p class="meta">
+        AI Engineering · 21 lessons · ~14 hours of reading, plus the labs ·
+        <a href="https://github.com/henryhuang2008/ai-engineering">Source</a>
+      </p>
+
+      <h1>AI Engineering — From First LLM Call to a Grounded RAG Product</h1>
+
+      <p class="lede">
+        A build-first course for experienced software engineers moving into AI
+        engineering. Every lesson ends in something you run: a call, a service, a
+        graph, a pipeline, or a guarded agent. Start at lesson 1 and follow the
+        “What's next” link at the bottom of each page.
+      </p>
+
+      <div class="callout win">
+        <span class="label">If you are new here</span>
+        Read <a href="lessons/0001-ai-engineering-landscape-2026.html">Lesson 1</a>
+        first. It maps the six-layer stack and marks which layers your existing
+        software skills already cover. The
+        <a href="reference/skill-map.html">skill map</a> is the one-page version
+        of the whole course.
+      </div>
+
+      <h2>Foundations — the call and its boundaries</h2>
+
+      <table>
+        <thead>
+          <tr><th>#</th><th>lesson</th><th>what it covers</th><th>time</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1</td>
+            <td><a href="lessons/0001-ai-engineering-landscape-2026.html">What an AI Engineer Is in 2026</a></td>
+            <td>The stack, the roles, and where your software background already pays.</td>
+            <td>~15 min</td>
+          </tr>
+          <tr>
+            <td>2</td>
+            <td><a href="lessons/0002-your-first-llm-api-call.html">Your First LLM Call</a></td>
+            <td>Messages, streaming, one tool call, and typed output.</td>
+            <td>~30 min</td>
+          </tr>
+          <tr>
+            <td>3</td>
+            <td><a href="lessons/0003-function-calling.html">Function Calling</a></td>
+            <td>The tool loop by hand, then the same tools as an agent call.</td>
+            <td>~35 min</td>
+          </tr>
+          <tr>
+            <td>4</td>
+            <td><a href="lessons/0004-streaming-chat.html">Streaming Chat</a></td>
+            <td>A streaming backend, a thin Next.js route, and a real chat UI.</td>
+            <td>~40 min</td>
+          </tr>
+          <tr>
+            <td>5</td>
+            <td><a href="lessons/0005-your-first-evals.html">Your First Evals</a></td>
+            <td>Build an eval set and turn “looks fine” into a number.</td>
+            <td>~35 min</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>RAG — retrieval you can defend</h2>
+
+      <table>
+        <thead>
+          <tr><th>#</th><th>lesson</th><th>what it covers</th><th>time</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>6</td>
+            <td><a href="lessons/0006-rag-foundation.html">RAG: The Pipeline, End to End</a></td>
+            <td>The eight-stage map: inputs, outputs, and failure modes.</td>
+            <td>~30 min</td>
+          </tr>
+          <tr>
+            <td>7</td>
+            <td><a href="lessons/0007-rag-service.html">The RAG Service</a></td>
+            <td>LanceDB hybrid retrieval with citations, plus the LlamaIndex rebuild.</td>
+            <td>~55 min</td>
+          </tr>
+          <tr>
+            <td>8</td>
+            <td><a href="lessons/0008-rag-appendix.html">RAG Appendix</a></td>
+            <td>Chunking tools and vector stores, and how to choose one.</td>
+            <td>~30 min</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Agents — tools, graphs, and control</h2>
+
+      <table>
+        <thead>
+          <tr><th>#</th><th>lesson</th><th>what it covers</th><th>time</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>9</td>
+            <td><a href="lessons/0009-mcp.html">MCP: Write the Tool Once</a></td>
+            <td>An MCP server, a model-free client, and LangChain's MCPAdapter agent.</td>
+            <td>~45 min</td>
+          </tr>
+          <tr>
+            <td>10</td>
+            <td><a href="lessons/0010-langgraph.html">LangGraph: One Node, Then a Branch</a></td>
+            <td>From one node to a program with a visible decision.</td>
+            <td>~40 min</td>
+          </tr>
+          <tr>
+            <td>11</td>
+            <td><a href="lessons/0011-langgraph-advanced.html">LangGraph, Advanced</a></td>
+            <td>Fan-out, fan-in, and the join that fires early.</td>
+            <td>~50 min</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>The stack — libraries, validation, and operations</h2>
+
+      <table>
+        <thead>
+          <tr><th>#</th><th>lesson</th><th>what it covers</th><th>time</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>12</td>
+            <td><a href="lessons/0012-python-libraries-for-ai.html">Python Libraries Every AI Engineer Should Know</a></td>
+            <td>The small contracts that make up a real stack.</td>
+            <td>~50 min</td>
+          </tr>
+          <tr>
+            <td>13</td>
+            <td><a href="lessons/0013-pydantic.html">Pydantic: Make Bad Data Fail at the Boundary</a></td>
+            <td>One validation contract for FastAPI, the database and the model.</td>
+            <td>~45 min</td>
+          </tr>
+          <tr>
+            <td>14</td>
+            <td><a href="lessons/0014-ollama-local-rag.html">Ollama + LlamaIndex</a></td>
+            <td>The same RAG shape fully local, with no API key.</td>
+            <td>~45 min</td>
+          </tr>
+          <tr>
+            <td>15</td>
+            <td><a href="lessons/0015-ai-coding.html">AI Coding: The Loop That Ships</a></td>
+            <td>Rules, skills, gates, and model choice in one workflow.</td>
+            <td>~55 min</td>
+          </tr>
+          <tr>
+            <td>16</td>
+            <td><a href="lessons/0016-kubernetes-gitops.html">Kubernetes GitOps</a></td>
+            <td>Jenkins builds, Git declares, Argo CD reconciles.</td>
+            <td>~55 min</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Projects — the builds that carry the course</h2>
+
+      <table>
+        <thead>
+          <tr><th>#</th><th>lesson</th><th>what it covers</th><th>time</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>17</td>
+            <td><a href="lessons/0017-project-supabase-rag-ai-coding.html">Grounded Filing Analyst</a></td>
+            <td>Supabase pgvector, hybrid retrieval, a grounded agent, a trust UI.</td>
+            <td>~60 min</td>
+          </tr>
+          <tr>
+            <td>18</td>
+            <td><a href="lessons/0018-project-youtube-digest.html">AI News Digest</a></td>
+            <td>RSS, transcripts, PostgreSQL, a bounded prompt, gated email.</td>
+            <td>~55 min</td>
+          </tr>
+          <tr>
+            <td>19</td>
+            <td><a href="lessons/0019-memory-agents-langgraph.html">Memory in Agents</a></td>
+            <td>The checkpointer and the store, trimming, and PostgreSQL.</td>
+            <td>~35 min</td>
+          </tr>
+          <tr>
+            <td>20</td>
+            <td><a href="lessons/0020-agent-skills.html">Agent Skills</a></td>
+            <td>A two-skill library end to end, plus the rules that keep it working.</td>
+            <td>~30 min</td>
+          </tr>
+          <tr>
+            <td>21</td>
+            <td><a href="lessons/0021-text-to-sql.html">Text to SQL</a></td>
+            <td>A guarded SQL agent: contract, retry, human review, refusal.</td>
+            <td>~40 min</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Reference</h2>
+
+      <ul>
+        <li>
+          <a href="reference/skill-map.html">Skill map and glossary</a> — the whole
+          course on one page, plus the vocabulary.
+        </li>
+        <li>
+          <a href="reference/boundary-map.html">Boundary map</a> — every place
+          untrusted text, failure or a side effect crosses a line, the one rule
+          each boundary enforces, and the test that proves it.
+        </li>
+      </ul>
+
+      <div class="footer-nav">
+        <div class="ask">
+          <strong>How to use the course:</strong> do the labs. Each lesson links
+          its example repository; every Python example is a <code>uv</code>
+          project with a README. Reading without running is how the boundary
+          lessons turn into trivia.
+        </div>
+        <div class="links">
+          <a href="lessons/0001-ai-engineering-landscape-2026.html">Start · Lesson 1</a>
+          <a href="reference/skill-map.html">Skill Map</a>
+          <a href="https://github.com/henryhuang2008/ai-engineering">GitHub</a>
+        </div>
+      </div>
+    </article>
+  </body>
+</html>

@@ -1,7 +1,7 @@
 [project]
 name = "0003-function-calling"
 version = "0.1.0"
-description = "Lesson 3 lab: the agent loop by hand with LangChain + DeepSeek"
+description = "Lesson 3 lab: the agent loop by hand and through create_agent with LangChain + DeepSeek"
 requires-python = ">=3.11"
 dependencies = [
     "langchain>=1.4,<2",

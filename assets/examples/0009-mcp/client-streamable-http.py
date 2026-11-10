@@ -19,7 +19,7 @@ import sys
 from urllib.parse import urlsplit
 
 from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client, streamablehttp_client
 
 URL = "http://127.0.0.1:8050/mcp"
 SERVER_COMMAND = "uv run python server.py streamable-http"
@@ -60,7 +60,7 @@ def diagnose() -> str:
 
 
 async def main() -> None:
-    async with streamablehttp_client(URL) as (read, write, _):
+    async with streamable_http_client(URL) as (read, write, _):
         async with ClientSession(read, write) as session:
             await session.initialize()
 

@@ -36,6 +36,9 @@ def pages() -> list[Path]:
     if reference.is_dir():
         found += sorted(reference.rglob("*.html"))
     found += sorted((ROOT / "assets" / "examples").glob("*/index.html"))
+    root_index = ROOT / "index.html"
+    if root_index.is_file():
+        found.append(root_index)
     return found
 
 

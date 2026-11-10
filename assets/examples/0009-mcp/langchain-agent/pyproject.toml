@@ -1,0 +1,9 @@
+[project]
+name = "0009-langchain-mcp"
+version = "0.1.0"
+description = "Lesson 9 add-on: LangChain MCPAdapter calling a FastMCP server"
+requires-python = ">=3.11"
+dependencies = [
+    "langchain[mcp]>=1.4,<2",
+    "langchain-deepseek>=1.1,<2",
+]

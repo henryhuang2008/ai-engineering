@@ -9,15 +9,15 @@
 <body>
 <article class="page">
 
-<p class="meta">Lesson 9 of the AI Engineering course · ~45 min · Prereq: <a href="0003-function-calling.html">Lesson 3</a> + <a href="0008-rag-appendix.html">Lesson 8</a> · <a href="../reference/skill-map.html">Skill Map →</a></p>
+<p class="meta">Lesson 9 of the AI Engineering course · ~60 min · Prereq: <a href="0003-function-calling.html">Lesson 3</a> + <a href="0008-rag-appendix.html">Lesson 8</a> · <a href="../reference/skill-map.html">Skill Map →</a></p>
 
 <h1>MCP: Write the Tool Once, Call It From Any Client</h1>
 
-<p class="lede">You already know function calling: describe a tool, let the model choose it, run it in your process. MCP does not add a new capability — it moves the tool out of your process and gives every client the same address. This lesson builds a server, calls it with no model at all, then lets DeepSeek drive it.</p>
+<p class="lede">You already know function calling: describe a tool, let the model choose it, run it in your process. MCP does not add a new capability — it moves the tool out of your process and gives every client the same address. This lesson builds a server, calls it with no model at all, lets DeepSeek drive it by hand, then points LangChain's <code>MCPAdapter</code> at a one-tool server and lets <code>create_agent</code> run the loop.</p>
 
 <div class="callout win">
   <span class="label">Your win this lesson</span>
-  You'll ship an MCP server exposing a tool, a resource and a prompt; call it from a raw client in nine lines; and connect the same server to DeepSeek without writing a provider-specific adapter.
+  You'll ship an MCP server exposing a tool, a resource and a prompt; call it from a raw client in nine lines; connect the same server to DeepSeek without writing a provider-specific adapter; and point LangChain's <code>MCPAdapter</code> at a one-tool server in one small script.
 </div>
 
 <h2>What MCP is, without the hype</h2>
@@ -122,7 +122,12 @@ call add(a=2, b=3)
 call search_kb(query='refund window')
 Q: How long is the refund window?
 A: A full refund is available within 14 days of the initial charge. After day
-14, annual plans are refunded pro rata minus the months already used.</code></pre>
+14, annual plans are refunded pro rata minus the months already used.
+
+Q: How long does a duplicate charge refund take?
+A: Duplicate charges are confirmed within 2 business days and refunded to the
+original payment method. Refunds above 2000 USD need finance approval, which
+adds up to 3 business days.</code></pre>
 
 <p>Two things are worth noticing. The client did not start a server in another terminal — the subprocess is part of the connection. And <code>search_kb</code> returned the right entry without any embedding model: this server does keyword scoring over eight Q&amp;A pairs, which is enough to demonstrate the protocol before lesson 7's retrieval stack gets involved.</p>
 
@@ -156,7 +161,7 @@ async with streamablehttp_client("http://127.0.0.1:8050/mcp") as (read, write, _
 
 <p>A <code>502</code> from <code>127.0.0.1</code> usually means a system proxy is intercepting loopback, or something else owns the port. The clients add <code>localhost</code> to <code>NO_PROXY</code> before connecting, so the proxy case is handled; a <code>ConnectError</code> instead means the server simply is not running.</p>
 
-<h2>Part 3 — DeepSeek drives the tools</h2>
+<h2>Part 3 — DeepSeek drives the tools by hand</h2>
 
 <p>This is where the protocol pays off. MCP already publishes a JSON schema for every tool (<code>inputSchema</code>), which is the exact shape a chat model expects for function calling. The bridge is a list comprehension, not an adapter library:</p>
 
@@ -196,6 +201,64 @@ answer: E-311 means the mailbox storage quota was exceeded. To fix it, archive
 conversations or raise the seat storage limit.</code></pre>
 
 <p>The model chose the tool and the query, but it never saw the knowledge base file and cannot call anything the server did not publish. That boundary — not the model — is the security surface. Ask something outside the corpus ("What is the SLA for the mobile app?") and it says it does not know, because the only evidence it received was an irrelevant entry.</p>
+
+<h2>Part 4 — LangChain calls MCP with MCPAdapter</h2>
+
+<p>LangChain ships an MCP adapter of its own: <code>langchain.mcp.MCPAdapter</code>. It launches a server, lists its tools, and converts them for <code>create_agent</code>. The example is a separate small uv project in <code>langchain-agent/</code> because the adapter currently requires MCP v2, while the server above pins the v1 SDK.</p>
+
+<p><code>server.py</code> — one tool:</p>
+
+<pre><code>from fastmcp import FastMCP
+
+mcp = FastMCP("Calc")
+
+@mcp.tool()
+def add(a: int, b: int) -&gt; int:
+    """Add two numbers together."""
+    return a + b
+
+if __name__ == "__main__":
+    mcp.run(transport="stdio", show_banner=False)</code></pre>
+
+<p><code>agent.py</code> — the whole client:</p>
+
+<pre><code>async with MCPAdapter(SERVER) as adapter:
+    tools = await adapter.list_tools()
+    agent = create_agent(build_model(), tools)
+    result = await agent.ainvoke({"messages": [HumanMessage(question)]})</code></pre>
+
+<p>Run it:</p>
+
+<pre><code>cd assets\examples\0009-mcp\langchain-agent
+uv sync
+$env:DEEPSEEK_API_KEY = "sk-..."
+uv run python agent.py "What is 2 + 3?"</code></pre>
+
+<p>Real output:</p>
+
+<pre><code>tools: add
+question: What is 2 + 3?
+  1 human  -&gt; What is 2 + 3?
+  2 ai     -&gt; add({"a": 2, "b": 3})
+  3 tool   -&gt; 5
+  4 ai     -&gt; 2 + 3 = **5**
+answer: 2 + 3 = **5**</code></pre>
+
+<p>Four messages. <code>list_tools()</code> did the schema conversion; <code>create_agent</code> compiled the model → tools → model loop; <code>ainvoke()</code> ran it. There is no <code>for</code> loop and no <code>session.call_tool</code> in <code>agent.py</code>.</p>
+
+<h3>SSE instead of stdio</h3>
+
+<p>Stdio is only the default target. The server accepts a transport argument, and the agent accepts a URL with <code>--url</code>. FastMCP infers SSE from the <code>/sse</code> suffix; other HTTP URLs use Streamable HTTP.</p>
+
+<pre><code># terminal 1
+uv run python server.py sse
+
+# terminal 2
+uv run python agent.py --url http://127.0.0.1:8050/sse "What is 2 + 3?"</code></pre>
+
+<p>Use <code>server.py http</code> and <code>http://127.0.0.1:8050/mcp</code> for Streamable HTTP. Both bind <code>127.0.0.1:8050</code>, so stop one server before starting the other. The tools, the four messages and the answer are identical — only the target passed to <code>MCPAdapter</code> changes.</p>
+
+<p>The <code>langchain.mcp</code> namespace is beta and prints a <code>LangChainBetaWarning</code> on import. That is why this example is a separate project: you can try the new adapter without moving the lesson's v1 server and clients. The guide is <a href="https://docs.langchain.com/oss/python/langchain/mcp">docs.langchain.com/oss/python/langchain/mcp</a>.</p>
 
 <h2>MCP vs plain function calling</h2>
 
@@ -312,6 +375,50 @@ conversations or raise the seat storage limit.</code></pre>
       ],
       "correct": 0,
       "explain": "Initialization is the first lifecycle phase: client and server agree on a protocol version and capabilities before tools are listed or called."
+    },
+    {
+      "q": "What does MCPAdapter add to this example?",
+      "options": [
+        "A new transport that replaces stdio",
+        "A conversion from MCP tools to LangChain tools that create_agent can use",
+        "A model provider",
+        "Authentication for remote MCP servers"
+      ],
+      "correct": 1,
+      "explain": "The adapter does not change the protocol. It reads the server's tool schemas and wraps them as LangChain tools, so create_agent can call them."
+    },
+    {
+      "q": "Who owns the model/tool loop in agent.py?",
+      "options": [
+        "The for-loop in chat.py",
+        "The MCP server",
+        "The LangGraph graph compiled by create_agent",
+        "DeepSeek's hosted runtime"
+      ],
+      "correct": 2,
+      "explain": "create_agent compiles the model -> tools -> model loop into a graph. One ainvoke() runs it; your code no longer loops over tool_calls."
+    },
+    {
+      "q": "In agent.py, what happens after the add tool returns?",
+      "options": [
+        "The tool result goes back to the model, which writes the final answer",
+        "The MCP server writes the final answer",
+        "The adapter stops and returns the raw JSON",
+        "The model calls add forever"
+      ],
+      "correct": 0,
+      "explain": "A tool result is input for the next model turn. create_agent sends it back automatically; that is the same loop you wrote by hand in chat.py."
+    },
+    {
+      "q": "What does MCPAdapter do with a URL ending in /sse?",
+      "options": [
+        "Uses SSE; other HTTP URLs use Streamable HTTP",
+        "Refuses every non-stdio URL",
+        "Converts SSE back into stdio",
+        "Starts a second server on another port"
+      ],
+      "correct": 0,
+      "explain": "FastMCP infers the transport from the URL: /sse selects SSE, anything else is Streamable HTTP. Stdio is still selected by passing a script path."
     }
   ]
 }
@@ -321,9 +428,10 @@ conversations or raise the seat storage limit.</code></pre>
 <h2>Primary sources for this lesson</h2>
 <p><a href="https://modelcontextprotocol.io/docs/learn/architecture">MCP — architecture</a> for the host/client/server split and the three primitives; <a href="https://py.sdk.modelcontextprotocol.io/v1/">Python SDK v1 docs</a> for <code>FastMCP</code>, <code>ClientSession</code> and the transports used here.</p>
 <p><a href="https://github.com/daveebbelaar/ai-cookbook/tree/main/mcp/crash-course">MCP crash course</a> — the seven-part walkthrough this lesson follows, with the OpenAI client replaced by DeepSeek and the Docker section left out. <a href="https://modelcontextprotocol.io/specification/2025-03-26/basic/transports">Transport specification</a> for why Streamable HTTP supersedes SSE.</p>
+<p>For Part 4: <a href="https://docs.langchain.com/oss/python/langchain/mcp">LangChain MCP</a> for <code>MCPAdapter</code>, <code>list_tools()</code> and the beta warning; <a href="https://docs.langchain.com/oss/python/langchain/agents">LangChain agents</a> for <code>create_agent</code>, middleware and streaming.</p>
 
 <h2>What's next</h2>
-<p><a href="0010-langgraph.html">Lesson 10</a> changes layer again: <strong>LangGraph</strong> turns a decision into a graph — a classifier routes each message to a specialist, and the trace shows which path ran. The MCP server you just built is exactly the kind of tool one of those nodes can call.</p>
+<p><a href="0010-langgraph.html">Lesson 10</a> changes layer again: <strong>LangGraph</strong> turns a decision into a graph — a classifier routes each message to a specialist, and the trace shows which path ran. The graph <code>create_agent</code> compiled in Part 4 is a small preview: every node, edge and checkpoint in Lesson 10 is the same machinery with your own state. The MCP server you just built is exactly the kind of tool one of those nodes can call.</p>
 
 <div class="footer-nav">
   <div class="ask"><strong>Server works by hand, fails under a client?</strong> Check stdout first: one print, one library banner, one progress bar is enough to break framing. Then check that the client launches the same Python environment.</div>
