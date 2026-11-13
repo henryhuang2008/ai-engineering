@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Example — Voice agent, LiveKit room: run it</title>
+    <link rel="stylesheet" href="../../course.css" />
+  </head>
+  <body>
+    <article class="page">
+      <p class="meta">
+        Example ·
+        <a href="../../../lessons/0022-voice-agents-langgraph-livekit.html"
+          >Companion to Lesson 22</a
+        >
+        · <a href="README.md">README</a> ·
+        <a href="../example-Voice-langgraph/index.html">← Terminal version</a>
+      </p>
+
+      <h1>Voice agent, LiveKit room — run it</h1>
+
+      <p class="lede">
+        The same expense agent, talking through a LiveKit room instead of a
+        terminal. You open a browser page, press Connect, and speak. LiveKit
+        handles the microphone, silence detection, interruptions and playback;
+        the worker runs Qwen ASR → LangGraph → Qwen TTS. The server is one Docker
+        container.
+      </p>
+
+      <div class="callout win">
+        <span class="label">The one-line model</span>
+        <strong>A room carries the audio; your code only carries the turn.</strong>
+        No <code>sounddevice</code>, no Enter key, no playback loop.
+      </div>
+
+      <h2>1 — Start the LiveKit server</h2>
+
+      <pre><code>cd assets/examples/example-livekit-langgraph
+docker compose up -d
+docker compose ps</code></pre>
+
+      <p>
+        <code>docker-compose.yml</code> runs
+        <code>livekit/livekit-server:v1.13.11</code> with
+        <code>livekit.yaml</code> and publishes three ports:
+      </p>
+
+      <table>
+        <thead>
+          <tr><th>Port</th><th>Protocol</th><th>Use</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>7880</td><td>TCP</td><td>HTTP + WebSocket signalling</td></tr>
+          <tr><td>7881</td><td>TCP</td><td>WebRTC over TCP (fallback)</td></tr>
+          <tr><td>7882</td><td>UDP</td><td>WebRTC media, one shared port</td></tr>
+        </tbody>
+      </table>
+
+      <p>
+        The config uses <code>udp_port: 7882</code>, not a one-port range: a
+        range allocates one port per participant, and the second participant then
+        gets no UDP candidate. The key pair is local-only
+        (<code>devkey</code> / a 36-character dev secret) and matches
+        <code>.env.example</code>.
+      </p>
+
+      <h2>2 — Configure the worker</h2>
+
+      <pre><code>uv sync
+Copy-Item .env.example .env
+
+setx DEEPSEEK_API_KEY "sk-..."
+setx DASHSCOPE_API_KEY "sk-..."</code></pre>
+
+      <p>
+        Put the Supabase URI in <code>SUPABASE_URI</code> and the customer id
+        from <code>seed.py</code> in <code>CUSTOMER_ID</code> — same as the
+        terminal example. Then:
+      </p>
+
+      <pre><code>uv run python check.py</code></pre>
+
+      <p>
+        It checks packages, both keys, the database, the MCP tools, both Qwen
+        plugins, and that <code>ws://127.0.0.1:7880</code> answers.
+      </p>
+
+      <h2>3 — Run the worker and the client</h2>
+
+      <p>Terminal one, the worker (leave it running):</p>
+
+      <pre><code>uv run python agent.py dev</code></pre>
+
+      <p>Terminal two, a token and the page:</p>
+
+      <pre><code>uv run python make_token.py
+cd client
+python -m http.server 8000</code></pre>
+
+      <p>
+        Open <strong>http://localhost:8000</strong>, paste the token, press
+        <strong>Connect</strong>, allow the microphone. The status line should
+        say <em>microphone on</em>; Luna greets you. Say:
+      </p>
+
+      <blockquote>
+        <p>
+          <strong>“Create an expense for a taxi to the airport, thirty
+          dollars.”</strong>
+        </p>
+      </blockquote>
+
+      <p>
+        Stop talking and the VAD ends your turn — no keypress. Talk over her and
+        she stops. To leave, press <strong>Disconnect</strong> or close the tab;
+        there is no exit word.
+      </p>
+
+      <p>
+        The page must be served over <code>http://localhost</code>; browsers block
+        the microphone on <code>file://</code>, and the page shows a yellow banner
+        if you open it as a file.
+      </p>
+
+      <h2>No browser? Run the headless turn</h2>
+
+      <pre><code>uv run python smoke.py</code></pre>
+
+      <p>
+        It joins a fresh room, publishes a synthesized question as its
+        microphone, records the agent's track and prints both transcripts:
+      </p>
+
+      <pre><code>[1/4] speaking the question with qwen3-tts-flash
+[2/4] joining smoke-...
+[3/4] agent joined; waiting for the greeting
+[4/4] sending the question
+
+-- transcripts --
+  Luna   Hi, I'm Luna, your expense manager. What would you like to log?
+  smoke  Create an expense for a taxi to the airport, $30 .
+  Luna   Done — I logged thirty dollars for the taxi to the airport under travel.</code></pre>
+
+      <h2>Measured on the lab machine</h2>
+
+      <table>
+        <thead>
+          <tr><th>Stage</th><th>Result</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>server up after <code>docker compose up -d</code></td><td>~2 s</td></tr>
+          <tr><td>worker start → registered</td><td>~3 s</td></tr>
+          <tr><td>room join → agent media</td><td>75 ms</td></tr>
+          <tr><td>Qwen ASR, 4 s utterance</td><td>~1 s</td></tr>
+          <tr><td>Qwen TTS, first audio</td><td>0.73–1.29 s</td></tr>
+          <tr><td>One full turn, playback included</td><td>~25 s</td></tr>
+          <tr><td>Offline checks</td><td>30/30</td></tr>
+        </tbody>
+      </table>
+
+      <h2>If it fails</h2>
+
+      <table>
+        <thead>
+          <tr><th>Symptom</th><th>Fix</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>the agent never published audio</code></td>
+            <td>start <code>agent.py dev</code>; check <code>docker compose ps</code>; confirm <code>udp_port: 7882</code></td>
+          </tr>
+          <tr>
+            <td>Connected, status says <em>microphone blocked</em></td>
+            <td>serve over <code>http://localhost</code>; allow the mic in the padlock menu; check Windows microphone privacy</td>
+          </tr>
+          <tr>
+            <td>Transcript appears, no sound</td>
+            <td>hard-reload the page and reconnect; use <strong>Enable sound</strong> if the browser blocked autoplay</td>
+          </tr>
+          <tr>
+            <td><code>Qwen TTS returned 401</code></td>
+            <td>Beijing vs Singapore key: set <code>DASHSCOPE_REGION</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="footer-nav">
+        <div class="ask">
+          <strong>The trade:</strong> one Docker container and two small plugin
+          adapters, in exchange for barge-in, endpointing and a browser client you
+          did not write.
+        </div>
+        <div class="links">
+          <a href="../../../lessons/0022-voice-agents-langgraph-livekit.html"
+            >Lesson 22</a
+          >
+          <a href="README.md">README</a>
+          <a href="../example-Voice-langgraph/index.html">Terminal version</a>
+        </div>
+      </div>
+    </article>
+  </body>
+</html>

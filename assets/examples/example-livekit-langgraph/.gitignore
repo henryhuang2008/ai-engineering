@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+
+# secrets
+.env
+
+# generated audio
+out/
+
+# worker logs
+agent.log
+
+# uv
+.python-version.lock

@@ -975,3 +975,13 @@ User pushback: "we have made things complicated. A developer chose a few LLMs (C
 - Live measured on DeepSeek `deepseek-flash`: `tools: add`; four messages; `add({"a": 2, "b": 3})` -> `5`; answer `2 + 3 = **5**` over stdio, SSE and Streamable HTTP. The import emits a `LangChainBetaWarning`, documented as expected.
 - Docs: Lesson 9 Part 4 now shows the FastMCP server, the four-line `MCPAdapter` wiring, stdio/SSE/HTTP commands, and measured output; primary sources link the user's guide. The main example README/index point to `langchain-agent/`; root README row, landing card and example row name `MCPAdapter`. Quiz grew to 11 questions, adding transport inference.
 - Validation: live stdio, SSE and HTTP runs succeed; `check_links.py` -> 41 pages, all links resolve; `validate_html.py` -> 41 pages clean; L9 quiz 11 questions valid; `check_uv.py` -> 18 example projects and the nested project has its own lock; case-exact audit clean; lessons/README/NOTES LF, example page CRLF, no BOMs.
+
+
+## 2026-11-13 (71) - Lesson 22: voice agents, terminal then LiveKit
+
+- User asked to add the two voice examples to a new lesson: `example-Voice-langgraph` (terminal loop) and `example-livekit-langgraph` (LiveKit room, Docker server, browser client).
+- Lesson 22 (`lessons/0022-voice-agents-langgraph-livekit.html`): what each example is, the identical Qwen ASR -> LangGraph + MCP -> Qwen TTS pipeline, setup and run commands for both, the first sentence to say, exit behaviour, measured latency, the 786 -> 451 line comparison, quick fixes, and a closing note on voice boundaries.
+- New runbook pages for both examples (`assets/examples/example-Voice-langgraph/index.html`, `assets/examples/example-livekit-langgraph/index.html`) so the lesson and README link to a page, not a folder.
+- Wiring: root `index.html` (22 lessons, Projects row 22), README (22-lesson intro, lesson row, two example rows, prerequisites mention Docker/microphone), skill-map closing paragraph, boundary-map counts plus a new Speech row, and Lesson 21's What's next now points at Lesson 22.
+- Live verification behind the numbers: terminal turn (Qwen STT 1 s, TTS first audio 0.87 s median), LiveKit room (agent media in 75 ms, full turn ~25 s), browser client (room join, greeting transcript, agent audio attached and playing), 56/56 and 30/30 offline checks.
+- Validation: `check_links.py` -> 44 pages, all local links resolve, 22 lessons link forward; `check_uv.py` -> 20 uv projects; new/edited HTML and README LF, no BOM.

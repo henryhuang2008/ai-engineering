@@ -1,0 +1,12 @@
+services:
+  livekit:
+    image: livekit/livekit-server:v1.13.11
+    container_name: example-livekit
+    command: --config /etc/livekit.yaml
+    restart: unless-stopped
+    ports:
+      - "7880:7880"        # HTTP + WebSocket signalling
+      - "7881:7881"        # WebRTC over TCP (fallback)
+      - "7882:7882/udp"    # WebRTC media
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro

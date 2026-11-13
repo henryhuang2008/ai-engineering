@@ -1,6 +1,6 @@
 # AI Engineering — From First LLM Call to a Grounded RAG Product
 
-A 21-lesson, build-first course for experienced software engineers moving into AI engineering. It starts with a single chat-completion call, builds toward a Supabase + pgvector filing analyst whose answers are cited, validated and allowed to refuse, closes with a batch pipeline that turns YouTube RSS and transcripts into a daily email, covers the two memory systems that decide what an agent remembers and the skill format that decides what instructions it can carry, and ends with a text-to-SQL agent that shows what happens when model output is about to touch a real system.
+A 22-lesson, build-first course for experienced software engineers moving into AI engineering. It starts with a single chat-completion call, builds toward a Supabase + pgvector filing analyst whose answers are cited, validated and allowed to refuse, closes with a batch pipeline that turns YouTube RSS and transcripts into a daily email, covers the two memory systems that decide what an agent remembers and the skill format that decides what instructions it can carry, shows what happens when model output is about to touch a real system in a text-to-SQL agent, and ends with a voice agent built twice: once as a terminal loop, once over a LiveKit room.
 
 **Start here → [Lesson 1: What an AI Engineer Is in 2026](lessons/0001-ai-engineering-landscape-2026.html)**
 
@@ -12,7 +12,7 @@ serves the same files as a site. If the link 404s, enable it once under
 
 ---
 
-## The 21 lessons
+## The 22 lessons
 
 | # | Lesson | What it covers | Time |
 |---|--------|----------------|------|
@@ -37,6 +37,7 @@ serves the same files as a site. If the link 404s, enable it once under
 | 19 | [Memory in Agents — Short-Term, Long-Term, and PostgreSQL](lessons/0019-memory-agents-langgraph.html) | When and why to use each memory; the example's demo, facts and chat workflow; trimming and summarization; and PostgresSaver plus PostgresStore with the restart test. | ~35 min |
 | 20 | [Agent Skills — Run the Example](lessons/0020-agent-skills.html) | Run a two-skill library end to end — catalog, ask, script, lint, tests — follow one question through the tool calls, and learn the six rules and four failures that decide whether a skill works. | ~30 min |
 | 21 | [Text to SQL — The Model Proposes, the Guard Decides](lessons/0021-text-to-sql.html) | A custom LangGraph SQL agent over SQLite: a strict query contract, a six-layer read-only guard, a bounded retry loop, human approve/edit/reject, and the questions the schema cannot answer. | ~40 min |
+| 22 | [Voice Agents — The Terminal Loop, Then a LiveKit Room](lessons/0022-voice-agents-langgraph-livekit.html) | One expense agent built twice: a readable record → transcribe → graph → speak loop, then the same pipeline in a LiveKit room with VAD, barge-in, a browser client and a Docker media server. | ~45 min |
 
 
 ---
@@ -65,6 +66,8 @@ Every Python example is a `uv` project; every frontend uses `pnpm`. Run commands
 | [0019-memory-agents-langgraph](assets/examples/0019-memory-agents-langgraph/index.html) | Lesson 19 | Memory in agents: LangGraph checkpointer and store, trimming and summarization, 19 tests |
 | [0020-agent-skills-python](assets/examples/0020-agent-skills-python/index.html) | Lesson 20 | Agent Skills in Python: SKILL.md library, 18-rule linter, Pydantic AI deferred capabilities, 34 tests |
 | [0021-text-to-sql](assets/examples/0021-text-to-sql/index.html) | Lesson 21 | Text to SQL: seeded SQLite, guarded LangGraph agent, review interrupt, 29 tests |
+| [example-Voice-langgraph](assets/examples/example-Voice-langgraph/index.html) | Lesson 22 | Terminal voice agent: mic → whisper/Qwen ASR → LangGraph + MCP → Qwen3-TTS, 56 offline checks |
+| [example-livekit-langgraph](assets/examples/example-livekit-langgraph/index.html) | Lesson 22 | The same agent in a LiveKit room: Docker server, browser client, VAD and barge-in, 30 offline checks |
 
 ---
 
@@ -73,7 +76,8 @@ Every Python example is a `uv` project; every frontend uses `pnpm`. Run commands
 
 - **Python 3.12+** and [`uv`](https://docs.astral.sh/uv/) for every Python lab.
 - **Node.js 20+** and `pnpm` for the frontend examples.
-- **DeepSeek API key** for the hosted-model lessons. Some lessons also use **Qwen/DashScope** embeddings.
+- **DeepSeek API key** for the hosted-model lessons. Some lessons also use **Qwen/DashScope** embeddings; lesson 22 uses it for both speech directions.
 - **Ollama** for lesson 14; no API key is needed there.
-- **Docker** for lesson 16's cluster rehearsal and lesson 18's local PostgreSQL container.
+- **Docker** for lesson 16's cluster rehearsal, lesson 18's local PostgreSQL container, and lesson 22's LiveKit server.
+- **A microphone and a browser** for lesson 22's live paths; both examples ship a smoke script that runs a full turn without either.
 - **SMTP credentials** for lesson 18's optional email send; a Gmail app password works, and the lab previews without sending by default.

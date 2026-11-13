@@ -9,11 +9,11 @@
 <body>
 <article class="page">
 
-<p class="meta">Reference document · Draws on <a href="../lessons/0002-your-first-llm-api-call.html">Lesson 2</a> through <a href="../lessons/0021-text-to-sql.html">Lesson 21</a> · Prints as a cheat sheet</p>
+<p class="meta">Reference document · Draws on <a href="../lessons/0002-your-first-llm-api-call.html">Lesson 2</a> through <a href="../lessons/0022-voice-agents-langgraph-livekit.html">Lesson 22</a> · Prints as a cheat sheet</p>
 
 <h1>The Boundary Map</h1>
 
-<p class="lede">"Boundary" is this course's recurring insight — taught in pieces across the twenty-one lessons, never as one picture. This is the picture: where every boundary sits in an agent, what crosses it, the single rule each enforces, and the lesson to revisit. The claim it compresses: <strong>error handling, security, and safety are the same discipline at different lines</strong> — label what crosses, classify what fails, cap what loops, gate what's irreversible.</p>
+<p class="lede">"Boundary" is this course's recurring insight — taught in pieces across the twenty-two lessons, never as one picture. This is the picture: where every boundary sits in an agent, what crosses it, the single rule each enforces, and the lesson to revisit. The claim it compresses: <strong>error handling, security, and safety are the same discipline at different lines</strong> — label what crosses, classify what fails, cap what loops, gate what's irreversible.</p>
 
 <h2>The agent, drawn as boundaries</h2>
 
@@ -52,6 +52,7 @@ side effects   → (gate)                   budgets   → (cap)
     <tr><td><strong>Memory scope</strong></td><td>thread ↔ user</td><td>Conversation in the checkpointer keyed by <code>thread_id</code>; durable facts in the store keyed by <code>user_id</code></td><td>one thread inherits another's small talk; facts vanish with the chat; unbounded growth</td><td><a href="../lessons/0019-memory-agents-langgraph.html">L19</a></td></tr>
     <tr><td><strong>Skill boundary</strong></td><td>procedure ↔ context</td><td>Only <code>name</code> and <code>description</code> are always on; the body loads on demand, references and scripts after that. Scripts are code, not text.</td><td>a catalog that is a system prompt again; a workflow that needs tools the agent lacks; unsandboxed scripts</td><td><a href="../lessons/0020-agent-skills.html">L20</a></td></tr>
     <tr><td><strong>SQL execution</strong></td><td>model text → database</td><td>A prompt is not a permission: read-only connection, one <code>SELECT</code>/<code>WITH</code>, keyword whitelist, row cap, deadline, and an approval gate for meaning</td><td>writes; unbounded reads; a cartesian join that pins the process; a valid query that answers the wrong question</td><td><a href="../lessons/0021-text-to-sql.html">L21</a></td></tr>
+    <tr><td><strong>Speech</strong></td><td>audio → action</td><td>The transcript is untrusted input and a misheard amount becomes a wrong write: confirm amounts before writing, keep spoken replies short, and never read ids or JSON aloud</td><td>a misheard "fifteen" logged as "fifty"; barge-in cutting a confirmation; an agent that reads a UUID</td><td><a href="../lessons/0022-voice-agents-langgraph-livekit.html">L22</a></td></tr>
     <tr><td><strong>Human gate</strong></td><td>side effects → world</td><td>Irreversible actions require approval; deny is a first-class outcome</td><td>rogue refunds; duplicate mail; no audit story</td><td><a href="../lessons/0018-project-youtube-digest.html">L18</a> gates SMTP behind an explicit flag; L17 is read-only</td></tr>
     <tr><td><strong>Output</strong></td><td>answer ↓</td><td>Grounding check: citations must match retrieved blocks, or fail</td><td>hallucination delivered with confidence</td><td><a href="../lessons/0005-your-first-evals.html">L5</a>, <a href="../lessons/0007-rag-service.html">L7</a></td></tr>
   </tbody>
@@ -71,7 +72,7 @@ side effects   → (gate)                   budgets   → (cap)
   <div class="ask"><strong>Not sure where a new feature sits?</strong> Draw its arrows first — what text enters, what fails, what leaves the system — and the boundary (and its lesson) picks itself.</div>
   <div class="links">
     <a href="skill-map.html">← Skill Map &amp; Glossary</a>
-    <a href="../lessons/0021-text-to-sql.html">Companion: Lesson 21</a>
+    <a href="../lessons/0022-voice-agents-langgraph-livekit.html">Companion: Lesson 22</a>
   </div>
 </div>
 

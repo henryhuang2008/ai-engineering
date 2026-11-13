@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lesson 22 — Voice Agents: The Terminal Loop, Then a LiveKit Room</title>
+    <link rel="stylesheet" href="../assets/course.css" />
+  </head>
+  <body>
+    <article class="page">
+      <p class="meta">
+        Lesson 22 of 22 · ~45 min · Prereq:
+        <a href="0010-langgraph.html">Lesson 10</a>,
+        <a href="0009-mcp.html">Lesson 9</a> ·
+        <a href="../assets/examples/example-Voice-langgraph/index.html"
+          >Terminal example →</a
+        >
+        ·
+        <a href="../assets/examples/example-livekit-langgraph/index.html"
+          >LiveKit example →</a
+        >
+        · <a href="../reference/skill-map.html">Skill Map →</a>
+      </p>
+
+      <h1>Voice Agents — The Loop You Write, Then the Loop a Room Hands You</h1>
+
+      <p class="lede">
+        One expense assistant, built twice. The first version is a terminal loop
+        you can read end to end: record, transcribe, run the graph, speak. The
+        second keeps the same three stages but puts a LiveKit room in charge of
+        the microphone, the turn boundaries and the playback — and the app code
+        shrinks to about a third. Both examples are runnable today, and both use
+        the same MCP tools and database.
+      </p>
+
+      <div class="callout win">
+        <span class="label">Your win this lesson</span>
+        You can run a real voice agent from either example, explain which part is
+        the model and which part is plumbing, and say what a media server buys
+        you that a terminal loop does not.
+      </div>
+
+      <h2>Part 1 — What the two examples are</h2>
+
+      <p>
+        Both are <strong>Luna</strong>, an expense manager. You speak a sentence;
+        it creates, updates, deletes or queries expenses in PostgreSQL/Supabase
+        through five MCP tools, then answers out loud in one or two sentences.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th></th>
+            <th>Terminal example</th>
+            <th>LiveKit example</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Folder</td>
+            <td>
+              <a
+                href="../assets/examples/example-Voice-langgraph/index.html"
+                ><code>example-Voice-langgraph</code></a
+              >
+            </td>
+            <td>
+              <a
+                href="../assets/examples/example-livekit-langgraph/index.html"
+                ><code>example-livekit-langgraph</code></a
+              >
+            </td>
+          </tr>
+          <tr>
+            <td>Where you talk</td>
+            <td>your terminal, with a microphone</td>
+            <td>a browser tab in a LiveKit room</td>
+          </tr>
+          <tr>
+            <td>When your turn ends</td>
+            <td>you press <kbd>Enter</kbd></td>
+            <td>silence, decided by VAD + endpointing</td>
+          </tr>
+          <tr>
+            <td>Interrupting the agent</td>
+            <td>not possible</td>
+            <td>talk over it; its audio stops</td>
+          </tr>
+          <tr>
+            <td>Needs</td>
+            <td>Python + microphone</td>
+            <td>Python + Docker + browser</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        The stages are identical:
+        <strong>speech to text → LangGraph (DeepSeek + MCP tools) → text to speech</strong>.
+        The difference is who owns the audio.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Stage</th>
+            <th>Engine</th>
+            <th>Where it runs</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Speech to text</td>
+            <td><code>qwen3-asr-flash</code>, or local faster-whisper</td>
+            <td>DashScope, or your CPU</td>
+          </tr>
+          <tr>
+            <td>Reasoning + tools</td>
+            <td><code>deepseek-flash</code> in a LangGraph graph</td>
+            <td>DeepSeek API</td>
+          </tr>
+          <tr>
+            <td>Text to speech</td>
+            <td><code>qwen3-tts-flash</code> (ElevenLabs optional)</td>
+            <td>DashScope</td>
+          </tr>
+          <tr>
+            <td>Expenses</td>
+            <td>PostgreSQL / Supabase behind five MCP tools</td>
+            <td>your database</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Part 2 — Run the terminal example</h2>
+
+      <p>
+        This is the version to read first: the whole loop is one page of Python,
+        and every stage prints its own timing.
+      </p>
+
+      <pre><code>cd assets/examples/example-Voice-langgraph
+uv sync
+Copy-Item .env.example .env
+
+# keys: persist them, then reopen the terminal
+setx DEEPSEEK_API_KEY "sk-..."
+setx DASHSCOPE_API_KEY "sk-..."</code></pre>
+
+      <p>
+        Put a Supabase connection string in <code>SUPABASE_URI</code>, then create
+        the customer and copy the id it prints into <code>CUSTOMER_ID</code>:
+      </p>
+
+      <pre><code>uv run python seed.py
+# CUSTOMER_ID = 1cfa4b0d-...
+# paste that line into .env
+
+uv run python check.py</code></pre>
+
+      <p><code>check.py</code> should end with “Everything is ready”. Then:</p>
+
+      <pre><code>uv run python smoke.py     # one full turn, no microphone needed
+uv run python main.py      # the microphone version</code></pre>
+
+      <p>With <code>main.py</code> running, speak this and press Enter:</p>
+
+      <blockquote>
+        <p>
+          <strong>“Create an expense for the team lunch today. It costs fifteen
+          dollars.”</strong>
+        </p>
+      </blockquote>
+
+      <p>
+        You should see a <code>create_expense</code> tool line, then Luna answers
+        out loud: <em>“Done — I’ve logged the team lunch for fifteen dollars
+        under meals.”</em> To stop, say “exit” or “close the program” and press
+        Enter; <kbd>Ctrl</kbd>+<kbd>C</kbd> also works.
+      </p>
+
+      <p>Two switches are worth trying in <code>.env</code>:</p>
+
+      <pre><code>STT_PROVIDER=qwen      # qwen3-asr-flash; whisper is the local default
+TTS_PROVIDER=qwen      # qwen3-tts-flash; elevenlabs is the optional voice</code></pre>
+
+      <p>
+        Measured on the lab machine: local whisper runs at 2.7–3.2× realtime
+        (a 45 s clip in 14–16.5 s), <code>qwen3-asr-flash</code> does the same
+        clip in 2.2 s, and Qwen TTS starts speaking after 0.73–1.29 s. A full
+        spoken turn is about 18–23 s, and the DeepSeek tool turn is the slow part.
+      </p>
+
+      <h2>Part 3 — Run the LiveKit example</h2>
+
+      <p>
+        Same agent, same tools, same database. LiveKit adds a room, a browser
+        client, voice-activity detection, barge-in and turn-taking. The server
+        runs locally in Docker:
+      </p>
+
+      <pre><code>cd assets/examples/example-livekit-langgraph
+docker compose up -d
+uv sync
+Copy-Item .env.example .env</code></pre>
+
+      <p>
+        The keys and database settings are the same as above. The
+        <code>LIVEKIT_*</code> values in <code>.env.example</code> already match
+        <code>docker-compose.yml</code>, so there is nothing to generate:
+      </p>
+
+      <pre><code>uv run python check.py</code></pre>
+
+      <p>Then, in one terminal:</p>
+
+      <pre><code>uv run python agent.py dev</code></pre>
+
+      <p>and in a second terminal, a join token plus the page:</p>
+
+      <pre><code>uv run python make_token.py          # room "expenses"
+cd client
+python -m http.server 8000</code></pre>
+
+      <p>
+        Open <strong>http://localhost:8000</strong> — not the file path; browsers
+        block the microphone on <code>file://</code> — paste the token, press
+        <strong>Connect</strong>, and allow the microphone. Luna greets you, then
+        say:
+      </p>
+
+      <blockquote>
+        <p>
+          <strong>“Create an expense for a taxi to the airport, thirty
+          dollars.”</strong>
+        </p>
+      </blockquote>
+
+      <p>
+        No keypress ends your turn: stop talking and the VAD closes it. Start
+        talking while she answers and she stops. There is no exit word — press
+        <strong>Disconnect</strong> or close the tab.
+      </p>
+
+      <p>No browser at hand? The same turn runs headless:</p>
+
+      <pre><code>uv run python smoke.py</code></pre>
+
+      <p>
+        It joins a fresh room, publishes a synthesized question as its
+        microphone, records the agent and prints both transcripts. Measured: the
+        agent connects in well under a second, a 4 s question transcribes in
+        about 1 s, and the round trip including playback is roughly 25 s.
+      </p>
+
+      <h2>Part 4 — What the room buys you</h2>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Job</th>
+            <th>Terminal example</th>
+            <th>LiveKit example</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Microphone + playback</td>
+            <td><code>sounddevice</code>, hand-written</td>
+            <td>room audio</td>
+          </tr>
+          <tr>
+            <td>Turn boundaries</td>
+            <td>the Enter key</td>
+            <td>Silero VAD + endpointing</td>
+          </tr>
+          <tr>
+            <td>Barge-in</td>
+            <td>none</td>
+            <td>on by default</td>
+          </tr>
+          <tr>
+            <td>Client</td>
+            <td>the terminal</td>
+            <td>any LiveKit client, including the bundled page</td>
+          </tr>
+          <tr>
+            <td>App + audio code</td>
+            <td>786 lines</td>
+            <td>451 lines</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        The trade is honest: you write two small adapters (<code>stt.STT</code>,
+        <code>tts.TTS</code>) and you run a media server. In exchange you stop
+        writing microphone loops, and the agent gains interruption, endpointing
+        and a path to telephony and multi-user rooms.
+      </p>
+
+      <p>
+        Pick the terminal example to learn the loop; pick LiveKit when a human
+        has to talk to it without reading a terminal.
+      </p>
+
+      <h2>Quick fixes</h2>
+
+      <table>
+        <thead>
+          <tr><th>Symptom</th><th>Cause</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>Qwen TTS returned 401: InvalidApiKey</code></td>
+            <td>Beijing vs Singapore key: set <code>DASHSCOPE_REGION</code></td>
+          </tr>
+          <tr>
+            <td><code>the agent never published audio</code></td>
+            <td>the worker is not running, or the UDP port is wrong</td>
+          </tr>
+          <tr>
+            <td>Browser connects, mic says <em>Permission denied</em></td>
+            <td>page opened as <code>file://</code>, or the mic is blocked in site/Windows settings</td>
+          </tr>
+          <tr>
+            <td>Transcript appears, no sound</td>
+            <td>hard-reload the page; the client attaches the agent track itself</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>What's next</h2>
+
+      <p>
+        This is the last lesson, so “next” is a voice agent you can defend. Three
+        directions that build directly on these examples: measure the latency
+        budget stage by stage and trade accuracy for time (whisper
+        <code>base</code> vs <code>small</code>, streaming TTS vs a full clip);
+        add an eval set of spoken questions with known database rows; and move
+        the room from local Docker to LiveKit Cloud or a TURN-backed deployment
+        before anyone outside your machine connects. The
+        <a href="../reference/skill-map.html">skill map</a> places voice beside
+        retrieval, memory and tools, and the
+        <a href="../reference/boundary-map.html">boundary map</a> is the checklist
+        for what may cross into a real system.
+        <a href="0001-ai-engineering-landscape-2026.html">Lesson 1</a> is the way
+        back to the start.
+      </p>
+
+      <div class="footer-nav">
+        <div class="ask">
+          <strong>Before you ship a voice agent:</strong> decide what it may do
+          without confirmation, how it handles a misheard amount, and what
+          happens when the database is down mid-sentence. Speech makes all three
+          harder to see.
+        </div>
+        <div class="links">
+          <a href="0021-text-to-sql.html">← Lesson 21</a>
+          <a href="../reference/skill-map.html">Skill Map &amp; Glossary</a>
+          <a href="../assets/examples/example-Voice-langgraph/index.html"
+            >Terminal example</a
+          >
+          <a href="../assets/examples/example-livekit-langgraph/index.html"
+            >LiveKit example</a
+          >
+        </div>
+      </div>
+
+      <script src="../assets/quiz.js"></script>
+    </article>
+  </body>
+</html>

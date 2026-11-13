@@ -81,7 +81,9 @@
 
 <p>It closes the concepts with <a href="../lessons/0020-agent-skills.html">Lesson 20</a>, the other thing every project assumes: <strong>instructions</strong>. A skill is a folder with a <code>SKILL.md</code>; the agent sees a name and a description, and loads the body and files only when a task needs them. The lesson runs the example end to end, then shows the six rules for writing a skill and the four failures that break one.</p>
 
-<p>It ends with <a href="../lessons/0021-text-to-sql.html">Lesson 21</a>, the build where model output touches a real system: <strong>text to SQL</strong>. A custom LangGraph agent writes a query, a six-layer read-only guard decides whether it runs, a bounded loop retries a broken statement, and <code>interrupt</code> pauses for human approve/edit/reject. The lesson is less about prompting than about the boundary: a read-only connection, a statement whitelist, a row cap, a deadline, and the questions the schema must refuse.</p>
+<p>It then moves to <a href="../lessons/0021-text-to-sql.html">Lesson 21</a>, the build where model output touches a real system: <strong>text to SQL</strong>. A custom LangGraph agent writes a query, a six-layer read-only guard decides whether it runs, a bounded loop retries a broken statement, and <code>interrupt</code> pauses for human approve/edit/reject. The lesson is less about prompting than about the boundary: a read-only connection, a statement whitelist, a row cap, a deadline, and the questions the schema must refuse.</p>
+
+<p>It ends with <a href="../lessons/0022-voice-agents-langgraph-livekit.html">Lesson 22</a>, the interface a user actually speaks to: <strong>voice</strong>. The same expense agent is built twice — a terminal loop that shows record, transcribe, graph and speak, then the identical pipeline in a LiveKit room where VAD, endpointing, barge-in, playback and a browser client come from the media server. The lesson is a comparison: 786 lines of app and audio code against 451, and what each line of that difference buys.</p>
 
 <h2>Role map</h2>
 <table>

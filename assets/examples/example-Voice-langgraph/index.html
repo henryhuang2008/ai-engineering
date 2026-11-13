@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Example — Voice agent, terminal: run it</title>
+    <link rel="stylesheet" href="../../course.css" />
+  </head>
+  <body>
+    <article class="page">
+      <p class="meta">
+        Example ·
+        <a href="../../../lessons/0022-voice-agents-langgraph-livekit.html"
+          >Companion to Lesson 22</a
+        >
+        · <a href="README.md">README</a> ·
+        <a href="../example-livekit-langgraph/index.html">LiveKit version →</a>
+      </p>
+
+      <h1>Voice agent, terminal — run it</h1>
+
+      <p class="lede">
+        Speak into your microphone, get an answer out loud. In between,
+        faster-whisper or Qwen transcribes, a LangGraph graph calls five MCP
+        expense tools, and Qwen3-TTS speaks the reply. Everything runs in one
+        terminal, and every stage prints its own timing.
+      </p>
+
+      <div class="callout win">
+        <span class="label">The one-line model</span>
+        <strong>Record → transcribe → graph → speak</strong>, with the loop
+        visible. This is the version to read before you let a framework hide it.
+      </div>
+
+      <h2>Setup</h2>
+
+      <pre><code>cd assets/examples/example-Voice-langgraph
+uv sync
+Copy-Item .env.example .env</code></pre>
+
+      <p>
+        Set both keys in your environment (reopen the terminal after
+        <code>setx</code>):
+      </p>
+
+      <pre><code>setx DEEPSEEK_API_KEY "sk-..."
+setx DASHSCOPE_API_KEY "sk-..."</code></pre>
+
+      <p>
+        Edit <code>.env</code>: paste the Supabase connection string into
+        <code>SUPABASE_URI</code>, then create the demo customer and copy the id
+        it prints into <code>CUSTOMER_ID</code>.
+      </p>
+
+      <pre><code>uv run python seed.py
+# CUSTOMER_ID = 1cfa4b0d-...
+# paste that line into .env
+
+uv run python check.py</code></pre>
+
+      <p>
+        <code>check.py</code> verifies packages, keys, database tables, the MCP
+        tool list and the configured speech engines. It should end with
+        “Everything is ready”.
+      </p>
+
+      <h2>Run</h2>
+
+      <pre><code>uv run python smoke.py     # one measured turn, no microphone
+uv run python main.py      # microphone loop</code></pre>
+
+      <p>With <code>main.py</code> running, speak this, then press Enter:</p>
+
+      <blockquote>
+        <p>
+          <strong>“Create an expense for the team lunch today. It costs fifteen
+          dollars.”</strong>
+        </p>
+      </blockquote>
+
+      <p>
+        The microphone records until you press <kbd>Enter</kbd>; the recording is
+        one turn. You should see a <code>create_expense</code> tool line, then
+        hear: <em>“Done — I’ve logged the team lunch for fifteen dollars under
+        meals.”</em>
+      </p>
+
+      <p>
+        To finish, say “exit”, “quit”, “close the program” or “that’s all”, then
+        press Enter. <kbd>Ctrl</kbd>+<kbd>C</kbd> stops it at any point. Every
+        turn is written to <code>out/</code>; the microphone side is 16 kHz, the
+        Qwen reply is 24 kHz.
+      </p>
+
+      <h2>Switches</h2>
+
+      <pre><code># .env
+STT_PROVIDER=whisper      # local, free, 2.7–3.2× realtime
+STT_PROVIDER=qwen         # qwen3-asr-flash, 20× realtime, audio leaves the machine
+TTS_PROVIDER=qwen         # qwen3-tts-flash (default)
+TTS_PROVIDER=elevenlabs   # optional, needs a usable voice in your account</code></pre>
+
+      <h2>Measured on the lab machine</h2>
+
+      <table>
+        <thead>
+          <tr><th>Stage</th><th>Result</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>faster-whisper <code>small</code>, 45 s clip</td>
+            <td>14–16.5 s (2.7–3.2× realtime)</td>
+          </tr>
+          <tr>
+            <td><code>qwen3-asr-flash</code>, same clip</td>
+            <td>2.2 s (20× realtime)</td>
+          </tr>
+          <tr>
+            <td>Qwen TTS, first audio</td>
+            <td>0.73–1.29 s, median 0.87 s</td>
+          </tr>
+          <tr>
+            <td>One spoken turn</td>
+            <td>~18 s with Qwen STT, ~23 s with local whisper</td>
+          </tr>
+          <tr>
+            <td>Offline checks</td>
+            <td>56/56</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Files worth reading</h2>
+
+      <table>
+        <thead>
+          <tr><th>File</th><th>What it does</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><a href="main.py"><code>main.py</code></a></td>
+            <td>the loop: record, transcribe, run the graph, speak</td>
+          </tr>
+          <tr>
+            <td><a href="voice_utils.py"><code>voice_utils.py</code></a></td>
+            <td>STT and TTS providers, microphone, WAV files</td>
+          </tr>
+          <tr>
+            <td><a href="assistant_graph.py"><code>assistant_graph.py</code></a></td>
+            <td>the LangGraph agent and its streaming printer</td>
+          </tr>
+          <tr>
+            <td><a href="mcps/local_servers/db.py"><code>mcps/…/db.py</code></a></td>
+            <td>the five expense tools over SQLAlchemy</td>
+          </tr>
+          <tr>
+            <td><a href="smoke.py"><code>smoke.py</code></a></td>
+            <td>one full turn with no microphone</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>If it fails</h2>
+
+      <p>
+        <code>Qwen TTS returned 401: InvalidApiKey</code> — Beijing and Singapore
+        DashScope keys are different; set <code>DASHSCOPE_REGION=singapore</code>
+        for an intl key. <code>heard nothing</code> — speak first, then press
+        Enter. <code>ELEVENLABS … 402</code> — the optional voice needs a paid
+        plan or a voice in your own account; the Qwen default does not.
+      </p>
+
+      <div class="footer-nav">
+        <div class="ask">
+          <strong>The point of this version:</strong> you can point at every line
+          that touches audio. When the LiveKit version feels like magic, come
+          back here to see what was replaced.
+        </div>
+        <div class="links">
+          <a href="../../../lessons/0022-voice-agents-langgraph-livekit.html"
+            >Lesson 22</a
+          >
+          <a href="README.md">README</a>
+          <a href="../example-livekit-langgraph/index.html">LiveKit version</a>
+        </div>
+      </div>
+    </article>
+  </body>
+</html>

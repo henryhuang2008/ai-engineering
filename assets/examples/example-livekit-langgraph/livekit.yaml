@@ -1,0 +1,29 @@
+# LiveKit server for local development only.
+# The key/secret pair below is what the agent and the browser client use.
+# Never use these values anywhere real.
+
+port: 7880
+
+rtc:
+  tcp_port: 7881
+  # One UDP port shared by every participant ("UDP mux"). A port *range* here
+  # allocates a port per participant, so pinning the range to a single port
+  # leaves the second participant with no UDP candidate at all.
+  udp_port: 7882
+  use_external_ip: false
+  # Local machine only: advertise 127.0.0.1 so the browser, the agent and the
+  # container all agree on an address the host can reach.
+  node_ip: 127.0.0.1
+
+keys:
+  devkey: devsecretdevsecretdevsecretdevsecret
+
+room:
+  auto_create: true
+  # Close an empty room quickly. Automatic agent dispatch happens when a room is
+  # created, so a room left open after a disconnect would take no new agent job.
+  empty_timeout: 15
+
+logging:
+  level: info
+  json: false
