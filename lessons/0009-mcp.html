@@ -9,15 +9,15 @@
 <body>
 <article class="page">
 
-<p class="meta">Lesson 9 of the AI Engineering course · ~60 min · Prereq: <a href="0003-function-calling.html">Lesson 3</a> + <a href="0008-rag-appendix.html">Lesson 8</a> · <a href="../reference/skill-map.html">Skill Map →</a></p>
+<p class="meta">Lesson 9 of the AI Engineering course · ~80 min · Prereq: <a href="0003-function-calling.html">Lesson 3</a> + <a href="0008-rag-appendix.html">Lesson 8</a> · <a href="../reference/skill-map.html">Skill Map →</a></p>
 
 <h1>MCP: Write the Tool Once, Call It From Any Client</h1>
 
-<p class="lede">You already know function calling: describe a tool, let the model choose it, run it in your process. MCP does not add a new capability — it moves the tool out of your process and gives every client the same address. This lesson builds a server, calls it with no model at all, lets DeepSeek drive it by hand, then points LangChain's <code>MCPAdapter</code> at a one-tool server and lets <code>create_agent</code> run the loop.</p>
+<p class="lede">You already know function calling: describe a tool, let the model choose it, run it in your process. MCP does not add a new capability — it moves the tool out of your process and gives every client the same address. This lesson builds a server, calls it with no model at all, lets DeepSeek drive it by hand, points LangChain's <code>MCPAdapter</code> at a one-tool server, and then assembles all of it into a CRM agent with three servers, a Postgres database and a human approval gate.</p>
 
 <div class="callout win">
   <span class="label">Your win this lesson</span>
-  You'll ship an MCP server exposing a tool, a resource and a prompt; call it from a raw client in nine lines; connect the same server to DeepSeek without writing a provider-specific adapter; and point LangChain's <code>MCPAdapter</code> at a one-tool server in one small script.
+  You'll ship an MCP server exposing a tool, a resource and a prompt; call it from a raw client in nine lines; connect the same server to DeepSeek without writing a provider-specific adapter; point LangChain's <code>MCPAdapter</code> at a one-tool server in one small script; and read a working agent whose entire tool layer is a JSON file and whose writes stop for approval.
 </div>
 
 <h2>What MCP is, without the hype</h2>
@@ -260,6 +260,283 @@ uv run python agent.py --url http://127.0.0.1:8050/sse "What is 2 + 3?"</code></
 
 <p>The <code>langchain.mcp</code> namespace is beta and prints a <code>LangChainBetaWarning</code> on import. That is why this example is a separate project: you can try the new adapter without moving the lesson's v1 server and clients. The guide is <a href="https://docs.langchain.com/oss/python/langchain/mcp">docs.langchain.com/oss/python/langchain/mcp</a>.</p>
 
+<h2>Part 5 — A working agent: three servers, one config file</h2>
+
+<p>Parts 1–4 isolate one mechanism each: a server, a raw client, a model loop, an adapter. Part 5 is those pieces assembled into the thing a company actually runs — <strong>Ralph</strong>, a CRM marketing agent in <a href="../assets/examples/0009-mcp-advanced/index.html"><code>assets/examples/0009-mcp-advanced</code></a>. It reads customer data through an <code>npx</code>-launched Postgres server, writes campaigns through a Python server you own, and stops for a human before either write happens. It also answers the question Part 1 dodged: with three servers, where does the list live? In a JSON file, not in code.</p>
+
+<table>
+  <thead><tr><th>piece</th><th>file</th><th>job</th></tr></thead>
+  <tbody>
+    <tr><td>chat client</td><td><code>frontend/chat_local.py</code></td><td>streams tokens, prints the approval prompt, resumes the graph</td></tr>
+    <tr><td>graph</td><td><code>src/ralph/graph.py</code></td><td>model → tools loop, plus the review node</td></tr>
+    <tr><td>registry</td><td><code>src/ralph/my_mcp/mcp_config.json</code></td><td>which servers exist, how to launch them, which secrets they need</td></tr>
+    <tr><td>loader</td><td><code>src/ralph/my_mcp/config.py</code></td><td>resolves <code>${VARS}</code>, absolute paths, drops unconfigured servers</td></tr>
+    <tr><td>servers</td><td>npm <code>server-postgres</code>, <code>marketing_server.py</code>, optional Slack</td><td>the tools themselves: one borrowed and read-only, one yours, one optional</td></tr>
+  </tbody>
+</table>
+
+<p>Six files, 643 lines, and the largest is the system prompt at 153. Nothing here is a framework you have not already seen in this lesson. What is new is the <strong>shape of the guard</strong>.</p>
+
+<h3>5.1 — The graph: LangGraph, and one provider-specific line</h3>
+
+<p>The state is three fields, and one of them is a policy:</p>
+
+<pre><code>class AgentState(BaseModel):
+    messages: Annotated[List[BaseMessage], add_messages] = []
+    protected_tools: List[str] = ["create_campaign", "send_campaign_email"]
+    yolo_mode: bool = False</code></pre>
+
+<p><code>messages</code> is the only field with a reducer (<code>add_messages</code> appends and de-duplicates by id). <code>protected_tools</code> is the list the router consults, and <code>yolo_mode</code> is the switch that turns the whole gate off. Putting policy in state rather than in a prompt is the important part: a prompt can be talked out of a rule, an <code>if</code> cannot.</p>
+
+<p>The graph is the Part 4 loop, opened up:</p>
+
+<pre><code>client = MultiServerMCPClient(connections=mcp_config["mcpServers"])
+tools = await client.get_tools()
+
+llm = ChatOpenAI(
+    model="gpt-4.1-mini-2025-04-14",
+    temperature=0.1
+).bind_tools(tools)
+
+builder = StateGraph(AgentState)
+builder.add_node(assistant_node)
+builder.add_node(human_tool_review_node)
+builder.add_node("tools", ToolNode(tools))
+
+builder.add_edge(START, "assistant_node")
+builder.add_conditional_edges("assistant_node", assistant_router,
+                              ["tools", "human_tool_review_node", END])
+builder.add_edge("tools", "assistant_node")
+
+return builder.compile(checkpointer=MemorySaver())</code></pre>
+
+<p>Three nodes, and one conditional edge with three exits. <code>ToolNode(tools)</code> is the prebuilt executor that saves you the <code>for call in reply.tool_calls</code> loop from Part 3; <code>assistant_router</code> is the only decision:</p>
+
+<pre><code>def assistant_router(state: AgentState) -&gt; str:
+    last_message = state.messages[-1]
+    if not last_message.tool_calls:
+        return END
+    if not state.yolo_mode and any(
+        call["name"] in state.protected_tools
+        for call in last_message.tool_calls
+    ):
+        return "human_tool_review_node"
+    return "tools"</code></pre>
+
+<p><strong>OpenAI is two lines, not an architecture.</strong> The import and the constructor above are the only place a provider is named; every tool arrives as a schema and every message is a LangChain object. Swapping in the model the rest of this course uses is an import plus a constructor:</p>
+
+<pre><code>from langchain_deepseek import ChatDeepSeek
+
+llm = ChatDeepSeek(
+    model="deepseek-flash",
+    temperature=0.1,
+    extra_body={"thinking": {"type": "disabled"}},
+).bind_tools(tools)</code></pre>
+
+<p>If that swap does not work, the problem is in the tool schemas or the model's tool-calling, seldom in the graph. That is what <code>bind_tools</code> abstracts, and it is why Part 3 could build the same loop by hand.</p>
+
+<h3>5.2 — Human in the loop: <code>interrupt</code>, not a polite prompt</h3>
+
+<p>The system prompt says <em>“Before sending any email, you must always first analyze the customer's data…”</em>. That sentence is advice. The gate is a node:</p>
+
+<pre><code>def human_tool_review_node(state: AgentState) -&gt; Command[Literal["assistant_node", "tools"]]:
+    last_message = state.messages[-1]
+    tool_call = last_message.tool_calls[-1]
+
+    human_review: dict = interrupt({
+        "message": "Your input is required for the following tool:",
+        "tool_call": tool_call
+    })
+
+    review_action = human_review["action"]
+    review_data = human_review.get("data")
+
+    if review_action == "continue":
+        return Command(goto="tools")
+
+    elif review_action == "update":
+        updated_message = AIMessage(
+            content=last_message.content,
+            tool_calls=[{
+                "id": tool_call["id"],
+                "name": tool_call["name"],
+                "args": json.loads(review_data)
+            }],
+            id=last_message.id
+        )
+        return Command(goto="tools", update={"messages": [updated_message]})
+
+    elif review_action == "feedback":
+        tool_message = ToolMessage(
+            content=review_data,
+            name=tool_call["name"],
+            tool_call_id=tool_call["id"]
+        )
+        return Command(goto="assistant_node", update={"messages": [tool_message]})</code></pre>
+
+<p><code>interrupt()</code> does not block a thread. It <strong>raises</strong>: the node stops, the checkpointer saves the run, and the caller gets control back with the payload above. Nothing executes until someone resumes that same <code>thread_id</code> with <code>Command(resume=…)</code>. This is why the graph is compiled with <code>MemorySaver()</code> — a graph without a checkpointer cannot be paused, so <code>interrupt</code> has nowhere to keep the state.</p>
+
+<p>Three actions, three different futures:</p>
+
+<table>
+  <thead><tr><th>action</th><th>node returns</th><th>what happens</th></tr></thead>
+  <tbody>
+    <tr><td><code>continue</code></td><td><code>Command(goto="tools")</code></td><td>the call runs exactly as the model wrote it</td></tr>
+    <tr><td><code>update</code></td><td>a rewritten <code>AIMessage</code>, then <code>goto="tools"</code></td><td>the call runs with your arguments instead, same call id</td></tr>
+    <tr><td><code>feedback</code></td><td>a <code>ToolMessage</code> holding your text, then <code>goto="assistant_node"</code></td><td>the tool never runs; the model re-plans with your note as its “result”</td></tr>
+  </tbody>
+</table>
+
+<p>The <code>feedback</code> branch is the one worth understanding. The model's last message is an <code>AIMessage</code> that <em>claims</em> a tool call with an id. Chat APIs reject a conversation where that id has no matching tool result. Re-sending a rejection as a plain human message breaks the transcript; sending it as the <code>ToolMessage</code> for that id keeps it valid and tells the model what a human thought. That is a protocol constraint shaping product behaviour.</p>
+
+<p>The client side is a loop over the paused state — no callbacks, no threads:</p>
+
+<pre><code>thread_state = graph.get_state(config=config)
+
+while thread_state.interrupts:
+    pending = thread_state.interrupts[0]
+    print(json.dumps(pending.value, indent=2, ensure_ascii=False))
+
+    action = input("Action (continue, update, feedback): ")
+    data = None if action == "continue" else input("Data: ")
+
+    async for response in stream_graph_responses(
+        Command(resume={"action": action, "data": data}), graph, config=config
+    ):
+        print(response, end="", flush=True)
+
+    thread_state = graph.get_state(config=config)</code></pre>
+
+<p>Four limits, so you do not over-trust the gate:</p>
+
+<ul>
+  <li><strong>It reviews one call — always the last.</strong> The node reads <code>last_message.tool_calls[-1]</code>. If the model emits two calls and the protected one is not last, you approve an unprotected call while the protected one runs unreviewed.</li>
+  <li><strong>It trusts the caller.</strong> <code>yolo_mode=True</code> in the input state skips every check. In <code>chat_local.py</code> it is set once at startup — one boolean between a gated agent and an autonomous one.</li>
+  <li><strong>It is not an audit log.</strong> The resumed value is used and discarded; the checkpoint keeps messages, not who approved what or when. Compliance needs a separate record.</li>
+  <li><strong>It reviews arguments, not consequences.</strong> You see <code>{"campaign_id": …, "customer_id": …, "subject": …}</code>, not how many rows it will touch or what the HTML looks like rendered.</li>
+</ul>
+
+<h3>5.3 — Supabase behind two servers</h3>
+
+<p>The database is the UCI Online Retail II sample, reshaped into six tables: <code>customers</code> (100 rows), <code>items</code> (2,132), <code>transactions</code> (8,683), <code>rfm</code> (100), plus <code>marketing_campaigns</code> and <code>campaign_emails</code> for the agent's own writes.</p>
+
+<p><strong>The read side is a borrowed server.</strong> <code>@modelcontextprotocol/server-postgres</code> exposes exactly one tool, <code>query(sql)</code>, and it opens <code>BEGIN TRANSACTION READ ONLY</code> before running your statement. That single line is the safety model: the agent can read anything the connection can see and change nothing. It has no row cap, no statement timeout and no keyword whitelist — the guard from <a href="0021-text-to-sql.html">Lesson 21</a> is still missing, and it matters more here, because this connection can read every customer's email address.</p>
+
+<p><strong>The write side is yours.</strong> <code>marketing_server.py</code> is 96 lines: a SQLAlchemy engine from <code>SUPABASE_URI</code>, <code>FastMCP("marketing")</code>, and two tools. <code>create_campaign</code> inserts a row and returns its UUID; <code>send_campaign_email</code> inserts a row into <code>campaign_emails</code> and returns a confirmation string. There is a <code># TODO: Send email via MCP</code> where the actual delivery goes. Read that before a demo: in this build <em>“sent”</em> means a row exists.</p>
+
+<p>Two schema traps are worth meeting in a lab rather than in production:</p>
+
+<ul>
+  <li><strong>Quoted identifiers.</strong> Columns are <code>"Customer ID"</code>, <code>"InvoiceDate"</code>, <code>"StockCode"</code> — mixed case, preserved by the quotes. Unquoted, Postgres folds them to lowercase and the query fails with <code>column "customer id" does not exist</code>. The system prompt repeats the schema so the model quotes them too, which is why the prompt carries SQL.</li>
+  <li><strong>RLS is not your control here.</strong> The migration runs <code>ALTER TABLE … ENABLE ROW LEVEL SECURITY</code> on all six tables and creates no policies. The connection string is the table owner, and an owner is not constrained by its own RLS policies — so the “read-only” boundary is the transaction in the Postgres server, not the database.</li>
+</ul>
+
+<h3>5.4 — <code>mcp_config.json</code> is the server registry</h3>
+
+<p>Three servers, one file, no Python:</p>
+
+<pre><code>{
+  "mcpServers": {
+    "postgres": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres", "${SUPABASE_URI}"],
+      "transport": "stdio"
+    },
+    "marketing": {
+      "command": "python",
+      "args": ["src/ralph/my_mcp/servers/marketing_server.py"],
+      "transport": "stdio"
+    },
+    "slack": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-slack"],
+      "env": {
+        "SLACK_BOT_TOKEN": "${SLACK_BOT_TOKEN}",
+        "SLACK_TEAM_ID": "${SLACK_TEAM_ID}"
+      },
+      "transport": "stdio"
+    }
+  }
+}</code></pre>
+
+<p>The key name <code>mcpServers</code> and the <code>command</code>/<code>args</code>/<code>env</code>/<code>transport</code> shape are the same ones Claude Desktop and most MCP hosts already read. That portability is the point: this registry can be handed to another client unchanged.</p>
+
+<table>
+  <thead><tr><th>detail</th><th>why it is written that way</th></tr></thead>
+  <tbody>
+    <tr><td><code>${SUPABASE_URI}</code> in <code>args</code></td><td>the connection string, password included, stays in <code>.env</code>, not in a JSON file you might commit</td></tr>
+    <tr><td>relative <code>.py</code> path</td><td>readable in the file; resolved to an absolute path before launch, because the child process does not share this working directory</td></tr>
+    <tr><td><code>"command": "python"</code></td><td>inherits <code>PATH</code>. Correct under <code>uv run</code>, wrong if you launch the chat with a Python that lacks <code>mcp</code></td></tr>
+    <tr><td><code>slack</code> with no values</td><td>the server is dropped at load time, so an optional integration costs nothing when unconfigured</td></tr>
+  </tbody>
+</table>
+
+<p><code>config.py</code> is the loader, and it does three jobs in order: resolve every <code>${VAR}</code> from the environment, turn relative <code>.py</code> arguments into absolute paths (it finds the project root by walking up to <code>pyproject.toml</code>), and delete any server whose variables are missing:</p>
+
+<pre><code>env_var_value = os.environ.get(env_var_name, None)
+if env_var_value is None or env_var_value == "":
+    print(f"\nEnvironment variable {env_var_name} is not set\n")
+    print(f"Skipping server {server_name}\n")
+    skipped_servers.append(server_name)
+    continue
+
+# ...and after the loop
+for server_name in set(skipped_servers):
+    del config["mcpServers"][server_name]</code></pre>
+
+<p>Measured on the lab machine: with <code>SUPABASE_URI</code> set and no Slack variables, importing the module prints two warnings and returns a two-server config — <code>postgres</code> with the DSN substituted into <code>args</code>, <code>marketing</code> with an absolute path, and no <code>slack</code> key at all. The agent starts with what it has instead of failing on what it does not.</p>
+
+<p>Then one line connects them all:</p>
+
+<pre><code>client = MultiServerMCPClient(connections=mcp_config["mcpServers"])
+tools = await client.get_tools()</code></pre>
+
+<p><code>get_tools()</code> returns one flat list, so the model never learns which server a tool came from — <code>query</code> and <code>create_campaign</code> sit in the same namespace, and <code>ToolNode</code> routes each call back to its own subprocess. Two costs to keep in mind: <strong>names must not collide</strong> (add two Postgres servers and you have two <code>query</code> tools), and <strong>startup spawns one child process per configured server</strong> — three when Slack is wired — one of which may download a package the first time through <code>npx -y</code>. The DSN also appears in that child process's command line, visible to other local processes — a reason to use a read-only role rather than the owner.</p>
+
+<h3>5.5 — Run it</h3>
+
+<pre><code>cd assets\examples\0009-mcp-advanced
+uv sync
+Copy-Item .env.example .env</code></pre>
+
+<p>Fill in <code>OPENAI_API_KEY</code> and <code>SUPABASE_URI</code>. For Supabase: create a project, generate a database password, copy the connection string from <strong>Connect</strong>, and replace the password placeholder. Then run <code>db/migration-create-tables.sql</code> in the SQL editor and import the four CSVs in FK order — <code>customers</code>, <code>items</code>, <code>transactions</code>, <code>rfm</code>. The files are small enough for the dashboard importer; from <code>psql</code> it is one <code>\copy customers from 'db/data/customers.csv' csv header</code> per table.</p>
+
+<p>The project uses a <code>src/</code> layout and does not install itself, so the package directory has to be on the path:</p>
+
+<pre><code>$env:PYTHONPATH = "src"
+uv run python frontend/chat_local.py</code></pre>
+
+<p>Without that line the first import fails with <code>ModuleNotFoundError: No module named 'ralph'</code> — measured, and the single most likely reason a reader gives up on this example. Ralph greets you, then:</p>
+
+<blockquote>
+  <p>“How many customers do we have in each RFM segment?”</p>
+  <p>“Create a re-engagement campaign for customers who haven't purchased in the last 6 months”</p>
+</blockquote>
+
+<p>The second one is the interesting one: the model proposes <code>create_campaign</code>, the router sees a protected name, and the terminal prints the payload and waits:</p>
+
+<pre><code> ----- ✅ / ❌ Human Approval Required -----
+
+{
+  "message": "Your input is required for the following tool:",
+  "tool_call": {
+    "name": "create_campaign",
+    "args": {"name": "Win-back", "type": "re-engagement", "description": "..."},
+    "id": "call_..."
+  }
+}
+
+ Please specify whether you want to continue, update, or provide feedback.
+Action (continue, update, feedback):</code></pre>
+
+<p>Type <code>update</code>, then a JSON object of arguments, to fix a campaign name before it is written. Type <code>feedback</code>, then a sentence, to send the model back to planning without touching the database. <code>exit</code> or <code>quit</code> ends the chat.</p>
+
+<h3>5.6 — What to take from the build</h3>
+
+<p>The registry is the lesson. Adding a server is a config edit plus an entry in <code>protected_tools</code> if it can write; removing one is deleting a key. The graph does not change, the prompt does not change, and the approval gate keeps working because it decides by <em>tool name</em>, not by which server the name came from.</p>
+
+<p>The gate is also the honest limit of this example. It shows you where a human belongs; it does not yet show you what a reviewer decided, how much a call may change, or what happens when the model asks for two writes in one turn. Those are the three things to add before anyone points this at a real customer list.</p>
+
 <h2>MCP vs plain function calling</h2>
 
 <p>The honest comparison: at small scale, MCP is more machinery for the same result. It wins when the tool needs to exist outside one process.</p>
@@ -419,6 +696,61 @@ uv run python agent.py --url http://127.0.0.1:8050/sse "What is 2 + 3?"</code></
       ],
       "correct": 0,
       "explain": "FastMCP infers the transport from the URL: /sse selects SSE, anything else is Streamable HTTP. Stdio is still selected by passing a script path."
+    },
+    {
+      "q": "Why must the Part 5 graph be compiled with a checkpointer?",
+      "options": [
+        "So interrupt() can pause a run and resume it later",
+        "To cache model responses between calls",
+        "To launch the MCP servers",
+        "To stream tokens to the terminal"
+      ],
+      "correct": 0,
+      "explain": "interrupt() raises out of the node. Without a checkpointer there is no saved run to resume, so the pause has nowhere to live."
+    },
+    {
+      "q": "A reviewer chooses feedback instead of approve. What must the review node add before returning to the model?",
+      "options": [
+        "A HumanMessage describing the rejection",
+        "A ToolMessage carrying that text, tagged with the pending tool_call_id",
+        "A SystemMessage that changes the rules",
+        "Nothing — the model can retry on its own"
+      ],
+      "correct": 1,
+      "explain": "The AIMessage already claims a tool call with an id, and chat APIs reject a transcript where that id has no result. The reviewer's text becomes that result, so the model re-plans."
+    },
+    {
+      "q": "In mcp_config.json, SLACK_BOT_TOKEN is empty. What does config.py do?",
+      "options": [
+        "Passes the literal ${SLACK_BOT_TOKEN} to the server",
+        "Deletes the slack server and keeps the others",
+        "Raises at import and stops the app",
+        "Starts slack anyway and fails on the first call"
+      ],
+      "correct": 1,
+      "explain": "resolve_env_vars records any server with a missing variable and removes it from the config. Optional integrations cost nothing when unconfigured."
+    },
+    {
+      "q": "What protection does the borrowed Postgres MCP server actually provide?",
+      "options": [
+        "Row-level security policies",
+        "A row cap and a statement timeout",
+        "BEGIN TRANSACTION READ ONLY on each query",
+        "A whitelist of allowed SQL keywords"
+      ],
+      "correct": 2,
+      "explain": "It opens a read-only transaction around the single query tool. There is no row cap, timeout or keyword filter — that guard is still yours to add."
+    },
+    {
+      "q": "Two MCP servers both expose a tool named query. What does get_tools() hand the model?",
+      "options": [
+        "Both, disambiguated with server prefixes",
+        "One entry per name — the collision is yours to resolve",
+        "An error before the graph is built",
+        "Only the first server's version"
+      ],
+      "correct": 1,
+      "explain": "get_tools() flattens every server into one list keyed by tool name. Nothing prefixes or dedupes them, so name your tools as if one namespace is shared."
     }
   ]
 }
@@ -429,9 +761,10 @@ uv run python agent.py --url http://127.0.0.1:8050/sse "What is 2 + 3?"</code></
 <p><a href="https://modelcontextprotocol.io/docs/learn/architecture">MCP — architecture</a> for the host/client/server split and the three primitives; <a href="https://py.sdk.modelcontextprotocol.io/v1/">Python SDK v1 docs</a> for <code>FastMCP</code>, <code>ClientSession</code> and the transports used here.</p>
 <p><a href="https://github.com/daveebbelaar/ai-cookbook/tree/main/mcp/crash-course">MCP crash course</a> — the seven-part walkthrough this lesson follows, with the OpenAI client replaced by DeepSeek and the Docker section left out. <a href="https://modelcontextprotocol.io/specification/2025-03-26/basic/transports">Transport specification</a> for why Streamable HTTP supersedes SSE.</p>
 <p>For Part 4: <a href="https://docs.langchain.com/oss/python/langchain/mcp">LangChain MCP</a> for <code>MCPAdapter</code>, <code>list_tools()</code> and the beta warning; <a href="https://docs.langchain.com/oss/python/langchain/agents">LangChain agents</a> for <code>create_agent</code>, middleware and streaming.</p>
+<p>For Part 5: <a href="https://docs.langchain.com/oss/python/langgraph/interrupts">LangGraph interrupts</a> and <a href="https://docs.langchain.com/oss/python/langgraph/persistence">persistence</a> for <code>interrupt()</code>, <code>Command(resume=…)</code> and why the checkpointer is required; <a href="https://github.com/modelcontextprotocol/servers-archived/tree/main/src/postgres">the Postgres reference server</a> (archived, and flagged as such on npm) for the read-only transaction this build relies on; <a href="https://supabase.com/docs/guides/database/connecting-to-postgres">Supabase connection strings</a> for the pooler URL in <code>SUPABASE_URI</code>.</p>
 
 <h2>What's next</h2>
-<p><a href="0010-langgraph.html">Lesson 10</a> changes layer again: <strong>LangGraph</strong> turns a decision into a graph — a classifier routes each message to a specialist, and the trace shows which path ran. The graph <code>create_agent</code> compiled in Part 4 is a small preview: every node, edge and checkpoint in Lesson 10 is the same machinery with your own state. The MCP server you just built is exactly the kind of tool one of those nodes can call.</p>
+<p><a href="0010-langgraph.html">Lesson 10</a> changes layer again: <strong>LangGraph</strong> turns a decision into a graph — a classifier routes each message to a specialist, and the trace shows which path ran. Ralph's review node is already that: one conditional edge, two exits, a pause in the middle. Lesson 10 gives you the state, checkpoint and edge vocabulary to build the routing yourself instead of reading it. The MCP server you built in Part 1 is exactly the kind of tool one of those nodes can call.</p>
 
 <div class="footer-nav">
   <div class="ask"><strong>Server works by hand, fails under a client?</strong> Check stdout first: one print, one library banner, one progress bar is enough to break framing. Then check that the client launches the same Python environment.</div>
@@ -439,6 +772,7 @@ uv run python agent.py --url http://127.0.0.1:8050/sse "What is 2 + 3?"</code></
     <a href="0008-rag-appendix.html">← Lesson 8</a>
     <a href="../reference/skill-map.html">Skill Map &amp; Glossary</a>
     <a href="../assets/examples/0009-mcp/index.html">Example page</a>
+    <a href="../assets/examples/0009-mcp-advanced/index.html">Advanced example</a>
   </div>
 </div>
 

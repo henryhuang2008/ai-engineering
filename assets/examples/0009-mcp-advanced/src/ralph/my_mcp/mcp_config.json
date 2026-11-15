@@ -1,0 +1,32 @@
+{
+    "mcpServers": {
+      "postgres": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@modelcontextprotocol/server-postgres",
+          "${SUPABASE_URI}"
+        ],
+        "transport": "stdio"
+      },
+      "marketing": {
+        "command": "python",
+        "args": [
+            "src/ralph/my_mcp/servers/marketing_server.py"
+        ],
+        "transport": "stdio"
+      },
+      "slack": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@modelcontextprotocol/server-slack"
+        ],
+        "env": {
+          "SLACK_BOT_TOKEN": "${SLACK_BOT_TOKEN}",
+          "SLACK_TEAM_ID": "${SLACK_TEAM_ID}"
+        },
+        "transport": "stdio"
+      }
+    }
+  }

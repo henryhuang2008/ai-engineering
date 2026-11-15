@@ -24,7 +24,7 @@ serves the same files as a site. If the link 404s, enable it once under
 | 6 | [RAG: The Pipeline, End to End](lessons/0006-rag-foundation.html) | The eight-stage RAG map: what each stage takes in, produces, and gets wrong. | ~30 min |
 | 7 | [The RAG Service: Two Lanes, One Table, and a LlamaIndex Variant](lessons/0007-rag-service.html) | Build it by hand: ingest a corpus, index it in LanceDB, retrieve, and answer with citations. Then the same service rebuilt with LlamaIndex. | ~55 min |
 | 8 | [RAG Appendix: Chunking Tools and Vector Stores](lessons/0008-rag-appendix.html) | The reference for chunking frameworks and the vector stores you are actually choosing between. | ~30 min |
-| 9 | [MCP: Write the Tool Once, Call It From Any Client](lessons/0009-mcp.html) | Build an MCP server, call it with no model, then use a hand-written loop and LangChain's MCPAdapter. | ~60 min |
+| 9 | [MCP: Write the Tool Once, Call It From Any Client](lessons/0009-mcp.html) | Build an MCP server, call it with no model, then use a hand-written loop and LangChain's MCPAdapter. Part 5 assembles a CRM agent with three servers, a JSON registry and a human approval gate. | ~80 min |
 | 10 | [LangGraph: One Node, Then a Branch](lessons/0010-langgraph.html) | Go from a one-node graph to a program with a visible decision. | ~40 min |
 | 11 | [LangGraph, Advanced: Fan-Out, Fan-In, and the Join That Fires Early](lessons/0011-langgraph-advanced.html) | Parallel branches, early joins, and reconciling results without waiting for the wrong things. | ~50 min |
 | 12 | [Python Libraries Every AI Engineer Should Know](lessons/0012-python-libraries-for-ai.html) | The small contracts — validation, storage, tracing, testing, agents, MCP, evals — that make up a real stack. | ~50 min |
@@ -56,6 +56,7 @@ Every Python example is a `uv` project; every frontend uses `pnpm`. Run commands
 | [0007-rag-service](assets/examples/0007-rag-service/index.html) | Lesson 7 | LanceDB RAG pipeline |
 | [0007-rag-service-llamaindex](assets/examples/0007-rag-service-llamaindex/index.html) | Lesson 7 | The LlamaIndex variant |
 | [0009-mcp](assets/examples/0009-mcp/index.html) | Lesson 9 | MCP server, raw clients, and LangChain's MCPAdapter |
+| [0009-mcp-advanced](assets/examples/0009-mcp-advanced/index.html) | Lesson 9 | Ralph: LangGraph + OpenAI + Supabase CRM agent, three MCP servers from one JSON file, human-in-the-loop writes |
 | [0010-langgraph](assets/examples/0010-langgraph/index.html) | Lesson 10 | One node, then a branch |
 | [0011-langgraph-advanced](assets/examples/0011-langgraph-advanced/index.html) | Lesson 11 | Fan-out and fan-in |
 | [0013-pydantic](assets/examples/0013-pydantic/index.html) | Lesson 13 | Validation boundary and typed model output |

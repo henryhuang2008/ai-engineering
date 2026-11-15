@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Example 0009 (advanced) — Ralph, a CRM agent: run it</title>
+    <link rel="stylesheet" href="../../course.css" />
+  </head>
+  <body>
+    <article class="page">
+      <p class="meta">
+        Example 0009-advanced ·
+        <a href="../../../lessons/0009-mcp.html">Companion to Lesson 9</a> ·
+        <a href="README.md">README</a> ·
+        <a href="../0009-mcp/index.html">← Basic MCP example</a>
+      </p>
+
+      <h1>Ralph — a CRM agent with a human gate</h1>
+
+      <p class="lede">
+        An agent that reads a real customer database, proposes campaigns, and
+        stops before it writes. Three MCP servers are declared in one JSON file:
+        a borrowed Postgres server for read-only SQL, a Python server you own for
+        campaign writes, and an optional Slack server. LangGraph runs the model →
+        tools loop; <code>interrupt()</code> turns a sensitive tool call into a
+        question for a person.
+      </p>
+
+      <div class="callout win">
+        <span class="label">The one-line model</span>
+        <strong>The tool layer is a config file. The gate is a node, not a prompt.</strong>
+        Adding a server is a JSON edit; approving a write is a graph pause.
+      </div>
+
+      <h2>What is in the folder</h2>
+
+      <table>
+        <thead>
+          <tr><th>File</th><th>Job</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><a href="frontend/chat_local.py"><code>frontend/chat_local.py</code></a></td>
+            <td>terminal chat: streams tokens, prints the approval prompt, resumes the graph</td>
+          </tr>
+          <tr>
+            <td><a href="src/ralph/graph.py"><code>src/ralph/graph.py</code></a></td>
+            <td>LangGraph state, assistant node, router, review node, <code>ToolNode</code></td>
+          </tr>
+          <tr>
+            <td><a href="src/ralph/my_mcp/mcp_config.json"><code>…/mcp_config.json</code></a></td>
+            <td>the three servers, their launch commands and their secret placeholders</td>
+          </tr>
+          <tr>
+            <td><a href="src/ralph/my_mcp/config.py"><code>…/config.py</code></a></td>
+            <td>substitutes <code>${VARS}</code>, absolutizes paths, drops unconfigured servers</td>
+          </tr>
+          <tr>
+            <td><a href="src/ralph/my_mcp/servers/marketing_server.py"><code>…/marketing_server.py</code></a></td>
+            <td>two write tools over SQLAlchemy: <code>create_campaign</code>, <code>send_campaign_email</code></td>
+          </tr>
+          <tr>
+            <td><a href="src/ralph/prompts.py"><code>src/ralph/prompts.py</code></a></td>
+            <td>the system prompt: schema, RFM definition, campaign types, email rules</td>
+          </tr>
+          <tr>
+            <td><a href="db/migration-create-tables.sql"><code>db/…sql</code></a></td>
+            <td>six tables; <a href="db/generate_data_tables.py"><code>generate_data_tables.py</code></a>
+              rebuilds the CSVs from the raw retail file</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        Six Python/JSON files, 643 lines, and the prompt is 153 of them.
+      </p>
+
+      <h2>Setup</h2>
+
+      <pre><code>cd assets\examples\0009-mcp-advanced
+uv sync
+Copy-Item .env.example .env</code></pre>
+
+      <p>
+        Fill in <code>OPENAI_API_KEY</code> and <code>SUPABASE_URI</code>. Slack
+        and LangSmith are optional: an unconfigured server is dropped at load
+        time, so the agent still starts.
+      </p>
+
+      <h2>Database</h2>
+
+      <p>
+        Create a Supabase project, generate a database password, and copy the
+        connection string from <strong>Connect</strong> into
+        <code>SUPABASE_URI</code> with the password substituted. Then run
+        <code>db/migration-create-tables.sql</code> in the SQL editor.
+      </p>
+
+      <p>Import the four CSVs in FK order — the dashboard importer handles these sizes:</p>
+
+      <table>
+        <thead>
+          <tr><th>Table</th><th>Rows in <code>db/data/</code></th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>customers</code></td><td>100</td></tr>
+          <tr><td><code>items</code></td><td>2,132</td></tr>
+          <tr><td><code>transactions</code></td><td>8,683</td></tr>
+          <tr><td><code>rfm</code></td><td>100</td></tr>
+        </tbody>
+      </table>
+
+      <h2>Run</h2>
+
+      <p>
+        The project uses a <code>src/</code> layout and does not install
+        itself, so <code>src</code> has to be on the path:
+      </p>
+
+      <pre><code>$env:PYTHONPATH = "src"
+uv run python frontend/chat_local.py</code></pre>
+
+      <p>Try these, in order:</p>
+
+      <blockquote>
+        <p>“Show me our top 5 customers by total spending”</p>
+        <p>“How many customers do we have in each RFM segment?”</p>
+        <p>“Create a re-engagement campaign for customers who haven't purchased in the last 6 months”</p>
+      </blockquote>
+
+      <p>
+        The first two are reads and run immediately. The third is a
+        <code>create_campaign</code> call, which is in
+        <code>protected_tools</code>, so the router diverts to the review node
+        and the terminal prints the pending call:
+      </p>
+
+      <pre><code> ----- ✅ / ❌ Human Approval Required -----
+
+{
+  "message": "Your input is required for the following tool:",
+  "tool_call": {
+    "name": "create_campaign",
+    "args": {"name": "Win-back", "type": "re-engagement", "description": "..."},
+    "id": "call_..."
+  }
+}
+
+Action (continue, update, feedback):</code></pre>
+
+      <table>
+        <thead>
+          <tr><th>Answer</th><th>What happens next</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>continue</code></td><td>the tool runs as the model wrote it</td></tr>
+          <tr><td><code>update</code></td><td>you type JSON arguments; the same call id runs with yours</td></tr>
+          <tr><td><code>feedback</code></td><td>the tool never runs; your sentence goes back to the model as the tool result</td></tr>
+        </tbody>
+      </table>
+
+      <p><code>exit</code> or <code>quit</code> ends the chat.</p>
+
+      <h2>The registry</h2>
+
+      <pre><code>{
+  "mcpServers": {
+    "postgres": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres", "${SUPABASE_URI}"],
+      "transport": "stdio"
+    },
+    "marketing": {
+      "command": "python",
+      "args": ["src/ralph/my_mcp/servers/marketing_server.py"],
+      "transport": "stdio"
+    },
+    "slack": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-slack"],
+      "env": {"SLACK_BOT_TOKEN": "${SLACK_BOT_TOKEN}", "SLACK_TEAM_ID": "${SLACK_TEAM_ID}"},
+      "transport": "stdio"
+    }
+  }
+}</code></pre>
+
+      <p>
+        <code>config.py</code> rewrites the relative <code>.py</code> path to an
+        absolute one (the child process does not share your working directory),
+        substitutes the <code>${…}</code> values from the environment, and
+        removes any server whose variables are empty. Measured with
+        <code>SUPABASE_URI</code> set and no Slack variables: two warnings, a
+        config containing <code>postgres</code> and <code>marketing</code>, and
+        no <code>slack</code> key.
+      </p>
+
+      <h2>What the read side really is</h2>
+
+      <p>
+        <code>@modelcontextprotocol/server-postgres</code> exposes one tool,
+        <code>query(sql)</code>, and opens <code>BEGIN TRANSACTION READ ONLY</code>
+        before running it. That is the whole safety model: readable, not
+        writable. It has no row cap, no timeout and no keyword filter, and the
+        npm package is now marked <em>archived and unmaintained</em> — treat it
+        as a reference implementation, not a dependency you inherit trust from.
+      </p>
+
+      <p>
+        The write side is <code>marketing_server.py</code>, 96 lines. Note the
+        <code># TODO: Send email via MCP</code>: <code>send_campaign_email</code>
+        records a row in <code>campaign_emails</code>, it does not deliver
+        anything. In this build “sent” means a row exists.
+      </p>
+
+      <h2>If it fails</h2>
+
+      <table>
+        <thead>
+          <tr><th>Symptom</th><th>Cause and fix</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>ModuleNotFoundError: No module named 'ralph'</code></td>
+            <td><code>src/</code> is not on the path: set <code>$env:PYTHONPATH = "src"</code>, or launch from the repo root with that variable set</td>
+          </tr>
+          <tr>
+            <td>the model has no tools / <code>npx</code> not found</td>
+            <td>Node.js must be on <code>PATH</code>; the first run downloads both npx servers</td>
+          </tr>
+          <tr>
+            <td><code>column "customer id" does not exist</code></td>
+            <td>the columns are quoted and mixed case: <code>"Customer ID"</code>, <code>"InvoiceDate"</code></td>
+          </tr>
+          <tr>
+            <td>the review prompt never appears</td>
+            <td>the tool is not in <code>protected_tools</code>, or <code>yolo_mode</code> was set to <code>True</code> in the input state</td>
+          </tr>
+          <tr>
+            <td>the graph errors after you type <code>update</code></td>
+            <td><code>update</code> expects a JSON object; a typo raises inside the node</td>
+          </tr>
+          <tr>
+            <td><code>401</code> or an auth error from the model</td>
+            <td><code>OPENAI_API_KEY</code> is missing from <code>.env</code>, or the process started before you saved it</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="footer-nav">
+        <div class="ask">
+          <strong>What this example does not do:</strong> record who approved
+          what, cap how many rows a write touches, or handle two protected calls
+          in one model turn. Add those before pointing it at a real customer
+          list.
+        </div>
+        <div class="links">
+          <a href="../../../lessons/0009-mcp.html">Lesson 9</a>
+          <a href="README.md">README</a>
+          <a href="../0009-mcp/index.html">Basic MCP example</a>
+          <a href="../../../reference/skill-map.html">Skill Map</a>
+        </div>
+      </div>
+    </article>
+  </body>
+</html>
