@@ -3,6 +3,7 @@ from sqlalchemy import text
 import os
 import pandas as pd
 from dotenv import load_dotenv
+from langchain_mcp_adapters.client import MultiServerMCPClient
 from uuid import UUID
 
 load_dotenv()
@@ -24,6 +25,50 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 # ----------------------------
 
 mcp = FastMCP("marketing")
+
+
+async def send_email_via_mcp(
+    recipient_email: str,
+    subject: str,
+    body: str,
+    campaign_id: UUID,
+    customer_id: int,
+) -> None:
+    """Send one email using the Resend MCP server."""
+    api_key = os.getenv("RESEND_API_KEY")
+    sender_email = os.getenv("SENDER_EMAIL_ADDRESS")
+    if not api_key or not sender_email:
+        raise RuntimeError(
+            "RESEND_API_KEY and SENDER_EMAIL_ADDRESS must be configured"
+        )
+
+    client = MultiServerMCPClient(
+        connections={
+            "resend": {
+                "command": "npx",
+                "args": ["-y", "resend-mcp"],
+                "transport": "stdio",
+                "env": {
+                    "RESEND_API_KEY": api_key,
+                    "SENDER_EMAIL_ADDRESS": sender_email,
+                },
+            }
+        },
+        handle_tool_errors=False,
+    )
+    tools = await client.get_tools()
+    send_tool = next((tool for tool in tools if tool.name == "send-email"), None)
+    if send_tool is None:
+        raise RuntimeError("The Resend MCP server does not provide send-email")
+
+    await send_tool.ainvoke(
+        {
+            "to": [recipient_email],
+            "subject": subject,
+            "text": body,
+            "idempotencyKey": f"{campaign_id}:{customer_id}",
+        }
+    )
 
 
 @mcp.tool()
@@ -74,11 +119,25 @@ async def send_campaign_email(
     Returns:
         A confirmation that the email was sent.
     """
-    # TODO: Send email via MCP
-
-    # Create email record in db
     with SessionLocal() as session:
-        result = session.execute(
+        recipient_email = session.execute(
+            text('SELECT "Email" FROM customers WHERE "Customer ID" = :customer_id'),
+            {"customer_id": customer_id},
+        ).scalar_one_or_none()
+
+    if not recipient_email:
+        raise ValueError(f"No email address found for customer {customer_id}")
+
+    await send_email_via_mcp(
+        recipient_email,
+        subject,
+        body,
+        campaign_id,
+        customer_id,
+    )
+
+    with SessionLocal() as session:
+        session.execute(
             text(
                 """
                 INSERT INTO campaign_emails (campaign_id, customer_id, subject, body)

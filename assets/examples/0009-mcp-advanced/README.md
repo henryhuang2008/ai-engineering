@@ -43,8 +43,10 @@ Welcome to the **CRM Agent Tutorial**! This project demonstrates how to build an
 Before you begin, ensure you have:
 
 - **Python 3.13+** installed
+- **Node.js/npm** installed (to run the Resend MCP server)
 - **PostgreSQL** database (we'll use Supabase)
 - **OpenAI API key**
+- **Resend API key** and a verified sender domain for sending campaign emails
 - **Git** for cloning the repository
 
 ## ⚡ Quick Start
@@ -63,7 +65,9 @@ This project uses `uv` for dependency management. If you don't have `uv` install
 2. **Configure environment**:
    ```bash
    cp .env.example .env
-   # Edit .env with your OpenAI API key and Supabase URI
+   # Set OPENAI_API_KEY and SUPABASE_URI.
+   # For campaign email, also set RESEND_API_KEY and SENDER_EMAIL_ADDRESS
+   # (the sender address must use a verified Resend domain).
    ```
 
 3. **Setup database** (create free Supabase account at [supabase.com](https://supabase.com)):
