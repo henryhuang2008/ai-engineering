@@ -1,6 +1,6 @@
 # AI Engineering — From First LLM Call to a Grounded RAG Product
 
-A 22-lesson, build-first course for experienced software engineers moving into AI engineering. It starts with a single chat-completion call, builds toward a Supabase + pgvector filing analyst whose answers are cited, validated and allowed to refuse, closes with a batch pipeline that turns YouTube RSS and transcripts into a daily email, covers the two memory systems that decide what an agent remembers and the skill format that decides what instructions it can carry, shows what happens when model output is about to touch a real system in a text-to-SQL agent, and ends with a voice agent built twice: once as a terminal loop, once over a LiveKit room.
+A 23-lesson, build-first course for experienced software engineers moving into AI engineering. It starts with a single chat-completion call, builds toward a Supabase + pgvector filing analyst whose answers are cited, validated and allowed to refuse, closes with a batch pipeline that turns YouTube RSS and transcripts into a daily email, covers the two memory systems that decide what an agent remembers and the skill format that decides what instructions it can carry, shows what happens when model output is about to touch a real system in a text-to-SQL agent, plays a voice agent twice — once as a terminal loop, once over a LiveKit room — and ends with the gate every one of those systems needs: a LangGraph run that pauses for a human and resumes over blocking HTTP, SSE, or an MCP tool approval.
 
 **Start here → [Lesson 1: What an AI Engineer Is in 2026](lessons/0001-ai-engineering-landscape-2026.html)**
 
@@ -12,7 +12,7 @@ serves the same files as a site. If the link 404s, enable it once under
 
 ---
 
-## The 22 lessons
+## The 23 lessons
 
 | # | Lesson | What it covers | Time |
 |---|--------|----------------|------|
@@ -38,6 +38,7 @@ serves the same files as a site. If the link 404s, enable it once under
 | 20 | [Agent Skills — Run the Example](lessons/0020-agent-skills.html) | Run a two-skill library end to end — catalog, ask, script, lint, tests — follow one question through the tool calls, and learn the six rules and four failures that decide whether a skill works. | ~30 min |
 | 21 | [Text to SQL — The Model Proposes, the Guard Decides](lessons/0021-text-to-sql.html) | A custom LangGraph SQL agent over SQLite: a strict query contract, a six-layer read-only guard, a bounded retry loop, human approve/edit/reject, and the questions the schema cannot answer. | ~40 min |
 | 22 | [Voice Agents — The Terminal Loop, Then a LiveKit Room](lessons/0022-voice-agents-langgraph-livekit.html) | One expense agent built twice: a readable record → transcribe → graph → speak loop, then the same pipeline in a LiveKit room with VAD, barge-in, a browser client and a Docker media server. | ~45 min |
+| 23 | [Human in the Loop: Pause a Graph, Answer It From Anywhere](lessons/0023-human-in-the-loop-langgraph.html) | One graph, three transports: a static breakpoint, an SSE pause, and a tool that stops inside `interrupt()`. Measured timings, and the approval gap the lab leaves open. | ~40 min |
 
 
 ---
@@ -45,7 +46,7 @@ serves the same files as a site. If the link 404s, enable it once under
 
 ## Labs and example repositories
 
-Every Python example is a `uv` project; every frontend uses `pnpm`. Run commands from the example's own README.
+Every Python example is a `uv` project; every frontend uses `pnpm` unless its README says otherwise. Run commands from the example's own README.
 
 | Example | Companion lesson | What is inside |
 |---------|------------------|----------------|
@@ -57,7 +58,6 @@ Every Python example is a `uv` project; every frontend uses `pnpm`. Run commands
 | [0007-rag-service-llamaindex](assets/examples/0007-rag-service-llamaindex/index.html) | Lesson 7 | The LlamaIndex variant |
 | [0009-mcp](assets/examples/0009-mcp/index.html) | Lesson 9 | MCP server, raw clients, and LangChain's MCPAdapter |
 | [0009-mcp-advanced](assets/examples/0009-mcp-advanced/index.html) | Lesson 9 | Ralph: LangGraph + OpenAI + Supabase CRM agent, three MCP servers from one JSON file, human-in-the-loop writes |
-| [human-in-the-loop](assets/examples/human-in-the-loop/index.html) | Lesson 9 | Goop over HTTP: `POST /chat` and `POST /chat/{id}/resume` — continue / update / feedback / reject / exit, 10 offline tests |
 | [0010-langgraph](assets/examples/0010-langgraph/index.html) | Lesson 10 | One node, then a branch |
 | [0011-langgraph-advanced](assets/examples/0011-langgraph-advanced/index.html) | Lesson 11 | Fan-out and fan-in |
 | [0013-pydantic](assets/examples/0013-pydantic/index.html) | Lesson 13 | Validation boundary and typed model output |
@@ -70,6 +70,7 @@ Every Python example is a `uv` project; every frontend uses `pnpm`. Run commands
 | [0021-text-to-sql](assets/examples/0021-text-to-sql/index.html) | Lesson 21 | Text to SQL: seeded SQLite, guarded LangGraph agent, review interrupt, 29 tests |
 | [example-Voice-langgraph](assets/examples/example-Voice-langgraph/index.html) | Lesson 22 | Terminal voice agent: mic → whisper/Qwen ASR → LangGraph + MCP → Qwen3-TTS, 56 offline checks |
 | [example-livekit-langgraph](assets/examples/example-livekit-langgraph/index.html) | Lesson 22 | The same agent in a LiveKit room: Docker server, browser client, VAD and barge-in, 30 offline checks |
+| [example-langgraph-hitl-fastapi](assets/examples/example-langgraph-hitl-fastapi/index.html) | Lesson 23 | FastAPI + LangGraph on DeepSeek: blocking `/graph/*`, SSE `/graph/stream/*`, MCP tool approval at `/mcp/*`, React shell |
 
 ---
 
@@ -77,9 +78,9 @@ Every Python example is a `uv` project; every frontend uses `pnpm`. Run commands
 ## What you need
 
 - **Python 3.12+** and [`uv`](https://docs.astral.sh/uv/) for every Python lab.
-- **Node.js 20+** and `pnpm` for the frontend examples.
+- **Node.js 20+** and `pnpm` for most frontend examples; the lesson 23 shell ships an npm lockfile.
 - **DeepSeek API key** for the hosted-model lessons. Some lessons also use **Qwen/DashScope** embeddings; lesson 22 uses it for both speech directions.
 - **Ollama** for lesson 14; no API key is needed there.
-- **Docker** for lesson 16's cluster rehearsal, lesson 18's local PostgreSQL container, and lesson 22's LiveKit server.
+- **Docker** for lesson 16's cluster rehearsal, lesson 18's local PostgreSQL container, lesson 22's LiveKit server, and lesson 23's GitHub MCP server.
 - **A microphone and a browser** for lesson 22's live paths; both examples ship a smoke script that runs a full turn without either.
 - **SMTP credentials** for lesson 18's optional email send; a Gmail app password works, and the lab previews without sending by default.

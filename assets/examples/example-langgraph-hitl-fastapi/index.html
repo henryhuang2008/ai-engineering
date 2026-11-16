@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Example · Lesson 23 — Human in the Loop, Three Transports</title>
+    <link rel="stylesheet" href="../../course.css" />
+  </head>
+  <body>
+    <article class="page">
+      <p class="meta">
+        Example · <a href="../../../lessons/0023-human-in-the-loop-langgraph.html"
+          >Companion to Lesson 23</a
+        >
+        · <a href="README.md">README</a> ·
+        <a href="../../../reference/boundary-map.html">Boundary map</a>
+      </p>
+
+      <h1>Human in the Loop — one pause, three ways to answer it</h1>
+
+      <p class="lede">
+        A LangGraph graph drafts an answer, stops before the next node, and waits
+        for a person. This example puts that pause behind FastAPI three times: a
+        blocking request, a server-sent-event stream, and an MCP tool call that
+        stops inside <code>interrupt()</code>. DeepSeek is the model, <code>uv</code>
+        is the install, and a React shell is included.
+      </p>
+
+      <div class="callout win">
+        <span class="label">The one-line model</span>
+        <strong>The graph ends; it does not sleep.</strong> The pause lives in the
+        checkpointer under a <code>thread_id</code>. Resuming is a second request
+        with the same id, whether that is one second later or after a restart.
+      </div>
+
+      <h2>What is in the folder</h2>
+
+      <table>
+        <thead>
+          <tr><th>File</th><th>Job</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>backend/app/graph.py</code></td>
+            <td>
+              <code>DraftReviewState</code>, the three nodes, and
+              <code>compile(interrupt_before=["human_feedback"], checkpointer=...)</code>
+            </td>
+          </tr>
+          <tr>
+            <td><code>backend/app/lesson_01_blocking.py</code></td>
+            <td>
+              <code>POST /graph/start</code> and <code>POST /graph/resume</code>;
+              one request per step, the pause in the response
+            </td>
+          </tr>
+          <tr>
+            <td><code>backend/app/lesson_02_streaming.py</code></td>
+            <td>
+              <code>POST /graph/stream/*</code> stores the decision,
+              <code>GET /graph/stream/{thread_id}</code> streams the run as SSE
+            </td>
+          </tr>
+          <tr>
+            <td><code>backend/app/lesson_03_async_mcp.py</code></td>
+            <td>
+              <code>POST /mcp/start</code> and <code>POST /mcp/approve</code>;
+              approval arrives through <code>Command(resume=...)</code>
+            </td>
+          </tr>
+          <tr>
+            <td><code>backend/app/mcp_agent.py</code></td>
+            <td>
+              wraps every MCP tool so its body starts with
+              <code>interrupt({"awaiting": name, "args": args})</code>
+            </td>
+          </tr>
+          <tr>
+            <td><code>backend/app/config.py</code></td>
+            <td>loads <code>backend/.env</code>; names the model once</td>
+          </tr>
+          <tr>
+            <td><code>backend/notebooks/</code></td>
+            <td>the same three ideas without HTTP, one cell per step</td>
+          </tr>
+          <tr>
+            <td><code>frontend/</code></td>
+            <td>React shell for the streaming endpoints</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Run it</h2>
+
+      <pre><code>cd assets/examples/example-langgraph-hitl-fastapi/backend
+
+Copy-Item .env.example .env      # DEEPSEEK_API_KEY; macOS/Linux: cp
+uv sync
+
+uv run uvicorn app.main:app --reload
+# docs: http://127.0.0.1:8000/docs</code></pre>
+
+      <p>
+        Everything below was executed against the live DeepSeek API on this
+        machine, on port 8001.
+      </p>
+
+      <h2>Four requests that tell the whole story</h2>
+
+      <p><strong>1. Start a draft.</strong> The graph runs <code>assistant_draft</code>, stops before <code>human_feedback</code>, and returns:</p>
+
+      <pre><code>POST /graph/start   {"human_request": "Explain what HITL means in one sentence."}
+
+{"thread_id": "d0e1...", "run_status": "user_feedback",
+ "assistant_response": "Human-in-the-loop means people oversee an automated
+   system at key points to improve accuracy, safety and accountability."}</code></pre>
+
+      <p>
+        The pause is <code>graph.get_state(config).next</code> containing
+        <code>human_feedback</code>. Nothing is running while you read this.
+      </p>
+
+      <p><strong>2. Send a revision.</strong> Write the reviewer's decision into the state, then continue with <code>None</code>:</p>
+
+      <pre><code>POST /graph/resume
+{"thread_id": "...", "review_action": "feedback",
+ "human_comment": "Make it one short sentence."}</code></pre>
+
+      <p>
+        The router reads <code>status</code> and sends the graph back to
+        <code>assistant_draft</code>, which revises with the comment. Same pause
+        again.
+      </p>
+
+      <p><strong>3. Approve.</strong> <code>review_action: "approved"</code> routes to <code>assistant_finalize</code>, which polishes the approved draft once and ends the run with <code>run_status: "finished"</code>.</p>
+
+      <p>
+        <strong>4. The MCP version.</strong> Here the pause is inside the tool, not
+        between nodes:
+      </p>
+
+      <pre><code>POST /mcp/start    {"human_request": "Call get_my_account and report my login."}
+
+{"run_status": "user_feedback",
+ "assistant_response": "I want to call the tool 'get_my_account' with arguments: {}"}
+
+POST /mcp/approve  {"thread_id": "...", "approve_action": "approved"}
+
+{"run_status": "finished",
+ "assistant_response": "Your GitHub login is octocat ..."}</code></pre>
+
+      <p>
+        <code>approved</code> re-enters the tool with
+        <code>Command(resume={"approved": True})</code> and the MCP call runs.
+        <code>rejected</code> returns a sentence instead, so the model continues
+        without the side effect.
+      </p>
+
+      <h2>Measured</h2>
+
+      <table>
+        <thead>
+          <tr><th>Step</th><th>Time</th><th>Result</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>POST /graph/start</code></td><td>1.60 s</td><td><code>user_feedback</code></td></tr>
+          <tr><td>resume, feedback</td><td>1.05 s</td><td><code>user_feedback</code></td></tr>
+          <tr><td>resume, approved</td><td>0.77 s</td><td><code>finished</code></td></tr>
+          <tr><td><code>POST /graph/stream/create</code></td><td>0.004 s</td><td><code>pending</code></td></tr>
+          <tr><td><code>GET /graph/stream/{id}</code></td><td>1.65 s</td><td>163 SSE <code>data:</code> lines, then <code>status: user_feedback</code></td></tr>
+          <tr><td>feedback stream</td><td>1.50 s</td><td><code>status: user_feedback</code></td></tr>
+          <tr><td>approved stream</td><td>1.88 s</td><td><code>status: finished</code></td></tr>
+          <tr><td><code>POST /mcp/start</code></td><td>2.29 s</td><td><code>user_feedback</code> with the tool arguments</td></tr>
+          <tr><td><code>POST /mcp/approve</code></td><td>1.77 s</td><td><code>finished</code>, answer from the tool result</td></tr>
+        </tbody>
+      </table>
+
+      <h2>Two kinds of pause</h2>
+
+      <table>
+        <thead>
+          <tr><th></th><th><code>interrupt_before=[...]</code></th><th><code>interrupt({...})</code></th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Where</td><td>between nodes, fixed at compile time</td><td>inside a node or tool, decided at run time</td></tr>
+          <tr><td>What the caller sees</td><td><code>state.next</code> names the node that did not run</td><td>the payload passed to <code>interrupt()</code></td></tr>
+          <tr><td>How to resume</td><td><code>update_state</code>, then <code>invoke(None, config)</code></td><td><code>invoke(Command(resume=value), config)</code></td></tr>
+          <tr><td>Used in</td><td>lesson 1 and lesson 2 (<code>human_feedback</code>)</td><td>lesson 3 (every MCP tool)</td></tr>
+        </tbody>
+      </table>
+
+      <h2>Limits worth naming</h2>
+
+      <div class="callout">
+        <span class="label">This is a lab, not a control plane</span>
+        The checkpointer is <code>MemorySaver</code>: a restart loses every paused
+        thread, so a real deployment wants <code>PostgresSaver</code>. The resume
+        endpoints do not authenticate anyone — the <code>thread_id</code> is the
+        only capability. And lesson 3's shipped MCP config starts GitHub's server
+        in Docker, so <code>/mcp/*</code> needs Docker Desktop plus
+        <code>GITHUB_PERSONAL_ACCESS_TOKEN</code>; lessons 1 and 2 do not.
+      </div>
+
+      <p>
+        The React shell is upstream's and still installs with <code>npm</code>;
+        Python is the part this lab teaches.
+      </p>
+
+      <div class="footer-nav">
+        <div class="ask">
+          <strong>Before you call it approval:</strong> decide who may resume a
+          thread, how long a pause may live, and what happens when the same
+          approval arrives twice. The graph handles the pause; the rest is your
+          API.
+        </div>
+        <div class="links">
+          <a href="../../../lessons/0023-human-in-the-loop-langgraph.html"
+            >Lesson 23</a
+          >
+          <a href="../../../lessons/0009-mcp.html">Lesson 9</a>
+          <a href="../../../lessons/0019-memory-agents-langgraph.html">Lesson 19</a>
+          <a href="README.md">README</a>
+        </div>
+      </div>
+    </article>
+  </body>
+</html>

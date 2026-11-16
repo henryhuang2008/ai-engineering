@@ -1,0 +1,634 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lesson 23 — Human in the Loop: Pause a Graph, Answer It Anywhere</title>
+    <link rel="stylesheet" href="../assets/course.css" />
+  </head>
+  <body>
+    <article class="page">
+      <p class="meta">
+        Lesson 23 of 23 · ~40 min · Prereq:
+        <a href="0009-mcp.html">Lesson 9</a>,
+        <a href="0010-langgraph.html">Lesson 10</a>,
+        <a href="0019-memory-agents-langgraph.html">Lesson 19</a> ·
+        <a href="../assets/examples/example-langgraph-hitl-fastapi/index.html"
+          >Example page →</a
+        >
+        · <a href="../reference/skill-map.html">Skill Map →</a>
+      </p>
+
+      <h1>Human in the Loop — Pause a Graph, Answer It From Anywhere</h1>
+
+      <p class="lede">
+        A tool call is about to write something. Someone should look at it first.
+        LangGraph gives you one primitive for that — a pause the checkpointer
+        remembers — and this lesson shows the same pause behind three very
+        different transports: a blocking request, a server-sent-event stream, and
+        an MCP tool that stops inside <code>interrupt()</code>. One graph, three
+        answers, and the list of things approval still does not solve.
+      </p>
+
+      <div class="callout win">
+        <span class="label">Your win this lesson</span>
+        You can add a human gate to a graph, explain why the graph ends instead of
+        waiting, resume it after a restart in principle and after a new request in
+        practice, and choose between the static breakpoint and the dynamic
+        <code>interrupt()</code> for a given tool.
+      </div>
+
+      <h2>Part 1 — A pause is not a blocked thread</h2>
+
+      <p>
+        The first thing to get right: <code>interrupt_before</code> does not make
+        <code>invoke</code> sit and wait. The graph runs until the node it should
+        not enter, writes a checkpoint, and <strong>returns</strong>. The process
+        can exit. The pause is data, not a parked coroutine.
+      </p>
+
+      <pre><code>graph = builder.compile(
+    interrupt_before=["human_feedback"],
+    checkpointer=MemorySaver(),
+)
+
+config = {"configurable": {"thread_id": "thread-1"}}
+result = graph.invoke({"human_request": "Explain HITL"}, config)   # returns
+
+state = graph.get_state(config)
+state.next          # ('human_feedback',)  - what did not run
+state.values        # the draft, the request, the status</code></pre>
+
+      <p>
+        Three consequences follow, and most HITL bugs come from missing one:
+      </p>
+
+      <ul>
+        <li>
+          <strong>You need a checkpointer.</strong> Without one there is nowhere to
+          store the pause; the graph just runs through the breakpoint.
+        </li>
+        <li>
+          <strong>The <code>thread_id</code> is the handle.</strong> It is how the
+          next request finds this exact state. Two users with the same id share a
+          conversation.
+        </li>
+        <li>
+          <strong>Resuming is a new run, not a continuation of the old call.</strong>
+          Same graph, same config, new input.
+        </li>
+      </ul>
+
+      <p>
+        There are two ways to pause, and they answer different questions:
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th></th>
+            <th><code>interrupt_before=[...]</code></th>
+            <th><code>interrupt({...})</code></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Where</td>
+            <td>between nodes, chosen when you compile</td>
+            <td>inside a node or tool, chosen at run time</td>
+          </tr>
+          <tr>
+            <td>What the caller sees</td>
+            <td><code>state.next</code> names the node that did not run</td>
+            <td>the value you passed to <code>interrupt()</code></td>
+          </tr>
+          <tr>
+            <td>How to resume</td>
+            <td>write state, then <code>invoke(None, config)</code></td>
+            <td><code>invoke(Command(resume=value), config)</code></td>
+          </tr>
+          <tr>
+            <td>Good for</td>
+            <td>a review step that always happens in the same place</td>
+            <td>a tool that only sometimes needs a person</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        The static breakpoint is easier to read and to reason about. The dynamic
+        one is the only option when the decision depends on arguments the model
+        produces — which is every real tool.
+      </p>
+
+      <h2>Part 2 — The graph: draft, review, finalize</h2>
+
+      <p>
+        The example is deliberately small. One request goes in, a draft comes out,
+        a person edits or approves it, and a polish step closes the run:
+      </p>
+
+      <pre><code>START → assistant_draft → human_feedback → assistant_finalize → END
+                              │
+                              └─ status == "feedback" → assistant_draft</code></pre>
+
+      <p>The state carries the request, the reviewer's comment, the decision, and the latest draft:</p>
+
+      <pre><code>class DraftReviewState(MessagesState):
+    human_request: str
+    human_comment: Optional[str]
+    status: Literal["approved", "feedback"]
+    assistant_response: str</code></pre>
+
+      <p>
+        <code>human_feedback</code> is an empty node on purpose. It exists so the
+        breakpoint has a name. The reviewer writes <code>status</code> (and a
+        comment when there is one) into the checkpoint with
+        <code>update_state</code>, and the router reads that field to choose the
+        next edge:
+      </p>
+
+      <pre><code>graph.update_state(config, {
+    "status": "feedback",
+    "human_comment": "Make it one short sentence.",
+})
+
+graph.invoke(None, config)      # continue from the checkpoint</code></pre>
+
+      <div class="callout">
+        <span class="label">Two details that bite</span>
+        <code>invoke(None, config)</code> means “continue”; passing the previous
+        input again starts the work over. And <code>update_state</code> writes into
+        the checkpoint <em>before</em> the next run, so a crash between the two
+        calls leaves the decision recorded and the node unrun.
+      </div>
+
+      <h2>Part 3 — The pause inside one response</h2>
+
+      <p>
+        The blocking route is the simplest honest API. One function runs the graph
+        and translates the state into a status:
+      </p>
+
+      <pre><code>def run_graph_and_response(input_state, config):
+    result = graph.invoke(input_state, config)
+    state = graph.get_state(config)
+
+    if state.next and "human_feedback" in state.next:
+        run_status = "user_feedback"
+    else:
+        run_status = "finished"
+
+    return GraphResponse(
+        thread_id=config["configurable"]["thread_id"],
+        run_status=run_status,
+        assistant_response=result["assistant_response"],
+    )</code></pre>
+
+      <p>
+        <code>POST /graph/start</code> creates the thread. <code>POST /graph/resume</code>
+        takes the same <code>thread_id</code>, writes the decision, and calls the
+        same function with <code>None</code>. That is the whole HITL API: two
+        routes, one status field, one checkpoint per thread.
+      </p>
+
+      <p>
+        Note what the response does <em>not</em> contain: the model's reasoning, the
+        tool list, or a token stream. For a review UI that is enough — the draft is
+        the artifact, and the pause is a field.
+      </p>
+
+      <h2>Part 4 — The pause behind SSE</h2>
+
+      <p>
+        Streaming changes the shape of the conversation, because
+        <code>EventSource</code> can only issue GET requests. A browser cannot POST
+        the approval and read the stream in one call. The example splits it:
+      </p>
+
+      <ol>
+        <li>
+          <code>POST /graph/stream/create</code> stores
+          <code>{type: "start", human_request}</code> and returns
+          <code>pending</code> with a <code>thread_id</code>. Nothing has run.
+        </li>
+        <li>
+          <code>GET /graph/stream/{thread_id}</code> runs the graph and streams
+          <code>token</code> events, then a final <code>status</code> event.
+        </li>
+        <li>
+          <code>POST /graph/stream/resume</code> stores the decision the same way,
+          and the next GET applies it with <code>graph.update_state</code> before
+          streaming.
+        </li>
+      </ol>
+
+      <p>
+        The split is not decoration. The POST that would block on the model is the
+        one you want to stream, and the cheap POST that records a decision lets the
+        client start the long request immediately. Measured here, creating a run
+        took <strong>4 ms</strong>; the stream that did the work took
+        <strong>1.65 s</strong> and produced 163 <code>data:</code> lines before
+        <code>status: user_feedback</code>.
+      </p>
+
+      <p>
+        The generator reads the pause from the same place the blocking route does:
+      </p>
+
+      <pre><code>state = graph.get_state(config)
+if state.next and 'human_feedback' in state.next:
+    yield {"event": "status", "data": json.dumps({"status": "user_feedback"})}
+else:
+    yield {"event": "status", "data": json.dumps({"status": "finished"})}</code></pre>
+
+      <p>
+        One caveat, visible in the file: it calls the synchronous
+        <code>graph.stream(...)</code> inside an async generator. It works, and it
+        blocks the event loop while it runs — fine for one learner, wrong for a
+        server with two users. The fix is <code>astream</code>, not a thread.
+      </p>
+
+      <h2>Part 5 — The pause inside a tool</h2>
+
+      <p>
+        The third version is the one that generalises. Instead of a review node,
+        every MCP tool is wrapped so its body begins with <code>interrupt()</code>:
+      </p>
+
+      <pre><code>@tool(main_tool.name, description=main_tool.description,
+      args_schema=main_tool.args_schema)
+async def call_main_tool_with_hitl(config: RunnableConfig, **tool_input):
+    decision = interrupt({"awaiting": main_tool.name, "args": tool_input})
+
+    if isinstance(decision, dict) and decision.get("approved"):
+        return await main_tool.ainvoke(tool_input, config)
+
+    return ("Cancelled by human. Continue without executing that tool "
+            "and provide next steps.")</code></pre>
+
+      <p>
+        The pause payload is the decision material: which tool, with which
+        arguments. The caller resumes with the answer:
+      </p>
+
+      <pre><code>Command(resume={"approved": True})</code></pre>
+
+      <p>
+        That value is what <code>interrupt()</code> returns, and the tool continues
+        from that line — not from the beginning of the graph. Rejection is a
+        first-class result, not an exception: the tool returns a sentence, the
+        model reads it and plans something else.
+      </p>
+
+      <p>
+        The pause is detected differently here. There is no
+        <code>state.next</code> to inspect, because the graph did not stop between
+        nodes; it stopped inside one. The resume comes back with
+        <code>__interrupt__</code> in the result (the route reads
+        <code>interrupts[0].value</code>), which is why the MCP lesson cannot reuse
+        the blocking route's status check.
+      </p>
+
+      <table>
+        <thead>
+          <tr><th>Transport</th><th>Where the pause surfaces</th><th>How the decision arrives</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>blocking</td><td><code>run_status</code> in the response</td><td>a second POST with <code>status</code> + comment</td></tr>
+          <tr><td>SSE</td><td>a <code>status</code> event at the end of the stream</td><td>a POST that stores the decision for the next GET</td></tr>
+          <tr><td>MCP</td><td><code>interrupt()</code> inside the tool</td><td><code>Command(resume=...)</code></td></tr>
+        </tbody>
+      </table>
+
+      <h2>Part 6 — Run it</h2>
+
+      <pre><code>cd assets/examples/example-langgraph-hitl-fastapi/backend
+Copy-Item .env.example .env      # DEEPSEEK_API_KEY; macOS/Linux: cp
+uv sync
+
+uv run uvicorn app.main:app --reload
+# docs: http://127.0.0.1:8000/docs</code></pre>
+
+      <p>Then, for the review flow:</p>
+
+      <pre><code>curl -X POST http://127.0.0.1:8000/graph/start \
+  -H "Content-Type: application/json" \
+  -d '{"human_request": "Explain what HITL means in one sentence."}'
+
+curl -X POST http://127.0.0.1:8000/graph/resume \
+  -H "Content-Type: application/json" \
+  -d '{"thread_id": "PASTE_HERE", "review_action": "feedback",
+       "human_comment": "Make it one short sentence."}'</code></pre>
+
+      <p>
+        The same two steps through <code>/graph/stream/*</code> add a GET between
+        them; the README lists all six calls. For the MCP version, set
+        <code>GITHUB_PERSONAL_ACCESS_TOKEN</code> and start Docker Desktop first —
+        the shipped config runs GitHub's MCP server as a container.
+      </p>
+
+      <p>Measured on this machine against DeepSeek <code>deepseek-flash</code>:</p>
+
+      <table>
+        <thead>
+          <tr><th>Step</th><th>Time</th><th>Result</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>POST /graph/start</code></td><td>1.60 s</td><td><code>user_feedback</code>, draft returned</td></tr>
+          <tr><td>resume, feedback</td><td>1.05 s</td><td><code>user_feedback</code>, revised draft</td></tr>
+          <tr><td>resume, approved</td><td>0.77 s</td><td><code>finished</code></td></tr>
+          <tr><td>create + first stream</td><td>0.004 s + 1.65 s</td><td>163 SSE lines, then <code>user_feedback</code></td></tr>
+          <tr><td>feedback stream</td><td>1.50 s</td><td><code>user_feedback</code></td></tr>
+          <tr><td>approved stream</td><td>1.88 s</td><td><code>finished</code></td></tr>
+          <tr><td><code>POST /mcp/start</code></td><td>2.29 s</td><td><code>user_feedback</code>, tool + args</td></tr>
+          <tr><td><code>POST /mcp/approve</code></td><td>1.77 s</td><td><code>finished</code>, answer from the tool</td></tr>
+          <tr><td><code>POST /mcp/approve</code> (reject)</td><td>1.78 s</td><td><code>finished</code>, model continues without the tool</td></tr>
+        </tbody>
+      </table>
+
+      <h2>Part 7 — What approval still has to decide</h2>
+
+      <p>
+        The graph gives you the pause. It does not give you an approval system, and
+        the example is honest about the gap: the resume routes are open, the
+        checkpointer is in memory, and a thread id is the only thing identifying
+        the reviewer.
+      </p>
+
+      <table>
+        <thead>
+          <tr><th>Question</th><th>This lab</th><th>What a real system adds</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Who may resume?</td>
+            <td>anyone with the <code>thread_id</code></td>
+            <td>authentication plus an authorisation check per thread</td>
+          </tr>
+          <tr>
+            <td>How long may a pause live?</td>
+            <td>until the process exits</td>
+            <td>a durable checkpointer and an expiry on pending approvals</td>
+          </tr>
+          <tr>
+            <td>What exactly was approved?</td>
+            <td>the draft text, or the tool name and arguments</td>
+            <td>a recorded payload hash, so the decision matches what ran</td>
+          </tr>
+          <tr>
+            <td>What if approval arrives twice?</td>
+            <td>the run resumes twice</td>
+            <td>a single-use token keyed by interrupt id</td>
+          </tr>
+          <tr>
+            <td>What if the human edits arguments?</td>
+            <td>not supported; feedback re-plans instead</td>
+            <td>an edit path with validation, and a new approval for the edit</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        That last row is the one people skip. Approving <em>a tool call</em> is not
+        approving <em>the tool</em>: the arguments are the payload, and a gate that
+        only checks the name can be talked into anything the schema allows.
+      </p>
+
+      <h2>Part 8 — What breaks</h2>
+
+      <table>
+        <thead>
+          <tr><th>Symptom</th><th>Cause</th><th>Fix</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>the graph never pauses</td>
+            <td><code>compile()</code> had no checkpointer</td>
+            <td>pass one; the breakpoint needs somewhere to store state</td>
+          </tr>
+          <tr>
+            <td>resuming runs the first node again</td>
+            <td><code>invoke(original_input, config)</code> instead of <code>invoke(None, config)</code></td>
+            <td><code>None</code> means continue; any other input starts over</td>
+          </tr>
+          <tr>
+            <td><code>state.next</code> is empty but the run is not done</td>
+            <td>the pause is inside a node (<code>interrupt()</code>), not between nodes</td>
+            <td>read <code>__interrupt__</code> / <code>state.interrupts</code> instead</td>
+          </tr>
+          <tr>
+            <td>a resume lands on the wrong thread</td>
+            <td>a new <code>thread_id</code>, or a missing one</td>
+            <td>one id per conversation; treat it as part of the request contract</td>
+          </tr>
+          <tr>
+            <td>two pauses, one decision</td>
+            <td>one turn hit two <code>interrupt()</code> calls</td>
+            <td>resume by interrupt id, one value per id</td>
+          </tr>
+          <tr>
+            <td>the server answers one request at a time</td>
+            <td>sync <code>graph.stream</code> inside an async generator</td>
+            <td><code>astream</code>, or run the sync call in a worker</td>
+          </tr>
+          <tr>
+            <td>every pause vanishes on restart</td>
+            <td><code>MemorySaver</code></td>
+            <td><code>PostgresSaver</code>, the way <a href="0019-memory-agents-langgraph.html">Lesson 19</a> does it</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Part 9 — What was verified</h2>
+
+      <ul>
+        <li>
+          <strong>Live, blocking:</strong> DeepSeek <code>deepseek-flash</code>
+          drafted, paused with <code>run_status: user_feedback</code>, revised on
+          <code>feedback</code>, finished on <code>approved</code>.
+        </li>
+        <li>
+          <strong>Live, SSE:</strong> a 4 ms create, then a 1.65 s stream with 163
+          <code>data:</code> lines, a <code>status: user_feedback</code> event, a
+          feedback stream, and a final <code>status: finished</code>.
+        </li>
+        <li>
+          <strong>Live, MCP:</strong> the shipped config needs Docker, which was not
+          running here. The same path was exercised with a local stdio MCP server —
+          <code>MultiServerMCPClient</code>, the same <code>interrupt()</code>
+          wrapper, <code>Command(resume=...)</code> — and the config was restored
+          afterwards. Approve returned the tool's data as prose; reject returned a
+          plan without it.
+        </li>
+        <li>
+          <strong>Error paths:</strong> a <code>review_action</code> outside the
+          declared <code>Literal</code> returns 422; an unknown route returns 404.
+        </li>
+        <li>
+          <strong>Not verified:</strong> Docker/GitHub MCP end to end, a durable
+          checkpointer for this graph, and anything about who is allowed to resume.
+        </li>
+      </ul>
+
+      <h2>Check yourself</h2>
+
+      <div class="quiz">
+        <script type="application/json">
+          {
+            "questions": [
+              {
+                "q": "What does interrupt_before=[\"human_feedback\"] actually do when invoke() returns?",
+                "options": [
+                  "It keeps the HTTP request open until someone approves",
+                  "It stops before the node, saves a checkpoint, and returns with state.next naming that node",
+                  "It asks the model whether to pause",
+                  "It deletes the thread until a reviewer calls back"
+                ],
+                "correct": 1,
+                "explain": "The graph ends and the pause is stored. state.next is the list of nodes that did not run, which is how the route detects user_feedback."
+              },
+              {
+                "q": "Why does the graph need a checkpointer for any of this?",
+                "options": [
+                  "To cache model responses",
+                  "Because the pause, the thread and the reviewer's decision all live in the checkpoint",
+                  "To stream tokens",
+                  "To validate the request body"
+                ],
+                "correct": 1,
+                "explain": "Without a checkpointer there is nowhere to store the interrupted state, so there is nothing to resume."
+              },
+              {
+                "q": "How do you resume a graph paused by interrupt_before?",
+                "options": [
+                  "Call invoke() again with the original input",
+                  "Call invoke(None, config) after writing the decision with update_state",
+                  "Restart the server",
+                  "Call interrupt() a second time"
+                ],
+                "correct": 1,
+                "explain": "update_state records the reviewer's decision; None tells the graph to continue from the checkpoint instead of starting a new run."
+              },
+              {
+                "q": "Inside a tool, what does interrupt({\"awaiting\": ..., \"args\": ...}) return when the run resumes?",
+                "options": [
+                  "The same payload, unchanged",
+                  "The value passed to Command(resume=...)",
+                  "None, always",
+                  "An exception"
+                ],
+                "correct": 1,
+                "explain": "interrupt() returns the resume value at that exact line, which is how a tool learns whether it was approved."
+              },
+              {
+                "q": "Why does the SSE lesson split into POST create/resume plus GET stream?",
+                "options": [
+                  "Because FastAPI cannot stream responses to POST",
+                  "Because EventSource only issues GETs, so the decision has to be recorded by a separate request",
+                  "To make the demo longer",
+                  "Because LangGraph forbids streaming a resumed run"
+                ],
+                "correct": 1,
+                "explain": "The browser needs a GET to open the stream, so the action is stored first and applied when the GET runs the graph."
+              },
+              {
+                "q": "What should a tool do when the reviewer rejects the call?",
+                "options": [
+                  "Raise an exception and end the graph",
+                  "Return a result that tells the model it was cancelled, so it can plan again",
+                  "Retry the same call",
+                  "Silently return an empty string"
+                ],
+                "correct": 1,
+                "explain": "Denial is a normal outcome. Returning a sentence keeps the agent useful without the side effect; the example returns 'Cancelled by human. Continue without executing that tool.'"
+              },
+              {
+                "q": "Which gap is real in this example?",
+                "options": [
+                  "The graph cannot pause twice",
+                  "The resume endpoints are unauthenticated, so the thread_id is the only capability",
+                  "interrupt() does not work with MCP tools",
+                  "DeepSeek cannot call tools"
+                ],
+                "correct": 1,
+                "explain": "The pause is correct; the approval system around it is a lab. Authentication, expiry, single-use tokens and an audit of what was approved are the missing layer."
+              }
+            ]
+          }
+        </script>
+      </div>
+
+      <h2>Primary sources for this lesson</h2>
+
+      <p>
+        The APIs: LangGraph's
+        <a href="https://langchain-ai.github.io/langgraph/concepts/human_in_the_loop/"
+          >human-in-the-loop guide</a
+        >,
+        <a href="https://langchain-ai.github.io/langgraph/reference/types/#langgraph.types.interrupt"
+          ><code>interrupt</code></a
+        >,
+        <a href="https://langchain-ai.github.io/langgraph/reference/types/#langgraph.types.Command"
+          ><code>Command</code></a
+        >
+        and
+        <a href="https://langchain-ai.github.io/langgraph/reference/graphs/#langgraph.graph.state.CompiledStateGraph.get_state"
+          ><code>get_state</code></a
+        >. The persistence half is Lesson 19's
+        <a href="https://langchain-ai.github.io/langgraph/concepts/persistence/"
+          >checkpointer documentation</a
+        >. In the repository, read
+        <a href="../assets/examples/example-langgraph-hitl-fastapi/backend/app/graph.py"
+          ><code>app/graph.py</code></a
+        >,
+        <a href="../assets/examples/example-langgraph-hitl-fastapi/backend/app/lesson_01_blocking.py"
+          ><code>lesson_01_blocking.py</code></a
+        >,
+        <a href="../assets/examples/example-langgraph-hitl-fastapi/backend/app/lesson_02_streaming.py"
+          ><code>lesson_02_streaming.py</code></a
+        >
+        and
+        <a href="../assets/examples/example-langgraph-hitl-fastapi/backend/app/mcp_agent.py"
+          ><code>mcp_agent.py</code></a
+        >.
+      </p>
+
+      <h2>What's next</h2>
+
+      <p>
+        This is the last lesson, so “next” is the approval layer the lab leaves
+        open. Three things build directly on it: put
+        <code>PostgresSaver</code> behind the graph so a pause survives a restart
+        (<a href="0019-memory-agents-langgraph.html">Lesson 19</a> has the code);
+        authenticate and expire the resume endpoint, with one single-use token per
+        interrupt id; and record what was approved — payload hash, reviewer,
+        timestamp — because “someone clicked approve” is not an audit trail. The
+        <a href="../reference/boundary-map.html">boundary map</a> is the checklist
+        for that last part, the
+        <a href="../reference/skill-map.html">skill map</a> places the gate beside
+        tools and memory, and
+        <a href="0001-ai-engineering-landscape-2026.html">Lesson 1</a> is the way
+        back to the start.
+      </p>
+
+      <div class="footer-nav">
+        <div class="ask">
+          <strong>Before you ship a human gate:</strong> name who may resume, how
+          long a pause lives, and what exactly the person saw when they said yes.
+          The graph gives you the pause; those three are the system.
+        </div>
+        <div class="links">
+          <a href="0022-voice-agents-langgraph-livekit.html">← Lesson 22</a>
+          <a href="../reference/skill-map.html">Skill Map &amp; Glossary</a>
+          <a href="../reference/boundary-map.html">Boundary Map</a>
+          <a href="../assets/examples/example-langgraph-hitl-fastapi/index.html"
+            >Example page</a
+          >
+        </div>
+      </div>
+
+      <script src="../assets/quiz.js"></script>
+    </article>
+  </body>
+</html>

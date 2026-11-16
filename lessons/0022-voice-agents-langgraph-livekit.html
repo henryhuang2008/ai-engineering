@@ -9,7 +9,7 @@
   <body>
     <article class="page">
       <p class="meta">
-        Lesson 22 of 22 · ~45 min · Prereq:
+        Lesson 22 of 23 · ~45 min · Prereq:
         <a href="0010-langgraph.html">Lesson 10</a>,
         <a href="0009-mcp.html">Lesson 9</a> ·
         <a href="../assets/examples/example-Voice-langgraph/index.html"
@@ -334,8 +334,16 @@ python -m http.server 8000</code></pre>
       <h2>What's next</h2>
 
       <p>
-        This is the last lesson, so “next” is a voice agent you can defend. Three
-        directions that build directly on these examples: measure the latency
+        One build is left: <a href="0023-human-in-the-loop-langgraph.html">Lesson 23</a>
+        makes the gate the subject instead of a detail. A draft/review/finalize
+        graph stops before a node, a tool stops inside <code>interrupt()</code>, and
+        the same pause is answered three ways — one blocking request, an SSE stream,
+        an MCP approval. Speech changes the interface; it does not change who
+        decides.
+      </p>
+
+      <p>
+        Three directions that build directly on these examples: measure the latency
         budget stage by stage and trade accuracy for time (whisper
         <code>base</code> vs <code>small</code>, streaming TTS vs a full clip);
         add an eval set of spoken questions with known database rows; and move
@@ -358,6 +366,7 @@ python -m http.server 8000</code></pre>
         </div>
         <div class="links">
           <a href="0021-text-to-sql.html">← Lesson 21</a>
+          <a href="0023-human-in-the-loop-langgraph.html">Lesson 23 →</a>
           <a href="../reference/skill-map.html">Skill Map &amp; Glossary</a>
           <a href="../assets/examples/example-Voice-langgraph/index.html"
             >Terminal example</a
