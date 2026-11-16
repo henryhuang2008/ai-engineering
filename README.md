@@ -57,6 +57,7 @@ Every Python example is a `uv` project; every frontend uses `pnpm`. Run commands
 | [0007-rag-service-llamaindex](assets/examples/0007-rag-service-llamaindex/index.html) | Lesson 7 | The LlamaIndex variant |
 | [0009-mcp](assets/examples/0009-mcp/index.html) | Lesson 9 | MCP server, raw clients, and LangChain's MCPAdapter |
 | [0009-mcp-advanced](assets/examples/0009-mcp-advanced/index.html) | Lesson 9 | Ralph: LangGraph + OpenAI + Supabase CRM agent, three MCP servers from one JSON file, human-in-the-loop writes |
+| [human-in-the-loop](assets/examples/human-in-the-loop/index.html) | Lesson 9 | Goop over HTTP: `POST /chat` and `POST /chat/{id}/resume` — continue / update / feedback / reject / exit, 10 offline tests |
 | [0010-langgraph](assets/examples/0010-langgraph/index.html) | Lesson 10 | One node, then a branch |
 | [0011-langgraph-advanced](assets/examples/0011-langgraph-advanced/index.html) | Lesson 11 | Fan-out and fan-in |
 | [0013-pydantic](assets/examples/0013-pydantic/index.html) | Lesson 13 | Validation boundary and typed model output |

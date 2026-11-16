@@ -537,6 +537,8 @@ Action (continue, update, feedback):</code></pre>
 
 <p>The gate is also the honest limit of this example. It shows you where a human belongs; it does not yet show you what a reviewer decided, how much a call may change, or what happens when the model asks for two writes in one turn. Those are the three things to add before anyone points this at a real customer list.</p>
 
+<p>A second build of the same gate puts the decision behind HTTP: <a href="../assets/examples/human-in-the-loop/index.html"><code>assets/examples/human-in-the-loop</code></a> runs this graph on DeepSeek with one local filesystem server and exposes the terminal loop as two requests — <code>POST /chat</code> sends a message and returns either an answer or the pause, <code>POST /chat/{thread_id}/resume</code> answers it with <code>continue</code>, <code>update</code> (new JSON arguments), <code>feedback</code>, <code>reject</code> or <code>exit</code>. Read it after this section: the router is unchanged, and the loop is the one <code>chat_local.py</code> already runs in your terminal.</p>
+
 <h2>MCP vs plain function calling</h2>
 
 <p>The honest comparison: at small scale, MCP is more machinery for the same result. It wins when the tool needs to exist outside one process.</p>
